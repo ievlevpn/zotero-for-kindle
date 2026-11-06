@@ -27,7 +27,11 @@ case "$PLATFORM" in
         ;;
     *) echo "unknown platform $PLATFORM" >&2; exit 2 ;;
 esac
-export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+if [ "$PLATFORM" = kindle ]; then
+    export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig" PKG_CONFIG_PATH=""
+else
+    export PKG_CONFIG_PATH="$PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+fi
 
 fetch() {  # url dir
     [ -d "$SRC/$2" ] || (cd "$SRC" && curl -sL "$1" | tar xz)

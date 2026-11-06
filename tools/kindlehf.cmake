@@ -1,0 +1,12 @@
+# CMake toolchain for the Kindle (koxtoolchain kindlehf), used by tools/build-*.sh in the container.
+set(CMAKE_SYSTEM_NAME Linux)
+set(CMAKE_SYSTEM_PROCESSOR armv7)
+set(CMAKE_C_COMPILER arm-kindlehf-linux-gnueabihf-gcc)
+set(CMAKE_CXX_COMPILER arm-kindlehf-linux-gnueabihf-g++)
+set(CMAKE_AR arm-kindlehf-linux-gnueabihf-ar CACHE FILEPATH "")
+set(CMAKE_RANLIB arm-kindlehf-linux-gnueabihf-ranlib CACHE FILEPATH "")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
