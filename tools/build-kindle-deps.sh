@@ -1,7 +1,9 @@
 #!/bin/sh
 # Static builds of crengine's dependencies for kindlehf (called by build-crengine.sh kindle).
-# The firmware's freetype/harfbuzz are too old for crengine (needs harfbuzz >= 8), so the app
-# links its own copies statically and hides them (-Wl,--exclude-libs,ALL) from pango's.
+# The firmware's freetype/harfbuzz are too old for crengine (needs harfbuzz >= 8), so crengine
+# gets its own static copies. Keeping them apart from the firmware copies pango uses needs a
+# real boundary (Plan 4: crengine as its own .so with -Bsymbolic, or ld -r + localized symbols);
+# -Wl,--exclude-libs,ALL alone does not decide which copy crengine binds to.
 #   build-kindle-deps.sh <src dir> <prefix> <jobs>
 set -eu
 SRC=$1 PREFIX=$2 JOBS=$3

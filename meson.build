@@ -8,8 +8,10 @@ backend = get_option('platform')
 add_project_arguments('-DZK_BACKEND="' + backend + '"', language : 'cpp')
 if backend == 'kindle'
   add_project_arguments('-DZK_KINDLE=1', language : 'cpp')
-  # Static C++ runtime; static third-party libs (freetype, harfbuzz for crengine) stay private
-  # so they don't override the firmware's copies that pango uses.
+  # Static C++ runtime. --exclude-libs only keeps static-archive symbols out of the export
+  # table; it does NOT keep crengine on its own freetype/harfbuzz when the app also links the
+  # firmware's (via pango). Plan 4 must isolate crengine (own .so with -Bsymbolic, or ld -r +
+  # localized symbols) and test pango + crengine in one process. See research/spikes/README.md.
   add_project_link_arguments('-static-libstdc++', '-static-libgcc', '-Wl,--exclude-libs,ALL', language : 'cpp')
 else
   add_project_arguments('-DZK_DESKTOP=1', language : 'cpp')
