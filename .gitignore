@@ -3,3 +3,7 @@
 build/
 build*/
 assets/fonts-device/
+build-deps/
+subprojects/*/
+subprojects/.wraplock
+subprojects/packagecache/

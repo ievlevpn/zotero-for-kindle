@@ -40,3 +40,7 @@ executable('zotero', 'src/app/main.cpp',
 if get_option('tests')
   subdir('tests')
 endif
+
+if get_option('spikes')
+  subdir('spikes')
+endif
