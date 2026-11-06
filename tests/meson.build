@@ -8,6 +8,7 @@ test_sources = files(
   'test_text.cpp',
   'test_home_golden.cpp',
   'test_x_touch.cpp',
+  'test_expose_policy.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 

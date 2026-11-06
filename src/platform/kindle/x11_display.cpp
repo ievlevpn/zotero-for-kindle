@@ -10,6 +10,7 @@
 
 #include "core/log.h"
 #include "platform/display.h"
+#include "platform/kindle/expose_policy.h"
 #include "platform/kindle/x_touch.h"
 
 namespace zk {
@@ -97,9 +98,16 @@ public:
                     }
                     break;
                 }
+                case VisibilityNotify:
+                    expose_.visibilityChanged(ev.xvisibility.state == VisibilityFullyObscured);
+                    break;
                 case Expose:
-                    // After wake or when the top menu closes: repaint from the backing store.
-                    if (ev.xexpose.count == 0) putAndRefresh({0, 0, w_, h_}, Waveform::Full);
+                    // Repaint the exposed area from the backing store: flash only after wake.
+                    exposed_ = exposed_.united({ev.xexpose.x, ev.xexpose.y, ev.xexpose.width, ev.xexpose.height});
+                    if (ev.xexpose.count == 0) {
+                        putAndRefresh(exposed_.intersected({0, 0, w_, h_}), expose_.onExpose());
+                        exposed_ = {};
+                    }
                     break;
                 case FocusOut: log(LogLevel::Debug, "focus out (background)"); break;
                 case FocusIn: log(LogLevel::Debug, "focus in"); break;
@@ -148,6 +156,8 @@ private:
     int w_ = 0, h_ = 0, originX_ = 0, originY_ = 0;
     int fb_ = -1;
     bool fingerDown_ = false;
+    ExposePolicy expose_;
+    Rect exposed_;
     FBInkConfig cfg_;
 };
 
