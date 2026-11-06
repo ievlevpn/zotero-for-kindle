@@ -21,8 +21,15 @@ core_lib = static_library('zk-core',
 
 core_dep = declare_dependency(link_with : core_lib, include_directories : inc)
 
+ui_lib = static_library('zk-ui',
+  'src/ui/gesture.cpp',
+  include_directories : inc,
+  dependencies : [core_dep])
+
+ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep])
+
 executable('zotero', 'src/app/main.cpp',
-  dependencies : [core_dep],
+  dependencies : [core_dep, ui_dep],
   install : true)
 
 if get_option('tests')
