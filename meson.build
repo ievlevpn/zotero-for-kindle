@@ -54,6 +54,12 @@ else
   curl_dep = dependency('libcurl')
 endif
 
+net_lib = static_library('zk-net',
+  'src/net/curl_http.cpp',
+  include_directories : inc,
+  dependencies : [core_dep, curl_dep])
+net_dep = declare_dependency(link_with : net_lib, dependencies : [core_dep, curl_dep])
+
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 
