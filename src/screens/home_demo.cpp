@@ -43,18 +43,25 @@ void centredText(cairo_t* cr, const std::string& s, const TextStyle& st, Rect bo
     drawText(cr, s, st, {box.x, box.y + (box.h - m.height) / 2, box.w, m.height + 4}, 1, a);
 }
 
+// Circular "refresh" arrow: an open ring with a solid arrowhead continuing the curve.
 void syncIcon(cairo_t* cr, double cx, double cy, double r) {
+    const double start = -M_PI / 2 + 0.5, sweep = 1.55 * M_PI, end = start + sweep;
     gray(cr, kInk);
+    cairo_new_path(cr);
     cairo_set_line_width(cr, 5);
-    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-    cairo_arc(cr, cx, cy, r, 0.25 * M_PI, 1.75 * M_PI);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+    cairo_arc(cr, cx, cy, r, start, end);
     cairo_stroke(cr);
-    // Arrowhead at the arc's end.
-    double ex = cx + r * std::cos(1.75 * M_PI), ey = cy + r * std::sin(1.75 * M_PI);
-    cairo_move_to(cr, ex - 14, ey - 4);
-    cairo_line_to(cr, ex + 3, ey - 3);
-    cairo_line_to(cr, ex + 1, ey + 14);
-    cairo_stroke(cr);
+    // Arrowhead at the end of the arc, pointing along the tangent (clockwise).
+    double ex = cx + r * std::cos(end), ey = cy + r * std::sin(end);
+    double tx = -std::sin(end), ty = std::cos(end);  // tangent
+    double nx = std::cos(end), ny = std::sin(end);   // radial
+    const double len = 15, half = 10;
+    cairo_move_to(cr, ex + tx * len, ey + ty * len);
+    cairo_line_to(cr, ex + nx * half, ey + ny * half);
+    cairo_line_to(cr, ex - nx * half, ey - ny * half);
+    cairo_close_path(cr);
+    cairo_fill(cr);
 }
 
 void searchIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
