@@ -1,0 +1,6 @@
+option('platform', type : 'combo', choices : ['desktop', 'kindle'], value : 'desktop',
+  description : 'Display/input backend: SDL desktop window or Kindle X11')
+option('tests', type : 'boolean', value : true,
+  description : 'Build unit tests (desktop only)')
+option('spikes', type : 'boolean', value : false,
+  description : 'Build throwaway spike programs')
