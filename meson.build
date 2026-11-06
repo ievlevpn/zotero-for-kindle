@@ -48,8 +48,21 @@ screens_lib = static_library('zk-screens',
 
 screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep])
 
+if backend == 'kindle'
+  fbink_lib = meson.get_compiler('cpp').find_library('fbink',
+    dirs : meson.project_source_root() / 'build-deps/kindle/prefix/lib', static : true)
+  platform_lib = static_library('zk-platform', 'src/platform/kindle/x11_display.cpp', 'src/platform/kindle/x_touch.cpp',
+    include_directories : ui_incs + [include_directories('build-deps/kindle/prefix/include', is_system : true)],
+    dependencies : [ui_dep, dependency('x11'), fbink_lib])
+  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, dependency('x11'), fbink_lib])
+else
+  platform_lib = static_library('zk-platform', 'src/platform/desktop/sdl_display.cpp',
+    include_directories : ui_incs, dependencies : [ui_dep, dependency('sdl2')])
+  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, dependency('sdl2')])
+endif
+
 executable('zotero', 'src/app/main.cpp',
-  dependencies : [core_dep, ui_dep],
+  dependencies : [core_dep, ui_dep, screens_dep, platform_dep],
   install : true)
 
 if get_option('tests')

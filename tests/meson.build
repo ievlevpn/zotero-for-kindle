@@ -7,6 +7,8 @@ test_sources = files(
   'test_canvas.cpp',
   'test_text.cpp',
   'test_home_golden.cpp',
+  'test_x_touch.cpp',
+  '../src/platform/kindle/x_touch.cpp',
 )
 
 zk_tests = executable('zk-tests', test_sources,
