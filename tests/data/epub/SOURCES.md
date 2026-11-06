@@ -12,7 +12,7 @@ None of these come from Pavel's Zotero library.
 | frankenstein-epub2-ncx.epub | https://www.gutenberg.org/ebooks/84 (epub.noimages) | EPUB 2, NCX only, no nav document |
 | waste-land-poetry.epub | https://www.gutenberg.org/ebooks/1321 | poetry: line breaks, indentation, notes |
 | gibbon-footnotes.epub | https://www.gutenberg.org/ebooks/25717 (epub.noimages) | heavy footnotes |
-| calculus-tables-math.epub | https://www.gutenberg.org/ebooks/33283 | maths, tables, many images |
+| the-prince-notes.epub | https://www.gutenberg.org/ebooks/1232 | Gutenberg EPUB 3, editor notes and footnote links (replaces a 13 MB maths book Zotero's reader could not open headless) |
 | beeton-tables.epub | https://www.gutenberg.org/ebooks/10136 (epub.noimages) | very long, many tables |
 | problems-1001-ru.epub | https://www.gutenberg.org/ebooks/16527 | Russian («1001 задача для умственного счета»), numbered problems |
 
