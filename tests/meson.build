@@ -4,6 +4,8 @@ test_sources = files(
   'test_main.cpp',
   'test_geometry.cpp',
   'test_gesture.cpp',
+  'test_canvas.cpp',
+  'test_text.cpp',
 )
 
 zk_tests = executable('zk-tests', test_sources,

@@ -21,12 +21,17 @@ core_lib = static_library('zk-core',
 
 core_dep = declare_dependency(link_with : core_lib, include_directories : inc)
 
+cairo_dep = dependency('cairo')
+pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
+
 ui_lib = static_library('zk-ui',
   'src/ui/gesture.cpp',
+  'src/ui/canvas.cpp',
+  'src/ui/text.cpp',
   include_directories : inc,
-  dependencies : [core_dep])
+  dependencies : [core_dep, cairo_dep, pango_deps])
 
-ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep])
+ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps])
 
 executable('zotero', 'src/app/main.cpp',
   dependencies : [core_dep, ui_dep],
