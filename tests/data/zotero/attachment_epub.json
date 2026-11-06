@@ -1,0 +1,5 @@
+{"key":"EPUB2345","version":1202,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"EPUB2345","version":1202,"itemType":"attachment","parentItem":"BOOK2345","linkMode":"imported_file",
+  "title":"EPUB","accessDate":"","url":"","note":"","contentType":"application/epub+zip","charset":"",
+  "filename":"Lovelace - Notes.epub","md5":"0123456789abcdef0123456789abcdef","mtime":1680343200000,
+  "tags":[],"relations":{},"dateAdded":"2023-04-01T10:00:05Z","dateModified":"2023-04-01T10:00:05Z"}}

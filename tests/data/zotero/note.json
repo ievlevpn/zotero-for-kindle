@@ -1,0 +1,3 @@
+{"key":"NOTE2345","version":1220,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"NOTE2345","version":1220,"itemType":"note","parentItem":"BOOK2345","note":"<p>Read chapter 3 again.</p>",
+  "tags":[],"relations":{},"dateAdded":"2023-04-03T10:00:00Z","dateModified":"2023-04-03T10:00:00Z"}}

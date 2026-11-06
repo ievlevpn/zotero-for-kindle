@@ -1,0 +1,6 @@
+{"key":"BOOK2345","version":1201,"library":{"type":"user","id":1,"name":"test"},"meta":{"creatorSummary":"Lovelace and Babbage","numChildren":2},
+ "data":{"key":"BOOK2345","version":1201,"itemType":"book","title":"Notes on the Analytical Engine",
+  "creators":[{"creatorType":"author","firstName":"Ada","lastName":"Lovelace"},{"creatorType":"editor","name":"Société des Machines"}],
+  "abstractNote":"","series":"","place":"London","publisher":"Taylor","date":"1843","ISBN":"","language":"en",
+  "tags":[{"tag":"computing"},{"tag":"history","type":1}],"collections":["COLLAAAA","COLLBBBB"],"relations":{},
+  "dateAdded":"2023-04-01T10:00:00Z","dateModified":"2023-04-02T11:00:00Z"}}

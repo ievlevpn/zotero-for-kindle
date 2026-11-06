@@ -1,0 +1,4 @@
+{"key":"UNKN2345","version":1400,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"UNKN2345","version":1400,"itemType":"hologram","title":"A type from the future","creators":[],
+  "futureField":{"nested":true},"tags":[],"collections":[],"relations":{},
+  "dateAdded":"2025-01-01T00:00:00Z","dateModified":"2025-01-01T00:00:00Z"}}

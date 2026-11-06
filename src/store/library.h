@@ -51,7 +51,7 @@ public:
     std::vector<ItemRecord> search(const std::string& query, int limit);
     std::vector<AnnotationRecord> annotationsFor(const std::string& attachmentKey);
     std::vector<AnnotationRecord> dirtyAnnotations();
-    std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // EPUB/PDF only
+    std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB/PDF files only
 
     Transaction begin();
 

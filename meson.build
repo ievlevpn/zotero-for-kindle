@@ -70,6 +70,12 @@ store_lib = static_library('zk-store',
   dependencies : [net_dep, sqlite_dep])
 store_dep = declare_dependency(link_with : store_lib, dependencies : [net_dep, sqlite_dep])
 
+zotero_lib = static_library('zk-zotero',
+  'src/zotero/parse.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [store_dep])
+zotero_dep = declare_dependency(link_with : zotero_lib, dependencies : [store_dep])
+
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 

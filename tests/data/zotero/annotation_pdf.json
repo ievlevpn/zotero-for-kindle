@@ -1,0 +1,6 @@
+{"key":"ANNP2345","version":1310,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"ANNP2345","version":1310,"itemType":"annotation","parentItem":"PDFF2345","annotationType":"note",
+  "annotationComment":"check eq. (4)","annotationColor":"#5fb236","annotationPageLabel":"688",
+  "annotationSortIndex":"00002|000512|00300",
+  "annotationPosition":"{\"pageIndex\":2,\"rects\":[[100.5,400.25,122.5,422.25]]}",
+  "tags":[],"relations":{},"dateAdded":"2024-01-16T09:00:00Z","dateModified":"2024-01-16T09:00:00Z"}}

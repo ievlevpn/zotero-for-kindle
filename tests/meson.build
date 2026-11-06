@@ -14,10 +14,11 @@ test_sources = files(
   'test_write_guard.cpp',
   'test_errors.cpp',
   'test_library.cpp',
+  'test_parse.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
 zk_tests = executable('zk-tests', test_sources,
-  dependencies : [core_dep, ui_dep, screens_dep, doctest_dep, sqlite_dep, miniz_dep, md5_dep, net_dep, store_dep])
+  dependencies : [core_dep, ui_dep, screens_dep, doctest_dep, sqlite_dep, miniz_dep, md5_dep, net_dep, store_dep, zotero_dep])
 
 test('zk-tests', zk_tests, workdir : meson.project_source_root())

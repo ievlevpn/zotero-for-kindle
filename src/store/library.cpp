@@ -399,7 +399,8 @@ std::vector<AttachmentRecord> Library::readableAttachments(const std::string& it
     return guarded([&] {
         Stmt st = db_.prepare(
             "SELECT key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state FROM attachments "
-            "WHERE parentKey = ? AND contentType IN ('application/epub+zip', 'application/pdf') ORDER BY key");
+            "WHERE parentKey = ? AND contentType IN ('application/epub+zip', 'application/pdf') "
+            "AND linkMode NOT IN ('linked_file', 'linked_url') ORDER BY key");
         st.bind(1, itemKey);
         std::vector<AttachmentRecord> out;
         while (st.step()) {
