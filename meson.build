@@ -8,6 +8,8 @@ backend = get_option('platform')
 add_project_arguments('-DZK_BACKEND="' + backend + '"', language : 'cpp')
 if backend == 'kindle'
   add_project_arguments('-DZK_KINDLE=1', language : 'cpp')
+  # GCC's notes about the GCC 7.1 ARM parameter-passing change; harmless with static libstdc++.
+  add_project_arguments('-Wno-psabi', language : 'cpp')
   # Static C++ runtime. --exclude-libs only keeps static-archive symbols out of the export
   # table; it does NOT keep crengine on its own freetype/harfbuzz when the app also links the
   # firmware's (via pango). Plan 4 must isolate crengine (own .so with -Bsymbolic, or ld -r +
@@ -126,6 +128,11 @@ endif
 
 executable('zotero', 'src/app/main.cpp',
   dependencies : [core_dep, ui_dep, screens_dep, platform_dep],
+  install : true)
+
+executable('zk-sync', 'src/app/zk_sync.cpp',
+  include_directories : include_directories('third_party', is_system : true),
+  dependencies : [sync_dep],
   install : true)
 
 if get_option('tests')
