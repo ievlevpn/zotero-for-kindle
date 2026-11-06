@@ -80,6 +80,7 @@ zotero_dep = declare_dependency(link_with : zotero_lib, dependencies : [store_de
 sync_lib = static_library('zk-sync',
   'src/sync/sync_engine.cpp',
   'src/sync/webdav.cpp',
+  'src/sync/config.cpp',
   'third_party/pugixml/pugixml.cpp',
   include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
   dependencies : [zotero_dep, miniz_dep, md5_dep])
