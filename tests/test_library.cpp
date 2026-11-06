@@ -260,3 +260,34 @@ TEST_CASE("library: running out of space mid-batch rolls back and reports DiskFu
     rig.lib.upsertItem(item("AFTER001", "Still usable", "2020-01-02"));
     CHECK(rig.lib.recentItems(10).size() == 2);
 }
+
+TEST_CASE("library: per-object versions and single-object lookups") {
+    Rig rig;
+    CHECK(rig.lib.objectVersion("AAAAAAAA") == 0);
+    rig.lib.setObjectVersion("AAAAAAAA", 12);
+    CHECK(rig.lib.objectVersion("AAAAAAAA") == 12);
+    rig.lib.upsertItem(item("AAAAAAAA", "x", "2020-01-01"));
+    rig.lib.removeObject("item", "AAAAAAAA");
+    CHECK(rig.lib.objectVersion("AAAAAAAA") == 0);
+
+    CHECK_FALSE(rig.lib.attachment("ATTACH01"));
+    AttachmentRecord a{"ATTACH01", "ITEM0001", "application/pdf", "x.pdf", "abc", "imported_file", 5, "/tmp/x.pdf",
+                       AttachmentRecord::State::Local};
+    rig.lib.upsertAttachment(a);
+    auto got = rig.lib.attachment("ATTACH01");
+    REQUIRE(got);
+    CHECK(got->md5 == "abc");
+    CHECK(got->state == AttachmentRecord::State::Local);
+
+    CHECK_FALSE(rig.lib.annotation("ANNOT001"));
+    AnnotationRecord n;
+    n.key = "ANNOT001";
+    n.parentKey = "ATTACH01";
+    n.comment = "c";
+    n.conflict = true;
+    rig.lib.upsertAnnotation(n);
+    auto ann = rig.lib.annotation("ANNOT001");
+    REQUIRE(ann);
+    CHECK(ann->comment == "c");
+    CHECK(ann->conflict);
+}

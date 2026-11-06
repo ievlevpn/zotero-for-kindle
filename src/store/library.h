@@ -6,6 +6,7 @@
 #include "store/db.h"
 #include "store/records.h"
 
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -42,6 +43,13 @@ public:
 
     int64_t libraryVersion();
     void setLibraryVersion(int64_t);
+    // The server version of any object (item, attachment, annotation, note, collection) as last
+    // stored; 0 if unknown. Lets an interrupted first sync resume without refetching.
+    int64_t objectVersion(const std::string& key);
+    void setObjectVersion(const std::string& key, int64_t version);
+
+    std::optional<AttachmentRecord> attachment(const std::string& key);
+    std::optional<AnnotationRecord> annotation(const std::string& key);
 
     std::vector<ItemRecord> recentItems(int limit);  // top-level items, newest dateAdded first
     std::vector<ItemRecord> itemsInCollection(const std::string& key);

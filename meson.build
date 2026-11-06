@@ -77,6 +77,12 @@ zotero_lib = static_library('zk-zotero',
   dependencies : [store_dep])
 zotero_dep = declare_dependency(link_with : zotero_lib, dependencies : [store_dep])
 
+sync_lib = static_library('zk-sync',
+  'src/sync/sync_engine.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [zotero_dep])
+sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep])
+
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 

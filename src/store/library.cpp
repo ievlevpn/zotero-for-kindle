@@ -37,6 +37,7 @@ CREATE TABLE annotations (
   createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
+CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags, notes,
   tokenize='unicode61 remove_diacritics 2');
 )sql";
@@ -110,6 +111,26 @@ std::vector<AnnotationRecord> readAnnotations(Stmt& st) {
         a.conflict = st.integer(12) != 0;
         a.createdHere = st.integer(13) != 0;
         a.json = st.text(14);
+        out.push_back(std::move(a));
+    }
+    return out;
+}
+
+const char* kAttachmentColumns = "key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state";
+
+std::vector<AttachmentRecord> readAttachments(Stmt& st) {
+    std::vector<AttachmentRecord> out;
+    while (st.step()) {
+        AttachmentRecord a;
+        a.key = st.text(0);
+        a.parentKey = st.text(1);
+        a.contentType = st.text(2);
+        a.filename = st.text(3);
+        a.md5 = st.text(4);
+        a.linkMode = st.text(5);
+        a.mtime = st.integer(6);
+        a.localPath = st.text(7);
+        a.state = static_cast<AttachmentRecord::State>(st.integer(8));
         out.push_back(std::move(a));
     }
     return out;
@@ -294,6 +315,8 @@ void Library::upsertCollection(const CollectionRecord& r) {
 
 void Library::removeObject(const std::string& type, const std::string& key) {
     guarded([&] {
+        Stmt ver = db_.prepare("DELETE FROM object_versions WHERE key = ?");
+        ver.bind(1, key).step();
         if (type == "item") {
             pending_.erase(key);
             Stmt fts = db_.prepare("DELETE FROM item_fts WHERE rowid = (SELECT rowid FROM items WHERE key = ?)");
@@ -397,26 +420,47 @@ std::vector<AnnotationRecord> Library::dirtyAnnotations() {
 
 std::vector<AttachmentRecord> Library::readableAttachments(const std::string& itemKey) {
     return guarded([&] {
-        Stmt st = db_.prepare(
-            "SELECT key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state FROM attachments "
-            "WHERE parentKey = ? AND contentType IN ('application/epub+zip', 'application/pdf') "
-            "AND linkMode NOT IN ('linked_file', 'linked_url') ORDER BY key");
+        Stmt st = db_.prepare(std::string("SELECT ") + kAttachmentColumns +
+                              " FROM attachments WHERE parentKey = ? AND contentType IN ('application/epub+zip', "
+                              "'application/pdf') AND linkMode NOT IN ('linked_file', 'linked_url') ORDER BY key");
         st.bind(1, itemKey);
-        std::vector<AttachmentRecord> out;
-        while (st.step()) {
-            AttachmentRecord a;
-            a.key = st.text(0);
-            a.parentKey = st.text(1);
-            a.contentType = st.text(2);
-            a.filename = st.text(3);
-            a.md5 = st.text(4);
-            a.linkMode = st.text(5);
-            a.mtime = st.integer(6);
-            a.localPath = st.text(7);
-            a.state = static_cast<AttachmentRecord::State>(st.integer(8));
-            out.push_back(std::move(a));
-        }
-        return out;
+        return readAttachments(st);
+    });
+}
+
+std::optional<AttachmentRecord> Library::attachment(const std::string& key) {
+    return guarded([&]() -> std::optional<AttachmentRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kAttachmentColumns + " FROM attachments WHERE key = ?");
+        st.bind(1, key);
+        auto v = readAttachments(st);
+        if (v.empty()) return std::nullopt;
+        return v[0];
+    });
+}
+
+std::optional<AnnotationRecord> Library::annotation(const std::string& key) {
+    return guarded([&]() -> std::optional<AnnotationRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns + " FROM annotations WHERE key = ?");
+        st.bind(1, key);
+        auto v = readAnnotations(st);
+        if (v.empty()) return std::nullopt;
+        return v[0];
+    });
+}
+
+int64_t Library::objectVersion(const std::string& key) {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT version FROM object_versions WHERE key = ?");
+        st.bind(1, key);
+        return st.step() ? st.integer(0) : int64_t{0};
+    });
+}
+
+void Library::setObjectVersion(const std::string& key, int64_t version) {
+    guarded([&] {
+        Stmt st = db_.prepare(
+            "INSERT INTO object_versions (key, version) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET version=excluded.version");
+        st.bind(1, key).bind(2, version).step();
     });
 }
 
