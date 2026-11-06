@@ -79,9 +79,11 @@ zotero_dep = declare_dependency(link_with : zotero_lib, dependencies : [store_de
 
 sync_lib = static_library('zk-sync',
   'src/sync/sync_engine.cpp',
-  include_directories : [inc, include_directories('third_party', is_system : true)],
-  dependencies : [zotero_dep])
-sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep])
+  'src/sync/webdav.cpp',
+  'third_party/pugixml/pugixml.cpp',
+  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
+  dependencies : [zotero_dep, miniz_dep, md5_dep])
+sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep])
 
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]

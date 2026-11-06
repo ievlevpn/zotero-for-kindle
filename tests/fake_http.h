@@ -5,6 +5,7 @@
 #include "net/http.h"
 
 #include <deque>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,10 @@ public:
             if (it->method == req.method && req.url.rfind(it->urlPrefix, 0) == 0) {
                 HttpResponse r = std::move(it->response);
                 queue.erase(it);
+                if (!req.outFile.empty()) {  // like CurlHttp: stream the body to the file
+                    std::ofstream(req.outFile, std::ios::binary) << r.body;
+                    r.body.clear();
+                }
                 return r;
             }
         }
