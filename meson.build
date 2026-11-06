@@ -41,6 +41,13 @@ ui_lib = static_library('zk-ui',
 
 ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps])
 
+screens_lib = static_library('zk-screens',
+  'src/screens/home_demo.cpp',
+  include_directories : ui_incs,
+  dependencies : [ui_dep])
+
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep])
+
 executable('zotero', 'src/app/main.cpp',
   dependencies : [core_dep, ui_dep],
   install : true)

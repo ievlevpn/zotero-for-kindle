@@ -72,3 +72,11 @@ TEST_CASE("text: empty string lays out nothing") {
     CHECK(r.lines == 0);
     CHECK_FALSE(r.truncated);
 }
+
+TEST_CASE("text: drawing leaves no current point behind") {
+    if (!haveFonts()) { MESSAGE("skipped: no device fonts"); return; }
+    Canvas c(400, 100);
+    drawText(c.cr(), "Zotero", kSerif9, Rect{10, 10, 300, 80}, 1);
+    // A leftover current point makes the next path start with a stray line.
+    CHECK_FALSE(cairo_has_current_point(c.cr()));
+}

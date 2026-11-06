@@ -97,6 +97,7 @@ TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, 
     cairo_move_to(cr, box.x, box.y);
     pango_cairo_show_layout(cr, l.layout);
     cairo_restore(cr);
+    cairo_new_path(cr);  // save/restore keeps the path: don't leave a current point behind
     return resultOf(l.layout, utf8);
 }
 
