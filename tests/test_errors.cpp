@@ -92,3 +92,15 @@ TEST_CASE("isTailnetHost recognises ts.net names and CGNAT addresses") {
     CHECK_FALSE(isTailnetHost("api.zotero.org"));
     CHECK_FALSE(isTailnetHost("192.168.1.10"));
 }
+
+TEST_CASE("classify: Tailscale is only suspected for a tailnet WebDAV host") {
+    // Most people's WebDAV is a normal internet or LAN server; Tailscale being off is irrelevant.
+    const NetState noTailscale{true, false};
+    UserError e = classify(curlFail(28), noTailscale, "dav.example.org", false);
+    CHECK(e.kind == ErrorKind::HostNotAnswering);
+    CHECK(e.message == "dav.example.org isn't answering.");
+    CHECK(classify(curlFail(6), noTailscale, "dav.example.org", false).kind == ErrorKind::HostNotFound);
+    CHECK(classify(http(401), noTailscale, "dav.example.org", false).kind == ErrorKind::WebDavLogin);
+    CHECK_FALSE(isTailnetHost("dav.example.org"));
+    CHECK_FALSE(isTailnetHost("192.168.1.20"));
+}
