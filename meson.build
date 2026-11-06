@@ -56,9 +56,11 @@ endif
 
 net_lib = static_library('zk-net',
   'src/net/curl_http.cpp',
-  include_directories : inc,
+  'src/net/write_guard.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
   dependencies : [core_dep, curl_dep])
-net_dep = declare_dependency(link_with : net_lib, dependencies : [core_dep, curl_dep])
+net_dep = declare_dependency(link_with : net_lib, dependencies : [core_dep, curl_dep],
+  include_directories : include_directories('third_party', is_system : true))
 
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
