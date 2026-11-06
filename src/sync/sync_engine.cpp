@@ -70,14 +70,23 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     // The first listing fixes the version this pull brings us to. Anything changed later has a
     // higher version and is listed again next time; objects already stored at their listed
     // version are skipped, which is what makes an interrupted first sync resumable.
-    for (const std::string kind : {"collections", "items"}) {
-        auto listing = api_.versions(kind, from, &err);
+    // Items and attachments before annotations, so the library is usable before the ~33,000
+    // annotations of a first sync are in.
+    struct Phase {
+        const char* name;
+        const char* kind;
+        const char* itemType;
+    };
+    for (const Phase& phase : {Phase{"collections", "collections", ""}, Phase{"items", "items", "-annotation"},
+                               Phase{"annotations", "items", "annotation"}}) {
+        const std::string kind = phase.kind;
+        auto listing = api_.versions(kind, from, &err, phase.itemType);
         if (!listing) return void(rep.error = err);
         if (kind == "collections") rep.toVersion = listing->libraryVersion;
         std::vector<std::string> changed;
         for (const auto& [key, version] : listing->versions)
             if (lib_.objectVersion(key) < version) changed.push_back(key);
-        progress({kind, 0, static_cast<int>(changed.size())});
+        progress({phase.name, 0, static_cast<int>(changed.size())});
         for (size_t i = 0; i < changed.size(); i += kBatch) {
             std::vector<std::string> batch(changed.begin() + i, changed.begin() + std::min(changed.size(), i + kBatch));
             auto objects = api_.fetch(kind, batch, &err);
@@ -93,7 +102,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
                 }
             }
             tx.commit();
-            progress({kind, static_cast<int>(std::min(changed.size(), i + kBatch)), static_cast<int>(changed.size())});
+            progress({phase.name, static_cast<int>(std::min(changed.size(), i + kBatch)), static_cast<int>(changed.size())});
         }
     }
 

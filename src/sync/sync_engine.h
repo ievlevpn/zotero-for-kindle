@@ -15,7 +15,7 @@
 namespace zk {
 
 struct SyncProgress {
-    std::string phase;  // "collections", "items", "deletions", "upload"
+    std::string phase;  // "collections", "items", "annotations", "deletions"
     int done = 0, total = 0;
 };
 

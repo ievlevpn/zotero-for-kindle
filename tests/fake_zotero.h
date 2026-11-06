@@ -74,9 +74,14 @@ public:
         if (req.method == "GET" && q.count("format") && q["format"] == "versions") {
             const auto& objs = path == "items" ? items : collections;
             const int64_t since = std::stoll(q["since"]);
+            const std::string type = q.count("itemType") ? q["itemType"] : "";  // "annotation" or "-annotation"
             json out = json::object();
-            for (const auto& [k, o] : objs)
-                if (o["version"].get<int64_t>() > since) out[k] = o["version"];
+            for (const auto& [k, o] : objs) {
+                if (o["version"].get<int64_t>() <= since) continue;
+                const bool isAnnotation = o["data"].value("itemType", "") == "annotation";
+                if ((type == "annotation" && !isAnnotation) || (type == "-annotation" && isAnnotation)) continue;
+                out[k] = o["version"];
+            }
             return ok(r, out);
         }
         if (req.method == "GET" && (q.count("itemKey") || q.count("collectionKey"))) {

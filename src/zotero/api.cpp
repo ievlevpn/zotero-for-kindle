@@ -116,10 +116,11 @@ std::optional<KeyInfo> ZoteroApi::keyInfo(UserError* err) {
     return info;
 }
 
-std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t since, UserError* err) {
+std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t since, UserError* err,
+                                              const std::string& itemType) {
     HttpRequest req;
     req.url = userUrl("/" + kind + "?since=" + std::to_string(since) + "&format=versions" +
-                      (kind == "items" ? "&includeTrashed=1" : ""));
+                      (kind == "items" ? "&includeTrashed=1" : "") + (itemType.empty() ? "" : "&itemType=" + itemType));
     HttpResponse r = send(req, err);
     if (r.curlCode || r.status != 200) return std::nullopt;
     auto j = json::parse(r.body, nullptr, false);

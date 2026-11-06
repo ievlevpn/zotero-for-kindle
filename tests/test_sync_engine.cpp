@@ -302,3 +302,21 @@ TEST_CASE("sync: a pushed annotation edited again here is re-sent with its key a
     CHECK(body[0]["version"] == mine.version);
     CHECK(rig.server.items["SRV10001"]["data"]["annotationComment"] == "second thoughts");
 }
+
+TEST_CASE("sync: items and attachments are fetched before annotations, so the library is usable early") {
+    Rig rig;
+    // Annotation keys sort before item keys, so key order alone would fetch them first.
+    rig.server.put(FakeZotero::item("ZBOOK001", "A book"));
+    rig.server.put(FakeZotero::attachment("ZEPUB001", "ZBOOK001"));
+    for (int i = 0; i < 60; ++i) rig.server.put(FakeZotero::annotation(key(i), "ZEPUB001", "text"));
+    std::vector<std::string> phases;
+    rig.engine.pull([&](const SyncProgress& p) {
+        if (phases.empty() || phases.back() != p.phase) phases.push_back(p.phase);
+    });
+    const auto fetched = rig.server.fetchedItemKeys();
+    REQUIRE(fetched.size() == 62);
+    CHECK(fetched[0] == "ZBOOK001");
+    CHECK(fetched[1] == "ZEPUB001");
+    CHECK(phases == std::vector<std::string>{"collections", "items", "annotations", "deletions"});
+    CHECK(rig.lib.annotationsFor("ZEPUB001").size() == 60);
+}

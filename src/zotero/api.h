@@ -48,7 +48,9 @@ public:
 
     std::optional<KeyInfo> keyInfo(UserError*);
     // kind: "items" or "collections". Includes trashed items (their data has "deleted": 1).
-    std::optional<VersionMap> versions(const std::string& kind, int64_t since, UserError*);
+    // itemType narrows an items listing, e.g. "annotation" or "-annotation".
+    std::optional<VersionMap> versions(const std::string& kind, int64_t since, UserError*,
+                                       const std::string& itemType = "");
     std::optional<std::vector<nlohmann::json>> fetch(const std::string& kind, const std::vector<std::string>& keys /* ≤50 */,
                                                      UserError*);
     std::optional<Deleted> deleted(int64_t since, UserError*);
