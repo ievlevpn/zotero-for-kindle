@@ -32,6 +32,10 @@ struct HomeDemoData {
 
 void drawHomeDemo(Canvas& canvas, const HomeDemoData& data);
 
+// Recent-list row rectangles and the Continue-reading progress bar (layout checks, hit testing).
+std::vector<Rect> homeDemoRowRects(const Canvas& canvas, const HomeDemoData& data);
+Rect homeDemoProgressRect(const Canvas& canvas);
+
 // Rectangle of tab `index` in the bottom tab bar (for hit testing and tap feedback).
 Rect homeDemoTabRect(const Canvas& canvas, int index, int tabCount);
 

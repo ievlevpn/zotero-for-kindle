@@ -13,6 +13,10 @@ using namespace theme;
 
 constexpr int kMargin = 60;
 constexpr int kTabBarHeight = 130;
+constexpr int kCardY = 292;
+constexpr int kCoverW = 290, kCoverH = 400;
+constexpr int kRowH = 186;
+constexpr int kRowsY = kCardY + kCoverH + 80 + 56;
 
 void gray(cairo_t* cr, uint8_t g) { cairo_set_source_rgb(cr, g / 255.0, g / 255.0, g / 255.0); }
 
@@ -75,8 +79,9 @@ void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::st
     }
     uint8_t ink = dark ? 255 : kInk, soft = dark ? 200 : kSecondary;
     int pad = 26;
-    drawText(cr, title, {kSerif, 9, 700, false, ink}, {r.x + pad, r.y + pad + 6, r.w - 2 * pad, r.h / 2}, 5);
-    hRule(cr, r.y + r.h - 112, r.x + pad, r.x + pad + 60, soft);
+    int ruleY = r.y + r.h - 112, titleY = r.y + pad + 6;
+    drawText(cr, title, {kSerif, 9, 700, false, ink}, {r.x + pad, titleY, r.w - 2 * pad, ruleY - 16 - titleY}, 5);
+    hRule(cr, ruleY, r.x + pad, r.x + pad + 60, soft);
     drawText(cr, authors, {kSans, 6.5, 400, false, soft}, {r.x + pad, r.y + r.h - 92, r.w - 2 * pad, 80}, 2);
 }
 
@@ -98,6 +103,19 @@ void progressBar(cairo_t* cr, Rect r, double fraction) {
 }
 
 }  // namespace
+
+std::vector<Rect> homeDemoRowRects(const Canvas& canvas, const HomeDemoData& data) {
+    std::vector<Rect> rows;
+    for (int i = 0, y = kRowsY; i < (int)data.recent.size() && y + kRowH <= canvas.height() - kTabBarHeight;
+         ++i, y += kRowH)
+        rows.push_back({kMargin, y, canvas.width() - 2 * kMargin, kRowH});
+    return rows;
+}
+
+Rect homeDemoProgressRect(const Canvas& canvas) {
+    int colX = kMargin + kCoverW + 48;
+    return {colX, kCardY + kCoverH - 92, canvas.width() - kMargin - colX, 10};
+}
 
 Rect homeDemoTabRect(const Canvas& canvas, int index, int tabCount) {
     int w = canvas.width(), y = canvas.height() - kTabBarHeight;
@@ -131,27 +149,43 @@ void drawHomeDemo(Canvas& canvas, const HomeDemoData& d) {
     generatedCover(cr, cover, d.continueTitle, d.continueAuthors, true);
     int colX = cover.x + cover.w + 48, colW = W - kMargin - colX;
     drawText(cr, "CONTINUE READING", {kSans, 7, 700, false, kSecondary}, {colX, cardY + 6, colW, 50}, 1);
-    TextResult t = drawText(cr, d.continueTitle, {kSerif, 13, 700}, {colX, cardY + 58, colW, 220}, 3);
-    int y = cardY + 58 + t.height + 14;
-    drawText(cr, d.continueChapter, {kSans, 8, 400, false, kSecondary}, {colX, y, colW, 50}, 1);
-    progressBar(cr, {colX, cardY + cover.h - 92, colW, 10}, d.continueProgress);
+    // Bottom-up: progress bar, chapter just above it, title fills what's left.
+    Rect bar = homeDemoProgressRect(canvas);
+    const TextStyle chapterStyle{kSans, 8, 400, false, kSecondary};
+    int chapterH = measureText(d.continueChapter, chapterStyle, colW, 1).height;
+    int chapterY = bar.y - 24 - chapterH;
+    drawText(cr, d.continueTitle, {kSerif, 13, 700}, {colX, cardY + 58, colW, chapterY - 16 - (cardY + 58)}, 3);
+    drawText(cr, d.continueChapter, chapterStyle, {colX, chapterY, colW, chapterH + 4}, 1);
+    progressBar(cr, bar, d.continueProgress);
     drawText(cr, d.continueMeta, {kSans, 7, 400, false, kSecondary}, {colX, cardY + cover.h - 64, colW, 70}, 2);
     hRule(cr, cardY + cover.h + 44, 0, W);
 
     // Recent.
     int recentY = cardY + cover.h + 80;
     drawText(cr, "RECENT", {kSans, 7, 700, false, kSecondary}, {kMargin, recentY, contentW, 50}, 1);
-    int rowY = recentY + 56, rowH = 176;
-    for (const HomeDemoItem& item : d.recent) {
-        if (rowY + rowH > H - kTabBarHeight) break;
-        typeBadge(cr, {kMargin, rowY + 26, 74, 92}, item.type);
-        int tx = kMargin + 74 + 38, tw = W - kMargin - tx;
-        TextResult tr = drawText(cr, item.title, {kSerif, 10, 700}, {tx, rowY + 18, tw, 120}, 2);
-        int ty = rowY + 18 + tr.height + 6;
-        drawText(cr, item.byline, {kSans, 7.5, 400, false, kSecondary}, {tx, ty, tw, 40}, 1);
-        drawText(cr, item.meta, {kSans, 6.5, 400, false, kTertiary}, {tx, ty + 40, tw, 40}, 1);
-        hRule(cr, rowY + rowH - 2, kMargin, W - kMargin);
-        rowY += rowH;
+    std::vector<Rect> rows = homeDemoRowRects(canvas, d);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const HomeDemoItem& item = d.recent[i];
+        Rect row = rows[i];
+        typeBadge(cr, {row.x, row.y + 26, 74, 92}, item.type);
+        int tx = row.x + 74 + 38, tw = row.x + row.w - tx, bottom = row.y + row.h - 12;
+        const TextStyle byline{kSans, 7.5, 400, false, kSecondary}, meta{kSans, 6.5, 400, false, kTertiary};
+        int bylineH = measureText(item.byline, byline, tw, 1).height;
+        int metaH = measureText(item.meta, meta, tw, 1).height;
+        // Two-line titles get byline and status on one line; never past the row's divider.
+        TextResult title = measureText(item.title, {kSerif, 10, 700}, tw, 2);
+        bool compact = title.lines > 1;
+        int infoH = compact ? bylineH : bylineH + 4 + metaH;
+        int titleY = row.y + 16;
+        TextResult tr = drawText(cr, item.title, {kSerif, 10, 700}, {tx, titleY, tw, bottom - infoH - 6 - titleY}, 2);
+        int ty = titleY + tr.height + 6;
+        if (compact) {
+            drawText(cr, item.byline + " · " + item.meta, byline, {tx, ty, tw, bylineH + 4}, 1);
+        } else {
+            drawText(cr, item.byline, byline, {tx, ty, tw, bylineH + 4}, 1);
+            drawText(cr, item.meta, meta, {tx, ty + bylineH + 4, tw, metaH + 4}, 1);
+        }
+        hRule(cr, row.y + row.h - 2, row.x, row.x + row.w);
     }
 
     // Tab bar.

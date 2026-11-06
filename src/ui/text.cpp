@@ -1,5 +1,7 @@
 #include "ui/text.h"
 
+#include <algorithm>
+
 #include <fontconfig/fontconfig.h>
 #include <pango/pangocairo.h>
 
@@ -91,6 +93,11 @@ TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, 
                     Align align) {
     if (utf8.empty()) return {};
     Layout l = makeLayout(cr, utf8, style, box.w, max_lines, align);
+    // The box height is a limit too: drop lines (ellipsizing the last) until the text fits.
+    for (TextResult m = resultOf(l.layout, utf8); m.height > box.h && max_lines > 1; m = resultOf(l.layout, utf8)) {
+        max_lines = std::min(max_lines, m.lines) - 1;
+        configure(l, cr, utf8, style, box.w, max_lines, align);
+    }
     double g = style.gray / 255.0;
     cairo_save(cr);
     cairo_set_source_rgb(cr, g, g, g);

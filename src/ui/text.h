@@ -31,7 +31,8 @@ struct TextResult {
 void addFontDir(const std::string& dir);
 
 // Lays out `utf8` in box.w at 300 dpi, wraps at word boundaries, keeps at most
-// `max_lines` lines (ellipsis "…" at the end of the last one), draws at box.x, box.y.
+// `max_lines` lines and no more than fit in box.h (ellipsis "…" at the end of the last
+// one), draws at box.x, box.y.
 TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int max_lines,
                     Align align = Align::Left);
 

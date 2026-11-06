@@ -80,3 +80,16 @@ TEST_CASE("text: drawing leaves no current point behind") {
     // A leftover current point makes the next path start with a stray line.
     CHECK_FALSE(cairo_has_current_point(c.cr()));
 }
+
+TEST_CASE("text: drawText stays inside the box height") {
+    if (!haveFonts()) { MESSAGE("skipped: no device fonts"); return; }
+    Canvas c(900, 400);
+    std::string title =
+        "Physics-informed neural networks: A deep learning framework for solving forward and inverse "
+        "problems involving nonlinear partial differential equations";
+    // Room for about one line of 10pt Bookerly, even though up to 3 lines are allowed.
+    TextResult r = drawText(c.cr(), title, {theme::kSerif, 10, 700}, Rect{0, 0, 900, 60}, 3);
+    CHECK(r.lines == 1);
+    CHECK(r.truncated);
+    CHECK(r.height <= 60);
+}
