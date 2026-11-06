@@ -63,6 +63,13 @@ net_lib = static_library('zk-net',
 net_dep = declare_dependency(link_with : net_lib, dependencies : [core_dep, curl_dep],
   include_directories : include_directories('third_party', is_system : true))
 
+store_lib = static_library('zk-store',
+  'src/store/db.cpp',
+  'src/store/library.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [net_dep, sqlite_dep])
+store_dep = declare_dependency(link_with : store_lib, dependencies : [net_dep, sqlite_dep])
+
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 
