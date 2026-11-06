@@ -58,9 +58,16 @@ void globalInit() {
 
 CurlHttp::CurlHttp(std::string caBundle) : caBundle_(std::move(caBundle)) { globalInit(); }
 
+CurlHttp::~CurlHttp() {
+    if (handle_) curl_easy_cleanup(static_cast<CURL*>(handle_));
+}
+
 HttpResponse CurlHttp::send(const HttpRequest& req) {
+    std::lock_guard<std::mutex> lock(mutex_);
     HttpResponse resp;
-    CURL* h = curl_easy_init();
+    if (!handle_) handle_ = curl_easy_init();
+    CURL* h = static_cast<CURL*>(handle_);
+    if (h) curl_easy_reset(h);  // clears options, keeps the connection cache
     if (!h) {
         resp.curlCode = CURLE_FAILED_INIT;
         resp.curlError = "curl_easy_init failed";
@@ -70,7 +77,6 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     if (!req.outFile.empty()) {
         out = std::fopen(req.outFile.c_str(), "wb");
         if (!out) {
-            curl_easy_cleanup(h);
             resp.curlCode = CURLE_WRITE_ERROR;
             resp.curlError = "cannot open " + req.outFile;
             return resp;
@@ -120,8 +126,10 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &resp.status);
 
     curl_slist_free_all(headers);
-    curl_easy_cleanup(h);
-    if (out) std::fclose(out);
+    if (out && std::fclose(out) != 0 && rc == CURLE_OK) {
+        resp.curlCode = CURLE_WRITE_ERROR;
+        resp.curlError = "can't finish writing " + req.outFile;
+    }
     return resp;
 }
 

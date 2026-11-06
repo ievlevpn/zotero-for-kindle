@@ -3,6 +3,7 @@
 // can substitute a scripted fake and the write guard can sit in front of the real client.
 
 #include <map>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -35,13 +36,20 @@ public:
     virtual HttpResponse send(const HttpRequest&) = 0;
 };
 
+// Keeps one curl handle, so consecutive requests to the same host reuse the TLS connection
+// (a fresh handshake per request dominated the first sync). Requests are serialised.
 class CurlHttp final : public Http {
 public:
     explicit CurlHttp(std::string caBundle /* empty = system default */);
+    ~CurlHttp() override;
+    CurlHttp(const CurlHttp&) = delete;
+    CurlHttp& operator=(const CurlHttp&) = delete;
     HttpResponse send(const HttpRequest&) override;
 
 private:
     std::string caBundle_;
+    void* handle_ = nullptr;  // CURL*
+    std::mutex mutex_;
 };
 
 // "METHOD URL" plus headers, with secret header values replaced by ***; never the password.
