@@ -57,6 +57,7 @@ endif
 net_lib = static_library('zk-net',
   'src/net/curl_http.cpp',
   'src/net/write_guard.cpp',
+  'src/net/errors.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
   dependencies : [core_dep, curl_dep])
 net_dep = declare_dependency(link_with : net_lib, dependencies : [core_dep, curl_dep],

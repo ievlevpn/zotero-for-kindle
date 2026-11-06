@@ -12,6 +12,7 @@ test_sources = files(
   'test_vendored.cpp',
   'test_http_fake.cpp',
   'test_write_guard.cpp',
+  'test_errors.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
