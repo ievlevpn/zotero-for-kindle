@@ -24,6 +24,20 @@ cm() {  # dir [cmake args]
     ninja -C "$SRC/$d/build-kindle" install >/dev/null
 }
 
+cat > "$SRC/kindle-cross.ini" <<EOF
+[binaries]
+c = 'arm-kindlehf-linux-gnueabihf-gcc'
+cpp = 'arm-kindlehf-linux-gnueabihf-g++'
+ar = 'arm-kindlehf-linux-gnueabihf-ar'
+strip = 'arm-kindlehf-linux-gnueabihf-strip'
+pkgconfig = 'pkg-config'
+[host_machine]
+system = 'linux'
+cpu_family = 'arm'
+cpu = 'armv7'
+endian = 'little'
+EOF
+
 if ! have libz.a; then
     fetch https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz zlib-1.3.1
     (cd "$SRC/zlib-1.3.1" && CC=arm-kindlehf-linux-gnueabihf-gcc ./configure --static --prefix="$PREFIX" >/dev/null \
@@ -40,19 +54,6 @@ have libxxhash.a || { fetch https://github.com/Cyan4973/xxHash/archive/refs/tags
 have libutf8proc.a || { fetch https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v2.9.0.tar.gz utf8proc-2.9.0
     cm utf8proc-2.9.0 -DUTF8PROC_ENABLE_TESTING=OFF -DCMAKE_INSTALL_LIBDIR=lib; }
 have libfribidi.a || { fetch https://github.com/fribidi/fribidi/releases/download/v1.0.13/fribidi-1.0.13.tar.xz fribidi-1.0.13
-    cat > "$SRC/kindle-cross.ini" <<EOF
-[binaries]
-c = 'arm-kindlehf-linux-gnueabihf-gcc'
-cpp = 'arm-kindlehf-linux-gnueabihf-g++'
-ar = 'arm-kindlehf-linux-gnueabihf-ar'
-strip = 'arm-kindlehf-linux-gnueabihf-strip'
-pkg-config = 'pkg-config'
-[host_machine]
-system = 'linux'
-cpu_family = 'arm'
-cpu = 'armv7'
-endian = 'little'
-EOF
     meson setup "$SRC/fribidi-1.0.13/build-kindle" "$SRC/fribidi-1.0.13" --cross-file "$SRC/kindle-cross.ini" \
         --prefix="$PREFIX" --libdir=lib --default-library=static -Ddocs=false -Dtests=false -Dbin=false >/dev/null
     ninja -C "$SRC/fribidi-1.0.13/build-kindle" install >/dev/null; }
