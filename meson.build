@@ -267,10 +267,12 @@ executable('zk-sync', 'src/app/zk_sync.cpp',
 monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
   'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
 update_lib = static_library('zk-update',
-  'src/update/version.cpp', 'src/update/signature.cpp',
+  'src/update/version.cpp', 'src/update/signature.cpp', 'src/update/manifest.cpp', 'src/update/release_check.cpp',
   include_directories : [inc, include_directories('third_party/monocypher', 'third_party', is_system : true)],
+  dependencies : [net_dep],
   link_with : monocypher_lib)
-update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], include_directories : inc)
+update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], include_directories : inc,
+  dependencies : [net_dep])
 
 executable('zk-sign', 'tools/zk_sign.cpp',
   dependencies : [update_dep],
