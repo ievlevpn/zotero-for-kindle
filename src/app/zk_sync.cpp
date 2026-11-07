@@ -9,7 +9,8 @@
 //   reader would, tagged zk-test with a "[zk-test]" comment; `annotate-test-cleanup` deletes
 //   those (and only those); `annotate-test-edit` makes one of them blue with an "edited" comment.
 //   They change the local library; `push` sends the changes.
-// Every request goes through the WriteGuard, which allows annotation writes and nothing else.
+// Every request goes through the WriteGuard, which allows annotation writes and the reading positions
+// of the library's own files, and nothing else.
 // Credentials are never printed.
 
 #include "core/log.h"
@@ -146,9 +147,9 @@ int main(int argc, char** argv) {
     }
     Library lib(*db);
     CurlHttp curl(ca);
-    WriteGuard http(curl, [&](const std::string& key) {
-        return lib.annotation(key).has_value();
-    });
+    WriteGuard http(
+        curl, [&](const std::string& key) { return lib.annotation(key).has_value(); },
+        [&](const std::string& key) { return lib.attachment(key).has_value(); });  // reading positions
     ZoteroApi api(http, cfg->userId, cfg->apiKey);
     api.setOnWait([](const UserError& e) { std::printf("%s\n", e.message.c_str()); });
 

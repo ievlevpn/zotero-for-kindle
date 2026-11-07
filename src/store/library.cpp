@@ -18,7 +18,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 3;
+constexpr int64_t kSchemaVersion = 4;
 
 // Schema version 3 (PRAGMA user_version). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
@@ -61,6 +61,9 @@ CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
 CREATE TABLE tracked_attachments (key TEXT PRIMARY KEY);
 CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
+CREATE TABLE reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL DEFAULT '',
+  remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL DEFAULT 0,
+  remoteNew INTEGER NOT NULL DEFAULT 0);
 CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags, notes,
   tokenize='unicode61 remove_diacritics 2');
 )sql";
@@ -240,12 +243,17 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version == 2) {
-            // Version 2 may hold unsent Kindle work, so it is extended in place, never rebuilt.
-            db_.exec(
-                "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
-                "ALTER TABLE annotations ADD COLUMN localOnly INTEGER NOT NULL DEFAULT 0;"
-                "ALTER TABLE annotations ADD COLUMN conflictOf TEXT NOT NULL DEFAULT '';");
+        if (version == 2 || version == 3) {
+            // Versions 2 and 3 may hold unsent Kindle work, so they are extended in place, never rebuilt.
+            if (version == 2)
+                db_.exec(
+                    "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
+                    "ALTER TABLE annotations ADD COLUMN localOnly INTEGER NOT NULL DEFAULT 0;"
+                    "ALTER TABLE annotations ADD COLUMN conflictOf TEXT NOT NULL DEFAULT '';");
+            db_.exec(  // version 4: reading positions
+                "CREATE TABLE IF NOT EXISTS reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL "
+                "DEFAULT '', remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER "
+                "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0);");
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -820,6 +828,94 @@ std::optional<ItemDetails> Library::details(const std::string& itemKey) {
     if (auto rs = readingState(itemKey); rs && rs->openedMs > 0) d.progress = rs->progress;
     return d;
 }
+
+namespace {
+ReadingPosition readPosition(const Stmt& st) {
+    ReadingPosition p;
+    p.attachmentKey = st.text(0);
+    p.remote = st.text(1);
+    p.remoteVersion = st.integer(2);
+    p.local = st.text(3);
+    p.dirty = st.integer(4) != 0;
+    p.remoteNew = st.integer(5) != 0;
+    return p;
+}
+constexpr const char* kPositionColumns = "attachmentKey, remote, remoteVersion, local, dirty, remoteNew";
+}  // namespace
+
+std::optional<ReadingPosition> Library::readingPosition(const std::string& key) {
+    return guarded([&]() -> std::optional<ReadingPosition> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kPositionColumns + " FROM reading_positions WHERE attachmentKey = ?");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return readPosition(st);
+    });
+}
+
+void Library::setLocalPosition(const std::string& key, const std::string& value) {
+    guarded([&] {
+        // To send whenever it differs from what Zotero has.
+        Stmt st = db_.prepare(
+            "INSERT INTO reading_positions (attachmentKey, local, dirty) VALUES (?1, ?2, 1) "
+            "ON CONFLICT(attachmentKey) DO UPDATE SET local = ?2, dirty = (?2 != remote)");
+        st.bind(1, key);
+        st.bind(2, value);
+        st.step();
+    });
+}
+
+void Library::applyRemotePosition(const std::string& key, const std::string& value, int64_t version) {
+    guarded([&] {
+        // News only if the Kindle has its own place and it differs. Then the Kindle's place is not
+        // sent until the reader asks (Stay sends it): it must not overwrite the newer one unseen.
+        // Our own write coming back (no newer than what we sent) is not news.
+        Stmt st = db_.prepare(
+            "INSERT INTO reading_positions (attachmentKey, remote, remoteVersion) VALUES (?1, ?2, ?3) "
+            "ON CONFLICT(attachmentKey) DO UPDATE SET remote = ?2, remoteVersion = ?3, "
+            "remoteNew = (local != '' AND local != ?2), dirty = 0 WHERE remoteVersion < ?3");
+        st.bind(1, key);
+        st.bind(2, value);
+        st.bind(3, version);
+        st.step();
+    });
+}
+
+void Library::markPositionSent(const std::string& key, const std::string& value, int64_t version) {
+    guarded([&] {
+        Stmt st = db_.prepare(
+            "UPDATE reading_positions SET remote = ?2, remoteVersion = ?3, remoteNew = 0, dirty = (local != ?2) "
+            "WHERE attachmentKey = ?1");
+        st.bind(1, key);
+        st.bind(2, value);
+        st.bind(3, version);
+        st.step();
+    });
+}
+
+void Library::answerRemotePosition(const std::string& key, bool go) {
+    guarded([&] {
+        Stmt st = db_.prepare(go ? "UPDATE reading_positions SET local = remote, dirty = 0, remoteNew = 0 WHERE attachmentKey = ?"
+                                 : "UPDATE reading_positions SET dirty = (local != remote), remoteNew = 0 WHERE attachmentKey = ?");
+        st.bind(1, key);
+        st.step();
+    });
+}
+
+std::vector<ReadingPosition> Library::dirtyPositions() {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kPositionColumns + " FROM reading_positions WHERE dirty = 1");
+        std::vector<ReadingPosition> out;
+        while (st.step()) out.push_back(readPosition(st));
+        return out;
+    });
+}
+
+int64_t Library::settingsVersion() {
+    const std::string v = metaValue("settings.version");
+    return v.empty() ? 0 : std::stoll(v);
+}
+
+void Library::setSettingsVersion(int64_t v) { setMetaValue("settings.version", std::to_string(v)); }
 
 void Library::removeDownload(const std::string& attachmentKey) {
     auto a = attachment(attachmentKey);

@@ -137,3 +137,37 @@ TEST_CASE("write guard blocks a read method that carries a body (curl would send
     CHECK(blocked(rig.send("PROPFIND", "https://dav.example.org/zotero/", "<x/>")));
     CHECK(rig.inner.sent.empty());
 }
+
+TEST_CASE("write guard lets reading positions of the library's files through, and no other setting") {
+    FakeHttp inner;
+    WriteGuard guard{inner, [](const std::string&) { return false; },
+                     [](const std::string& k) { return k == "ATTKEY01" || k == "ATTKEY02"; }};
+    auto send = [&](std::string method, std::string url, std::string body) {
+        HttpRequest r;
+        r.method = std::move(method);
+        r.url = std::move(url);
+        r.body = std::move(body);
+        return guard.send(r);
+    };
+    const std::string url = "https://api.zotero.org/users/1/settings";
+    inner.expect("POST", url, FakeHttp::status(204));
+    CHECK_FALSE(blocked(send("POST", url,
+                             R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":3},)"
+                             R"("lastPageIndex_u_ATTKEY02":{"value":"/6/4!/4/2/1:0","version":0}})")));
+    CHECK(blocked(send("POST", url, R"({"tagColors":{"value":[],"version":1}})")));
+    CHECK(blocked(send("POST", url, R"({"lastPageIndex_u_NOTMINE1":{"value":5,"version":3}})")));  // not a file of ours
+    CHECK(blocked(send("POST", url, R"({"lastPageIndex_g123_ATTKEY01":{"value":5,"version":3}})")));  // a group's
+    CHECK(blocked(send("POST", url, R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":3,"extra":1}})")));
+    CHECK(blocked(send("POST", url, R"({"lastPageIndex_u_ATTKEY01":{"value":{"x":1},"version":3}})")));  // not a position
+    CHECK(blocked(send("POST", url, R"([1,2])")));
+    CHECK(blocked(send("POST", url, "{}")));
+    CHECK(blocked(send("PUT", url + "/lastPageIndex_u_ATTKEY01", R"({"value":5})")));
+    CHECK(blocked(send("DELETE", url + "/lastPageIndex_u_ATTKEY01", "")));
+    CHECK(blocked(send("POST", "https://api.zotero.org/users/1/settings?x=1", R"({"lastPageIndex_u_ATTKEY01":{"value":5}})")));
+}
+
+TEST_CASE("write guard without a file check refuses every setting") {
+    Rig rig;
+    CHECK(blocked(rig.send("POST", "https://api.zotero.org/users/1/settings",
+                           R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":3}})")));
+}

@@ -218,6 +218,38 @@ std::optional<WriteResult> ZoteroApi::createItems(const json& array, int64_t ifU
     return out;
 }
 
+std::optional<SettingsListing> ZoteroApi::settings(int64_t since, UserError* err) {
+    HttpRequest req;
+    req.url = userUrl("/settings?since=" + std::to_string(since));
+    HttpResponse r = send(req, err);
+    if (r.curlCode || r.status != 200) return std::nullopt;
+    auto j = json::parse(r.body, nullptr, false);
+    if (!j.is_object()) return setError(err, badBody("settings: not JSON")), std::nullopt;
+    SettingsListing out;
+    out.libraryVersion = libraryVersionOf(r);
+    for (const auto& [key, s] : j.items())
+        if (s.is_object() && s.contains("value") && s.contains("version") && s["version"].is_number_integer())
+            out.settings[key] = {s["value"], s["version"].get<int64_t>()};
+    return out;
+}
+
+std::optional<WriteResult> ZoteroApi::writeSettings(const json& body, UserError* err) {
+    HttpRequest req;
+    req.method = "POST";
+    req.url = userUrl("/settings");
+    req.headers = {{"Content-Type", "application/json"}};
+    req.body = body.dump();
+    HttpResponse r = send(req, err);
+    WriteResult out;
+    out.libraryVersion = libraryVersionOf(r);
+    if (r.curlCode == 0 && r.status == 412) {
+        out.preconditionFailed = true;
+        return out;
+    }
+    if (r.curlCode || r.status != 204) return std::nullopt;
+    return out;
+}
+
 std::optional<WriteResult> ZoteroApi::deleteItems(const std::vector<std::string>& keys, int64_t ifUnmodifiedSince,
                                                   UserError* err) {
     HttpRequest req;

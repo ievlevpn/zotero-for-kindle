@@ -229,6 +229,40 @@ std::string cfiOf(const AnnotationRecord& a) {
 
 }  // namespace
 
+// Zotero's lastPageIndex for an EPUB: a point CFI at the start of what is shown, without the
+// "epubcfi(...)" wrapper. Made from the CFI of the page's first character.
+std::string EpubEngine::zoteroPosition(int page) {
+    if (!view_ || !dom_ || page < 0 || page >= pageCount()) return "";
+    LVRef<ldomXRange> range = view_->getPageDocumentRange(crPage(page));
+    if (range.isNull()) return "";
+    ldomXPointerEx p(range->getStart());
+    if (!p.isText() && !p.nextVisibleText()) return "";
+    ldomXPointer start(p.getNode(), p.getOffset());
+    const int length = start.getNode()->getText().length();
+    if (start.getOffset() >= length) return "";
+    const ldomXPointer end(start.getNode(), start.getOffset() + 1);
+    auto generated = dom_->generate(start, end);
+    if (!generated) return "";
+    // "epubcfi(base,/start,/end)" -> "base/start"
+    std::string inner = generated->cfi.substr(8, generated->cfi.size() - 9);
+    const size_t c1 = inner.find(',');
+    if (c1 != std::string::npos) {
+        const size_t c2 = inner.find(',', c1 + 1);
+        inner = inner.substr(0, c1) + inner.substr(c1 + 1, (c2 == std::string::npos ? inner.size() : c2) - c1 - 1);
+    }
+    return nlohmann::json(inner).dump();
+}
+
+int EpubEngine::pageOfZoteroPosition(const std::string& v) {
+    if (!view_ || !dom_) return -1;
+    const auto j = nlohmann::json::parse(v, nullptr, false);
+    if (!j.is_string()) return -1;
+    auto r = dom_->resolve("epubcfi(" + j.get<std::string>() + ")");
+    if (!r) return -1;
+    const int page = spreadOf(view_->getBookmarkPage(r->start));
+    return page >= 0 && page < pageCount() ? page : -1;
+}
+
 int EpubEngine::pageOfAnnotation(const AnnotationRecord& a) {
     if (!view_ || !dom_) return -1;
     auto r = dom_->resolve(cfiOf(a));

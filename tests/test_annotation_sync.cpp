@@ -47,7 +47,8 @@ struct Rig {
         db = std::make_unique<Db>(Db::open(path));
         lib = std::make_unique<Library>(*db);
         Library* l = lib.get();
-        guard = std::make_unique<WriteGuard>(server, [l](const std::string& k) { return l->annotation(k).has_value(); });
+        guard = std::make_unique<WriteGuard>(server, [l](const std::string& k) { return l->annotation(k).has_value(); },
+                                             [l](const std::string& k) { return l->attachment(k).has_value(); });
         api = std::make_unique<ZoteroApi>(*guard, 1, "k3y");
         api->setSleeper([](int) {});
         engine = std::make_unique<SyncEngine>(*api, *lib);
@@ -363,11 +364,70 @@ TEST_CASE("annotations: schema v2 databases gain the new columns without losing 
     }
     Db db = Db::open(path);
     Library lib(db);
-    CHECK(db.userVersion() == 3);
+    CHECK(db.userVersion() == 4);
+    lib.setLocalPosition("EPUB0001", "3");  // version 4's table is there too
+    CHECK(lib.readingPosition("EPUB0001"));
     auto a = lib.annotation("UNSENT01");
     REQUIRE(a);
     CHECK(a->text == "mine");
     CHECK(a->dirty);
     CHECK_FALSE(a->deletedHere);
     CHECK_FALSE(a->localOnly);
+}
+
+// ---- Reading positions (the setting lastPageIndex_u_<attachmentKey>) ----
+
+TEST_CASE("positions sync: a pull brings Zotero's reading positions, and only those") {
+    Rig rig;
+    rig.server.putSetting("lastPageIndex_u_EPUB0001", "/6/4!/4/2/1:0");
+    rig.server.putSetting("tagColors", nlohmann::json::array());
+    CHECK_FALSE(rig.pull().error);
+    auto p = rig.lib->readingPosition("EPUB0001");
+    REQUIRE(p);
+    CHECK(p->remote == R"("/6/4!/4/2/1:0")");
+    CHECK(rig.lib->settingsVersion() == rig.server.libraryVersion);
+    CHECK_FALSE(rig.lib->readingPosition("tagColors"));
+    rig.server.sent.clear();
+    CHECK_FALSE(rig.pull().error);  // only what changed since
+    bool asked = false;
+    for (const auto& r : rig.server.sent)
+        if (r.url.find("/settings") != std::string::npos) asked = r.url.find("since=" + std::to_string(rig.server.libraryVersion)) != std::string::npos;
+    CHECK(asked);
+}
+
+TEST_CASE("positions sync: the Kindle's place is sent once") {
+    Rig rig;
+    rig.lib->setLocalPosition("EPUB0001", R"("/6/6!/4/2/1:0")");
+    CHECK_FALSE(rig.push().error);
+    REQUIRE(rig.server.settings.count("lastPageIndex_u_EPUB0001"));
+    CHECK(rig.server.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/6!/4/2/1:0");
+    CHECK_FALSE(rig.lib->readingPosition("EPUB0001")->dirty);
+    CHECK_FALSE(rig.push().error);
+    CHECK(rig.server.count("POST", "/settings") == 1);
+    CHECK_FALSE(rig.pull().error);  // our own write back: not news
+    CHECK_FALSE(rig.lib->readingPosition("EPUB0001")->remoteNew);
+}
+
+TEST_CASE("positions sync: when the computer moved meanwhile, the Kindle asks instead of overwriting") {
+    Rig rig;
+    rig.lib->setLocalPosition("EPUB0001", R"("/6/6!/4/2/1:0")");
+    CHECK_FALSE(rig.push().error);
+    rig.lib->setLocalPosition("EPUB0001", R"("/6/8!/4/2/1:0")");      // read on here
+    rig.server.putSetting("lastPageIndex_u_EPUB0001", "/6/20!/4/2/1:0");  // and on the computer
+    CHECK_FALSE(rig.push().error);  // 412 -> pull -> nothing left to send
+    CHECK(rig.server.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/20!/4/2/1:0");
+    auto p = rig.lib->readingPosition("EPUB0001");
+    CHECK(p->remoteNew);
+    CHECK(p->remote == R"("/6/20!/4/2/1:0")");
+    CHECK_FALSE(p->dirty);
+    rig.lib->answerRemotePosition("EPUB0001", false);  // Stay: the Kindle's place goes up
+    CHECK_FALSE(rig.push().error);
+    CHECK(rig.server.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/8!/4/2/1:0");
+}
+
+TEST_CASE("positions sync: a PDF page is a number in Zotero") {
+    Rig rig;
+    rig.lib->setLocalPosition("EPUB0001", "12");
+    CHECK_FALSE(rig.push().error);
+    CHECK(rig.server.settings["lastPageIndex_u_EPUB0001"]["value"] == 12);
 }

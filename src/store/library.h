@@ -52,6 +52,17 @@ struct ItemDetails {
     double progress = -1;     // how far the item was read; -1 if never opened
 };
 
+// A file's reading position in Zotero's terms (JSON text, as the engines make it: a PDF page
+// index, an EPUB point CFI), synced as the setting lastPageIndex_u_<attachmentKey>.
+struct ReadingPosition {
+    std::string attachmentKey;
+    std::string remote;         // what Zotero last said ("" if nothing)
+    int64_t remoteVersion = 0;  // its setting version
+    std::string local;          // where the Kindle is ("" if never read here)
+    bool dirty = false;         // local still to be sent
+    bool remoteNew = false;     // Zotero moved elsewhere since the Kindle last agreed: ask on open
+};
+
 struct CollectionEntry {
     CollectionRecord collection;
     int64_t items = 0;
@@ -169,6 +180,16 @@ public:
     // Deletes the downloaded copy of an attachment (the file and its folder) and marks it as not
     // on the Kindle. Highlights, the reading position and the item itself stay.
     void removeDownload(const std::string& attachmentKey);
+
+    // Reading positions (synced with Zotero's lastPageIndex settings).
+    std::optional<ReadingPosition> readingPosition(const std::string& attachmentKey);
+    void setLocalPosition(const std::string& attachmentKey, const std::string& value);  // the Kindle moved
+    void applyRemotePosition(const std::string& attachmentKey, const std::string& value, int64_t version);  // a pull
+    void markPositionSent(const std::string& attachmentKey, const std::string& value, int64_t version);
+    void answerRemotePosition(const std::string& attachmentKey, bool go);  // the reader's Go / Stay
+    std::vector<ReadingPosition> dirtyPositions();
+    int64_t settingsVersion();  // library version the settings pull reached
+    void setSettingsVersion(int64_t);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
     std::vector<CollectionEntry> allCollections();  // every level, by name

@@ -27,6 +27,12 @@ public:
     bool loseNextWriteResponse = false;  // apply the next POST, then answer with a timeout
     int created = 0;
     std::map<std::string, int> failObjects;  // POST: these keys fail with this code
+    std::map<std::string, json> settings;    // key -> {value, version}
+
+    // A setting changed elsewhere (the desktop's reader): bumps the library version.
+    void putSetting(const std::string& key, json value) {
+        settings[key] = json{{"value", std::move(value)}, {"version", ++libraryVersion}};
+    }
 
     // --- library editing (each bumps the library version) ---
     void put(json data) {
@@ -81,6 +87,33 @@ public:
         std::string path = rest.substr(0, rest.find('?'));
         std::map<std::string, std::string> q = query(rest);
         r.headers["last-modified-version"] = std::to_string(libraryVersion);
+
+        // /settings[?since=N]; POST /settings {key: {value, version}} (per-setting version check)
+        if (req.method == "GET" && path == "settings") {
+            const int64_t since = q.count("since") ? std::stoll(q["since"]) : 0;
+            json out = json::object();
+            for (const auto& [k, v] : settings)
+                if (v["version"].get<int64_t>() > since) out[k] = v;
+            return ok(r, out);
+        }
+        if (req.method == "POST" && path == "settings") {
+            json body = json::parse(req.body);
+            for (const auto& [k, v] : body.items()) {
+                const int64_t have = settings.count(k) ? settings[k]["version"].get<int64_t>() : 0;
+                if (v.contains("version") && v["version"].get<int64_t>() != have) return status(r, 412);
+            }
+            ++libraryVersion;
+            for (const auto& [k, v] : body.items()) settings[k] = json{{"value", v["value"]}, {"version", libraryVersion}};
+            r.headers["last-modified-version"] = std::to_string(libraryVersion);
+            if (loseNextWriteResponse) {
+                loseNextWriteResponse = false;
+                HttpResponse lost;
+                lost.curlCode = 28;
+                lost.curlError = "Operation timed out";
+                return lost;
+            }
+            return status(r, 204);
+        }
 
         // /items/<parent>/children?format=versions[&since=N][&itemType=annotation]
         if (req.method == "GET" && path.rfind("items/", 0) == 0 && path.size() > 15 &&

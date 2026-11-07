@@ -33,6 +33,11 @@ struct Deleted {
     std::vector<std::string> items, collections;
 };
 
+struct SettingsListing {
+    int64_t libraryVersion = 0;
+    std::map<std::string, std::pair<nlohmann::json, int64_t>> settings;  // key -> (value, version)
+};
+
 struct WriteResult {
     std::map<int, std::string> successKeys;  // batch index -> key
     std::map<int, std::string> failed;       // batch index -> message
@@ -61,6 +66,11 @@ public:
     std::optional<WriteResult> createItems(const nlohmann::json& array /* ≤50 */, int64_t ifUnmodifiedSince, UserError*);
     // DELETE /items?itemKey=… (≤50 keys). Success carries the new library version; 412 sets preconditionFailed.
     std::optional<WriteResult> deleteItems(const std::vector<std::string>& keys, int64_t ifUnmodifiedSince, UserError*);
+    // GET /settings?since=N: the user library's synced settings changed since N.
+    std::optional<SettingsListing> settings(int64_t since, UserError*);
+    // POST /settings {key: {value, version}}: 204 carries the new library version; a setting whose
+    // version is stale (changed elsewhere) sets preconditionFailed.
+    std::optional<WriteResult> writeSettings(const nlohmann::json& body, UserError*);
 
 private:
     HttpResponse send(HttpRequest req, UserError* err);

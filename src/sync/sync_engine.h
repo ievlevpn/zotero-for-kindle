@@ -50,6 +50,8 @@ private:
     int conflictUnsynced(const std::string& attachmentKey);
     bool pushOnce(SyncReport&, bool& preconditionFailed);
     bool pushDeletions(SyncReport&, bool& preconditionFailed);
+    void pullPositions(SyncReport&);
+    bool pushPositions(SyncReport&, bool& preconditionFailed);
 
     ZoteroApi& api_;
     Library& lib_;

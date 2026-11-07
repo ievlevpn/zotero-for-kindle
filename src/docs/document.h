@@ -113,6 +113,11 @@ public:
     virtual std::vector<SearchHit> search(const std::string& query, int maxHits) = 0;
     virtual std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) = 0;
     virtual int pageOfAnnotation(const AnnotationRecord&) = 0;  // -1 if it can't be placed
+    // The reading position as Zotero syncs it (setting lastPageIndex_u_<attachmentKey>), as JSON:
+    // a PDF's page index (2), an EPUB's point CFI at the page's start ("/6/24!/4/2/2/3:10").
+    // "" if there is none. pageOfZoteroPosition is the way back; -1 if it can't be placed.
+    virtual std::string zoteroPosition(int /*page*/) { return ""; }
+    virtual int pageOfZoteroPosition(const std::string& /*json*/) { return -1; }
     virtual int64_t wordsBetween(int fromPage, int toPage) = 0;  // for "time left"
     // The whole words between two points on a page (in either order); nullopt if `from` is not on
     // text. A Selection with empty text means the page has no text layer at all (a scan).

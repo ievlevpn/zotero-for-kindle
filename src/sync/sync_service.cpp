@@ -149,9 +149,9 @@ void SyncService::run() {
         w.db = std::make_unique<Db>(Db::open(deps_.dbPath));
         w.lib = std::make_unique<Library>(*w.db);
         Library* lib = w.lib.get();
-        w.guard = std::make_unique<WriteGuard>(*w.cancellable, [lib](const std::string& key) {
-            return lib->annotation(key).has_value();
-        });
+        w.guard = std::make_unique<WriteGuard>(
+            *w.cancellable, [lib](const std::string& key) { return lib->annotation(key).has_value(); },
+            [lib](const std::string& key) { return lib->attachment(key).has_value(); });  // reading positions
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);

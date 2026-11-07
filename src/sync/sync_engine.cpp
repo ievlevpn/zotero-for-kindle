@@ -113,6 +113,60 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
               static_cast<int>(gone->items.size() + gone->collections.size())});
     lib_.setLibraryVersion(rep.toVersion);
     if (allOffline) lib_.setAnnotationsVersion(rep.toVersion);
+    pullPositions(rep);
+}
+
+// Reading positions: the settings lastPageIndex_u_<attachmentKey> changed since the last pull.
+void SyncEngine::pullPositions(SyncReport& rep) {
+    UserError err;
+    auto listing = api_.settings(lib_.settingsVersion(), &err);
+    if (!listing) {
+        if (!rep.error) rep.error = err;
+        return;
+    }
+    static const std::string prefix = "lastPageIndex_u_";
+    auto tx = lib_.begin();
+    for (const auto& [key, setting] : listing->settings) {
+        if (key.rfind(prefix, 0) != 0) continue;
+        const auto& [value, version] = setting;
+        if (value.is_number() || value.is_string()) lib_.applyRemotePosition(key.substr(prefix.size()), value.dump(), version);
+    }
+    if (listing->libraryVersion > 0) lib_.setSettingsVersion(listing->libraryVersion);
+    tx.commit();
+}
+
+// The Kindle's reading positions that Zotero doesn't have yet, each against the setting version
+// it was based on: one changed elsewhere meanwhile fails the batch (412), and the pull that
+// follows turns it into a question for the reader instead of an overwrite.
+bool SyncEngine::pushPositions(SyncReport& rep, bool& preconditionFailed) {
+    preconditionFailed = false;
+    std::vector<ReadingPosition> dirty;
+    for (auto& p : lib_.dirtyPositions())
+        if (lib_.attachment(p.attachmentKey)) dirty.push_back(std::move(p));
+    for (size_t i = 0; i < dirty.size(); i += kBatch) {
+        json body = json::object();
+        const size_t end = std::min(dirty.size(), i + kBatch);
+        for (size_t j = i; j < end; ++j) {
+            json value = json::parse(dirty[j].local, nullptr, false);
+            if (value.is_discarded()) continue;
+            body["lastPageIndex_u_" + dirty[j].attachmentKey] = {{"value", value}, {"version", dirty[j].remoteVersion}};
+        }
+        if (body.empty()) continue;
+        UserError err;
+        auto res = api_.writeSettings(body, &err);
+        if (!res) {
+            rep.error = err;
+            return false;
+        }
+        if (res->preconditionFailed) {
+            preconditionFailed = true;
+            return false;
+        }
+        auto tx = lib_.begin();
+        for (size_t j = i; j < end; ++j) lib_.markPositionSent(dirty[j].attachmentKey, dirty[j].local, res->libraryVersion);
+        tx.commit();
+    }
+    return true;
 }
 
 bool SyncEngine::fetchAndApply(const std::string& kind, const std::string& phase, const std::vector<std::string>& keys,
@@ -352,6 +406,13 @@ SyncReport SyncEngine::push() {
             if (pulled.error) rep.error = pulled.error;
             else if (!pushOnce(rep, precondition) && precondition)
                 rep.error = UserError{ErrorKind::Other, "Zotero kept changing during the upload. Try again.", "HTTP 412 twice"};
+        }
+        // Reading positions, on their own: a refused one never holds annotations back.
+        if (!rep.error && !pushPositions(rep, precondition) && precondition && !rep.error) {
+            SyncReport pulled = pull(nullptr);  // the computer moved: the reader will ask
+            if (pulled.error) rep.error = pulled.error;
+            else if (!pushPositions(rep, precondition) && precondition)
+                log(LogLevel::Warn, "sync: reading positions refused twice; next time");
         }
     } catch (const DbError&) {
         rep.error = lib_.lastError();

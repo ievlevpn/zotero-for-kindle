@@ -282,6 +282,18 @@ PdfPosition parsePosition(const std::string& s) {
 
 }  // namespace
 
+std::string PdfEngine::zoteroPosition(int page) {
+    if (page < 0 || page >= pageCount()) return "";
+    return std::to_string(page);  // Zotero's lastPageIndex for a PDF: the page index
+}
+
+int PdfEngine::pageOfZoteroPosition(const std::string& v) {
+    const auto j = nlohmann::json::parse(v, nullptr, false);
+    if (!j.is_number_integer()) return -1;
+    const int page = j.get<int>();
+    return page >= 0 && page < pageCount() ? page : -1;
+}
+
 int PdfEngine::pageOfAnnotation(const AnnotationRecord& a) {
     const PdfPosition p = parsePosition(a.position);
     return p.pageIndex >= 0 && p.pageIndex < pageCount() ? p.pageIndex : -1;

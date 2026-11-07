@@ -46,8 +46,28 @@ std::string bulkDeleteRefusal(const std::string& query, const IsAnnotation& isAn
     return {};
 }
 
+// POST /users/<id>/settings: only {"lastPageIndex_u_<file key>": {"value": <page or CFI>, "version": n}}.
+std::string settingsRefusal(const HttpRequest& req, const IsAnnotation& isAttachment) {
+    if (!isAttachment) return "settings are not writable here";
+    if (!queryOf(req.url).empty()) return "POST settings with a query";
+    auto body = nlohmann::json::parse(req.body, nullptr, false);
+    if (!body.is_object() || body.empty()) return "POST settings body is not a non-empty object";
+    static const std::regex positionKey(R"(^lastPageIndex_u_([A-Z0-9]{8})$)");
+    for (const auto& [key, setting] : body.items()) {
+        std::smatch match;
+        if (!std::regex_match(key, match, positionKey)) return "setting " + key + " is not a reading position";
+        if (!isAttachment(match[1].str())) return "setting " + key + " is not for a file of this library";
+        if (!setting.is_object()) return "setting " + key + " is not an object";
+        for (const auto& [field, v] : setting.items())
+            if (field != "value" && field != "version") return "setting " + key + " has field " + field;
+        if (!setting.contains("value") || !(setting["value"].is_number() || setting["value"].is_string()))
+            return "setting " + key + " has no position value";
+    }
+    return {};
+}
+
 // Why the request must not go out, or empty if it may.
-std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation) {
+std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, const IsAnnotation& isAttachment) {
     const std::string& m = req.method;
     if (m == "GET" || m == "HEAD" || m == "PROPFIND")
         return req.body.empty() ? std::string{} : m + " with a body";  // curl would send it as a POST
@@ -68,6 +88,8 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation) {
     if ((m == "PUT" || m == "PATCH") && std::regex_match(path, match, itemPath)) {
         return isAnnotation(match[1].str()) ? std::string{} : "item " + match[1].str() + " is not an annotation";
     }
+    static const std::regex settingsPath(R"(^/users/\d+/settings/?$)");
+    if (m == "POST" && std::regex_match(path, settingsPath)) return settingsRefusal(req, isAttachment);
     if (m == "POST" && std::regex_match(path, itemsPath)) {
         auto body = nlohmann::json::parse(req.body, nullptr, false);
         if (!body.is_array()) return "POST body is not a JSON array";
@@ -87,11 +109,12 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation) {
 
 }  // namespace
 
-WriteGuard::WriteGuard(Http& inner, std::function<bool(const std::string& key)> isAnnotation)
-    : inner_(inner), isAnnotation_(std::move(isAnnotation)) {}
+WriteGuard::WriteGuard(Http& inner, std::function<bool(const std::string& key)> isAnnotation,
+                       std::function<bool(const std::string& key)> isAttachment)
+    : inner_(inner), isAnnotation_(std::move(isAnnotation)), isAttachment_(std::move(isAttachment)) {}
 
 HttpResponse WriteGuard::send(const HttpRequest& req) {
-    const std::string why = refusal(req, isAnnotation_);
+    const std::string why = refusal(req, isAnnotation_, isAttachment_);
     if (why.empty()) return inner_.send(req);
     log(LogLevel::Warn, "write guard refused %s %s: %s", req.method.c_str(), pathOf(req.url).c_str(), why.c_str());
     HttpResponse r;
