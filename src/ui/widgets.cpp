@@ -270,7 +270,8 @@ void drawHeader(cairo_t* cr, const std::string& title, bool back) {
     drawText(cr, title, {kSans, back ? 13.0 : 17.0, 700}, {x, back ? 40 : 18, metrics().width - x - kMargin, 100}, 1);
 }
 
-void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren) {
+void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren, bool pinned,
+                       const std::string& note) {
     fillRect(cr, r, 255);
     // Folder glyph.
     gray(cr, kSecondary);
@@ -285,8 +286,29 @@ void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t ite
     cairo_close_path(cr);
     cairo_stroke(cr);
     const int tx = r.x + 112, countW = 160;
-    centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {tx, r.y, r.w - (tx - r.x) - countW - 40, r.h},
-                Align::Left);
+    const int nameW = r.w - (tx - r.x) - countW - 40 - (pinned ? 60 : 0);
+    if (note.empty()) {
+        centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {tx, r.y, nameW, r.h}, Align::Left);
+    } else {
+        centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {tx, r.y + 8, nameW, r.h / 2}, Align::Left);
+        centredText(cr, note, {kSans, 7, 400, false, kSecondary}, {tx, r.y + r.h / 2 - 4, nameW, r.h / 2 - 10}, Align::Left);
+    }
+    if (pinned) {  // a pushpin: round head, short needle, slanted
+        const double px = r.x + r.w - countW - 70, py = r.y + r.h / 2.0;
+        gray(cr, kInk);
+        cairo_save(cr);
+        cairo_translate(cr, px, py);
+        cairo_rotate(cr, 0.6);
+        cairo_rectangle(cr, -9, -20, 18, 16);
+        cairo_fill(cr);
+        cairo_rectangle(cr, -15, -6, 30, 6);
+        cairo_fill(cr);
+        cairo_set_line_width(cr, 3);
+        cairo_move_to(cr, 0, 0);
+        cairo_line_to(cr, 0, 18);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    }
     centredText(cr, thousandsOf(items), {kSans, 7.5, 400, false, kTertiary}, {r.x + r.w - countW - 40, r.y, countW, r.h},
                 Align::Right);
     if (hasChildren) centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {r.x + r.w - 30, r.y, 30, r.h}, Align::Right);

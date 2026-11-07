@@ -1011,6 +1011,46 @@ std::vector<CollectionEntry> Library::childCollections(const std::string& parent
     });
 }
 
+std::vector<std::string> Library::pinnedCollections() {
+    std::vector<std::string> out;
+    const auto j = json::parse(metaValue("pinnedCollections"), nullptr, false);
+    if (!j.is_array()) return out;
+    for (const auto& k : j)
+        if (k.is_string()) out.push_back(k.get<std::string>());
+    return out;
+}
+
+void Library::setCollectionPinned(const std::string& key, bool pinned) {
+    auto keys = pinnedCollections();
+    const bool was = std::find(keys.begin(), keys.end(), key) != keys.end();
+    if (was == pinned) return;  // already so: keeps its place
+    if (pinned) keys.push_back(key);
+    else keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
+    setMetaValue("pinnedCollections", json(keys).dump());
+}
+
+std::vector<CollectionEntry> Library::collectionsTab() {
+    const auto all = allCollections();
+    auto find = [&](const std::string& key) -> const CollectionEntry* {
+        for (const auto& e : all)
+            if (e.collection.key == key) return &e;
+        return nullptr;
+    };
+    std::vector<CollectionEntry> out;
+    const auto pins = pinnedCollections();
+    for (const auto& key : pins)
+        if (const CollectionEntry* e = find(key)) {
+            CollectionEntry p = *e;
+            p.pinned = true;
+            if (const CollectionEntry* parent = find(p.collection.parentKey)) p.parentName = parent->collection.name;
+            out.push_back(std::move(p));
+        }
+    for (const auto& e : all)
+        if (e.collection.parentKey.empty() && std::find(pins.begin(), pins.end(), e.collection.key) == pins.end())
+            out.push_back(e);
+    return out;
+}
+
 std::vector<CollectionEntry> Library::allCollections() {
     return guarded([&] {
         Stmt st = db_.prepare(

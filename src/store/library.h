@@ -75,6 +75,8 @@ struct CollectionEntry {
     CollectionRecord collection;
     int64_t items = 0;
     bool hasChildren = false;
+    bool pinned = false;     // collectionsTab(): pinned to the top
+    std::string parentName;  // collectionsTab(): a pinned subcollection's parent
 };
 
 struct NoteRow {
@@ -210,6 +212,11 @@ public:
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
     std::vector<CollectionEntry> allCollections();  // every level, by name
+    // Pinned collections (a long press): kept on the Kindle, in the order pinned.
+    std::vector<std::string> pinnedCollections();
+    void setCollectionPinned(const std::string& key, bool pinned);
+    // The Collections tab: the pinned ones (any level, those still there), then the other top-level ones.
+    std::vector<CollectionEntry> collectionsTab();
     // Items whose books were opened on the Kindle, last opened first.
     std::vector<ItemRow> recentlyOpened(int limit);
     std::vector<NoteRow> recentAnnotations(int offset, int limit);

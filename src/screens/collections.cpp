@@ -1,5 +1,7 @@
 #include "screens/collections.h"
 
+#include <algorithm>
+
 #include "screens/collection_search.h"
 
 #include "ui/metrics.h"
@@ -30,15 +32,38 @@ bool turnPage(const Gesture& g, Pager& pager) {
 
 }  // namespace
 
+// ---- the pin sheet ---------------------------------------------------------------------------
+
+Rect PinSheet::rect() { return {0, H() - kTabBarH - 300, W(), 300}; }
+Rect PinSheet::buttonRect() { return {kMargin, rect().y + 150, W() - 2 * kMargin, 100}; }
+
+void PinSheet::draw(cairo_t* cr) const {
+    const Rect r = rect();
+    fillRect(cr, r, 255);
+    fillRect(cr, {r.x, r.y, r.w, 3}, kInk);
+    drawText(cr, entry_.collection.name.empty() ? "Untitled" : entry_.collection.name, {kSans, 9.5, 700},
+             {kMargin, r.y + 40, r.w - 2 * kMargin, 60}, 1);
+    drawButton(cr, buttonRect(), label(), false);
+}
+
+void PinSheet::tap(Point p, Library& lib) const {
+    if (buttonRect().contains(p)) lib.setCollectionPinned(entry_.collection.key, !pinned_);
+}
+
 // ---- top level -------------------------------------------------------------------------------
 
 CollectionsScreen::CollectionsScreen(std::function<void(const ItemRow&)> openItem, StatusFn status)
     : openItem_(std::move(openItem)), status_(std::move(status)) {}
 
 void CollectionsScreen::load(Library& lib) {
-    all_ = lib.childCollections("");
+    all_ = lib.collectionsTab();  // the pinned ones first
     pager_ = Pager(static_cast<int64_t>(all_.size()), collectionsPerPage());
     entries_.assign(all_.begin(), all_.begin() + std::min<size_t>(all_.size(), collectionsPerPage()));
+}
+
+void CollectionsScreen::showPage() {
+    entries_.assign(all_.begin() + pager_.offset(),
+                    all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
 }
 
 void CollectionsScreen::onShow(Nav& nav) {
@@ -46,8 +71,7 @@ void CollectionsScreen::onShow(Nav& nav) {
     load(nav.library());
     while (pager_.offset() < offset && pager_.next()) {
     }
-    entries_.assign(all_.begin() + pager_.offset(),
-                    all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
+    showPage();
 }
 
 Rect CollectionsScreen::searchRect() { return {W() - kMargin - 100, 20, 100, 100}; }
@@ -66,19 +90,39 @@ void CollectionsScreen::draw(Canvas& canvas) {
     const Rect s = searchRect();
     searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
     auto rects = entryRects();
-    for (size_t i = 0; i < entries_.size(); ++i)
-        drawCollectionRow(cr, rects[i], entries_[i].collection.name, entries_[i].items, entries_[i].hasChildren);
+    for (size_t i = 0; i < entries_.size(); ++i) {
+        const auto& e = entries_[i];
+        drawCollectionRow(cr, rects[i], e.collection.name, e.items, e.hasChildren, e.pinned,
+                          e.parentName.empty() ? "" : "in " + e.parentName);
+    }
     if (all_.empty())
         drawText(cr, "No collections yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100}, 1,
                  Align::Center);
     drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
+    if (sheet_) sheet_->draw(cr);
 }
 
 void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
-    if (turnPage(g, pager_)) {
-        entries_.assign(all_.begin() + pager_.offset(),
-                        all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
+    if (sheet_) {  // any tap closes it; its button pins or unpins
+        if (g.type != GestureType::Tap) return;
+        sheet_->tap(g.pos, nav.library());
+        sheet_.reset();
+        onShow(nav);
         nav.damage(contentArea(), Waveform::Quality);
+        return;
+    }
+    if (turnPage(g, pager_)) {
+        showPage();
+        nav.damage(contentArea(), Waveform::Quality);
+        return;
+    }
+    if (g.type == GestureType::LongPress) {
+        auto rects = entryRects();
+        for (size_t i = 0; i < rects.size(); ++i)
+            if (rects[i].contains(g.pos)) {
+                sheet_.emplace(entries_[i], entries_[i].pinned);
+                nav.damage(PinSheet::rect(), Waveform::Ui);
+            }
         return;
     }
     if (g.type != GestureType::Tap) return;
@@ -160,9 +204,28 @@ void CollectionScreen::draw(Canvas& canvas) {
         drawText(cr, "This collection is empty.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100},
                  1, Align::Center);
     drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
+    if (sheet_) sheet_->draw(cr);
 }
 
 void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (sheet_) {
+        if (g.type != GestureType::Tap) return;
+        sheet_->tap(g.pos, nav.library());
+        sheet_.reset();
+        nav.damage(contentArea(), Waveform::Quality);
+        return;
+    }
+    if (g.type == GestureType::LongPress) {
+        auto rects = lineRects();
+        for (size_t i = 0; i < rects.size(); ++i)
+            if (rects[i].contains(g.pos) && page_[i].isCollection) {
+                const auto pins = nav.library().pinnedCollections();
+                const bool pinned = std::find(pins.begin(), pins.end(), page_[i].collection.collection.key) != pins.end();
+                sheet_.emplace(page_[i].collection, pinned);
+                nav.damage(PinSheet::rect(), Waveform::Ui);
+            }
+        return;
+    }
     if (g.type == GestureType::Tap && backRect().contains(g.pos)) {
         nav.pop();
         return;
