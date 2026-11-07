@@ -45,6 +45,18 @@ public:
             if (it->method == req.method && req.url.rfind(it->urlPrefix, 0) == 0) {
                 HttpResponse r = std::move(it->response);
                 queue.erase(it);
+                // Like CurlHttp: progress half way; a cancel set from there aborts with half written.
+                if (req.onProgress && r.curlCode == 0) {
+                    req.onProgress(static_cast<int64_t>(r.body.size() / 2), static_cast<int64_t>(r.body.size()));
+                    if (req.cancel && *req.cancel) {
+                        if (!req.outFile.empty())
+                            std::ofstream(req.outFile, std::ios::binary) << r.body.substr(0, r.body.size() / 2);
+                        HttpResponse aborted;
+                        aborted.curlCode = 42;
+                        aborted.curlError = "Callback aborted";
+                        return aborted;
+                    }
+                }
                 if (!req.outFile.empty()) {  // like CurlHttp: stream the body to the file
                     std::ofstream(req.outFile, std::ios::binary) << r.body;
                     r.body.clear();

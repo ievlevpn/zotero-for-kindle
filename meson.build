@@ -268,6 +268,7 @@ monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocyp
   'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
 update_lib = static_library('zk-update',
   'src/update/version.cpp', 'src/update/signature.cpp', 'src/update/manifest.cpp', 'src/update/release_check.cpp',
+  'src/update/download.cpp',
   include_directories : [inc, include_directories('third_party/monocypher', 'third_party', is_system : true)],
   dependencies : [net_dep],
   link_with : monocypher_lib)
