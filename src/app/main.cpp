@@ -17,6 +17,8 @@
 #include "app/lifecycle.h"
 #include "app/settings_store.h"
 #include "app/stall_watchdog.h"
+#include "platform/device_profile.h"
+#include "ui/metrics.h"
 #include "app/startup.h"
 #include "core/log.h"
 #include "net/errors.h"
@@ -135,6 +137,10 @@ int main(int argc, char** argv) {
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
     if (argc > 1 && !std::strcmp(argv[1], "--version")) return 0;
+#ifndef ZK_KINDLE
+    for (int i = 1; i + 1 < argc; ++i)  // the desktop imitates a Kindle's window: --device pw5|scribe
+        if (!std::strcmp(argv[i], "--device")) setMetrics(!std::strcmp(argv[i + 1], "scribe") ? kScribe : kPw5);
+#endif
     if (argc > 1 && !std::strcmp(argv[1], "--list-fonts")) {  // what Display offers, and how long finding it takes
         const auto t0 = std::chrono::steady_clock::now();
         const auto fonts = readingFonts(readingFontDirs());
@@ -171,6 +177,15 @@ int main(int argc, char** argv) {
     std::optional<Config> config = startup.config;
 
     std::unique_ptr<Display> display = makeDisplay();
+    {
+        // The window, device and ppi everything lays out from (Plan 6).
+        const DeviceProfile profile = profileFor(display->deviceName(), display->ppi());
+        setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name});
+        log(LogLevel::Info, "device: %s, %d ppi, window %dx%d at (%d,%d)", profile.name.c_str(), profile.ppi,
+            display->width(), display->height(), display->origin().x, display->origin().y);
+        if (profile.ppi != 300)
+            log(LogLevel::Warn, "UI drawn at 300 ppi on a %d ppi screen (no scaling yet)", profile.ppi);
+    }
     NullSync nullSync;
     App app(*display, lib, nullSync, *keyboard);
     std::unique_ptr<SyncService> service;

@@ -50,7 +50,14 @@ public:
         fb_ = fbink_open();
         std::memset(&cfg_, 0, sizeof cfg_);
         cfg_.is_quiet = true;
-        if (fb_ < 0 || fbink_init(fb_, &cfg_) < 0) log(LogLevel::Warn, "FBInk init failed: X refreshes only");
+        if (fb_ < 0 || fbink_init(fb_, &cfg_) < 0) {
+            log(LogLevel::Warn, "FBInk init failed: X refreshes only");
+        } else {
+            FBInkState state{};
+            fbink_get_state(&cfg_, &state);
+            deviceName_ = state.device_name;
+            ppi_ = state.screen_dpi;
+        }
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
     }
 
@@ -65,6 +72,9 @@ public:
 
     int width() const override { return w_; }
     int height() const override { return h_; }
+    Point origin() const override { return {originX_, originY_}; }
+    std::string deviceName() const override { return deviceName_; }
+    int ppi() const override { return ppi_; }
 
     void present(const Canvas& canvas, Rect r, Waveform w) override {
         r = r.intersected({0, 0, w_, h_});
@@ -196,6 +206,8 @@ private:
     bool background_ = false;
     Rect exposed_;
     FBInkConfig cfg_;
+    std::string deviceName_ = "Kindle";
+    int ppi_ = 0;
 };
 
 }  // namespace

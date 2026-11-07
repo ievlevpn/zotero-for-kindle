@@ -15,8 +15,9 @@ public:
         Waveform waveform;
     };
 
-    int width() const override { return 1236; }
-    int height() const override { return 1547; }
+    int width() const override { return w; }
+    int height() const override { return h; }
+    int w = 1236, h = 1547;  // set before the App is made (its canvas takes this size)
     void present(const Canvas&, Rect r, Waveform w) override { presents.push_back({r, w}); }
     bool pollEvents(std::vector<InputEvent>& out, int) override {
         if (closed && input.empty()) return false;

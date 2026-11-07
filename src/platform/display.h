@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "core/geometry.h"
@@ -23,6 +24,9 @@ public:
     virtual ~Display() = default;
     virtual int width() const = 0;
     virtual int height() const = 0;
+    virtual Point origin() const { return {0, 0}; }             // of the window on the screen
+    virtual std::string deviceName() const { return "desktop"; }  // FBInk's name on a Kindle
+    virtual int ppi() const { return 300; }                       // 0 if unknown
     // Shows region `r` of `canvas` (canvas and display share coordinates).
     virtual void present(const Canvas& canvas, Rect r, Waveform w) = 0;
     // Waits up to timeout_ms for input; appends touches, keys and background/foreground

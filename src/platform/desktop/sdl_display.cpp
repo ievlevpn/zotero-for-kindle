@@ -6,12 +6,12 @@
 
 #include "core/log.h"
 #include "platform/display.h"
+#include "ui/metrics.h"
 
 namespace zk {
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;  // the Kindle window under the status bar
 constexpr int kScale = 2;
 
 int64_t nowMs() {
@@ -21,7 +21,8 @@ int64_t nowMs() {
 
 class SdlDisplay final : public Display {
 public:
-    SdlDisplay() {
+    // The window of the Kindle being imitated (metrics(): --device pw5|scribe).
+    SdlDisplay() : kW(metrics().width), kH(metrics().height) {
         SDL_Init(SDL_INIT_VIDEO);
         win_ = SDL_CreateWindow("Zotero for Kindle (desktop)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                 kW / kScale, kH / kScale, 0);
@@ -30,6 +31,8 @@ public:
         tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
         gray_.assign((size_t)kW * kH, 0xff);
     }
+
+    const int kW, kH;
 
     ~SdlDisplay() override {
         SDL_DestroyTexture(tex_);
