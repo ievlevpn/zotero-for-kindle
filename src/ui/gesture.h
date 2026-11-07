@@ -18,10 +18,10 @@ struct Gesture {
 };
 
 struct GestureConfig {
-    int slop_px = 24;  // ~2 mm at 300 dpi
+    int slop_px = 36;  // ~3 mm at 300 dpi: a tap may wobble that much
     int longpress_ms = 500;
     int swipe_min_px = 120;
-    int swipe_max_ms = 400;
+    int swipe_max_ms = 1000;  // an unhurried swipe counts (big screens invite slower ones)
 };
 
 // Turns raw touches into gestures. Tracks only the first finger down;

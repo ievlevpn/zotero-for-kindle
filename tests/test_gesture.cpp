@@ -69,13 +69,34 @@ TEST_CASE("gesture: fast horizontal flick is a left swipe") {
     CHECK(out[0].dir == Direction::Left);
 }
 
-TEST_CASE("gesture: slow long move is neither swipe nor tap") {
+TEST_CASE("gesture: an unhurried swipe still counts (up to a second)") {
+    GestureRecognizer g;
+    std::vector<Gesture> out;
+    append(out, g.feed(down(800, 1200, 0)));
+    append(out, g.feed(move(805, 900, 300)));
+    append(out, g.feed(up(810, 700, 750)));
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].type == GestureType::Swipe);
+    CHECK(out[0].dir == Direction::Up);
+}
+
+TEST_CASE("gesture: a drag that takes longer than a second is not a swipe") {
     GestureRecognizer g;
     std::vector<Gesture> out;
     append(out, g.feed(down(800, 800, 0)));
-    append(out, g.feed(move(600, 805, 300)));
-    append(out, g.feed(up(450, 812, 600)));
+    append(out, g.feed(move(600, 805, 600)));
+    append(out, g.feed(up(450, 812, 1200)));
     CHECK(out.empty());
+}
+
+TEST_CASE("gesture: a tap with a little finger wobble (3 mm) is still a tap") {
+    GestureRecognizer g;
+    std::vector<Gesture> out;
+    append(out, g.feed(down(400, 400, 0)));
+    append(out, g.feed(move(425, 418, 60)));
+    append(out, g.feed(up(428, 420, 120)));
+    REQUIRE(out.size() == 1);
+    CHECK(out[0].type == GestureType::Tap);
 }
 
 TEST_CASE("gesture: a second finger during a tap is ignored") {
