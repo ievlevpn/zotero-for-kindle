@@ -202,11 +202,13 @@ TEST_CASE("update install: confirm while another version runs leaves the update 
 TEST_CASE("update install: confirm after a rollback says RolledBack once") {
     Kindle k;
     writeFile(k.app("update/rolled-back"), "0.2.0 0.3.0\n");
+    writeFile(k.app("update/zotero-for-kindle.zip"), "the release that didn't start");
     const Confirmed c = confirmStartup(k.paths, {0, 2, 0});
     CHECK(c.note == StartupNote::RolledBack);
     CHECK(c.from == Version{0, 2, 0});
     CHECK(c.to == Version{0, 3, 0});
     CHECK_FALSE(fs::exists(k.app("update/rolled-back")));
+    CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));  // seen on the PW5: 13 MB left behind
     CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
 }
 

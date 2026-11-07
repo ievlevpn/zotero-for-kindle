@@ -245,6 +245,8 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) {
         std::istringstream in(readLine(update / "rolled-back"));
         in >> from >> to;
         fs::remove(update / "rolled-back", ec);
+        for (const char* leftover : {"new", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})  // the failed release
+            fs::remove_all(update / leftover, ec);
         if (auto f = parseVersion(from), t = parseVersion(to); f && t) {
             c = {StartupNote::RolledBack, *f, *t};
             log(LogLevel::Warn, "update: %s didn't start; back on %s", t->str().c_str(), f->str().c_str());
