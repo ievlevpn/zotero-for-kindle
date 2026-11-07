@@ -9,6 +9,7 @@
 #include "screens/reader.h"
 #include "screens/reader_menus.h"
 #include "store/db.h"
+#include "ui/metrics.h"
 #include "ui/text.h"
 
 #include <algorithm>
@@ -83,11 +84,6 @@ TEST_CASE("display: margins, spacing and font choices apply; PDFs only get margi
     CHECK(r->layout().marginPx == 100);
     r->onGesture(tapAt(ReaderMenus::spacingRect(0).center()), rig.nav);
     CHECK(r->layout().lineSpacingPct == 100);
-    const auto fonts = r->menus()->fonts();
-    if (fonts.size() > 1) {
-        r->onGesture(tapAt(ReaderMenus::fontRect(1).center()), rig.nav);
-        CHECK(r->layout().font == fonts[1]);
-    }
     auto pdf = rig.open(DocType::Pdf);
     REQUIRE(rig.waitPage(*pdf, 0));
     rig.openDisplay(*pdf);
@@ -114,4 +110,121 @@ TEST_CASE("fonts: from the Kindle's system fonts only its reading fonts are offe
                           "Amazon Ember Bold", "Bookerly Display", "MT Chinese Surrogates"})
         CHECK_FALSE_MESSAGE(offeredFamily(f, true), f);
     CHECK(offeredFamily("Charter", false));  // dropped into /mnt/us/zotero/fonts
+}
+
+// ---- The font pop-up ----
+
+namespace {
+
+const Rect* rowFor(const std::vector<std::pair<std::string, Rect>>& rows, const std::string& font) {
+    for (const auto& [f, r] : rows)
+        if (f == font) return &r;
+    return nullptr;
+}
+
+}  // namespace
+
+TEST_CASE("font pop-up: the Font row opens the list; a tap picks a font and closes it") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    ReaderMenus& m = *r->menus();
+    CHECK_FALSE(m.fontPickerOpen());
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    REQUIRE(m.fontPickerOpen());
+    const auto rows = m.fontPickerRows();
+    REQUIRE(rowFor(rows, "Bookerly"));
+    REQUIRE(rowFor(rows, "Fast Serif"));
+    for (const auto& [f, rect] : rows) CHECK(m.fontPickerRect().contains(rect.center()));
+    r->onGesture(tapAt(rowFor(rows, "Fast Serif")->center()), rig.nav);
+    CHECK(r->layout().font == "Fast Serif");
+    CHECK_FALSE(m.fontPickerOpen());
+    CHECK(m.displayOpen());  // back to the Display panel
+}
+
+TEST_CASE("font pop-up: the Fast fonts come last") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    const auto& all = r->menus()->fonts();
+    const auto firstFast = std::find_if(all.begin(), all.end(), [](const std::string& f) { return f.rfind("Fast ", 0) == 0; });
+    REQUIRE(firstFast != all.end());
+    CHECK(std::all_of(firstFast, all.end(), [](const std::string& f) { return f.rfind("Fast ", 0) == 0; }));
+}
+
+TEST_CASE("font pop-up: a tap outside the list closes only the list") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    const std::string before = r->layout().font;
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    REQUIRE(r->menus()->fontPickerOpen());
+    r->onGesture(tapAt({5, 5}), rig.nav);
+    CHECK_FALSE(r->menus()->fontPickerOpen());
+    CHECK(r->menusOpen());
+    CHECK(r->menus()->displayOpen());
+    CHECK(r->layout().font == before);
+}
+
+namespace {
+
+// What a Kindle offers: its reading fonts, then Fast Font.
+struct KindleFonts {
+    KindleFonts() {
+        ReaderMenus::setFontsForTests({"Bookerly", "Amazon Ember", "Baskerville", "Caecilia", "Futura", "Helvetica Neue LT",
+                                       "OpenDyslexic", "Palatino", "Fast Serif", "Fast Sans", "Fast Mono"});
+    }
+    ~KindleFonts() { ReaderMenus::setFontsForTests({}); }
+};
+
+}  // namespace
+
+TEST_CASE("font pop-up: a Kindle's eleven fonts page, on the PW5 and the KT4") {
+    for (const Metrics& screen : {kPw5, kKt4}) {
+    INFO(screen.device);
+    ScopedMetrics s(screen);
+    KindleFonts kindle;
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    ReaderMenus& m = *r->menus();
+    REQUIRE(m.fontPickerOpen());
+    CHECK(m.fontPickerRect().y >= 0);
+    CHECK(m.fontPickerRect().y + m.fontPickerRect().h <= ReaderMenus::panelRect().y);
+    const auto first = m.fontPickerRows();
+    REQUIRE(first.size() < m.fonts().size());
+    for (const auto& [f, rect] : first) CHECK(rect.y + rect.h <= m.fontPickerRect().y + m.fontPickerRect().h - 100);
+    CHECK(m.fontPickerPrevRect().empty());
+    REQUIRE_FALSE(m.fontPickerNextRect().empty());
+    r->onGesture(tapAt(m.fontPickerNextRect().center()), rig.nav);
+    REQUIRE(m.fontPickerOpen());
+    const auto second = m.fontPickerRows();
+    REQUIRE_FALSE(second.empty());
+    CHECK(second.front().first != first.front().first);
+    r->onGesture(tapAt(m.fontPickerPrevRect().center()), rig.nav);
+    CHECK(m.fontPickerRows().front().first == first.front().first);
+    }
+}
+
+TEST_CASE("font pop-up matches the reviewed golden") {
+    if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
+    addFontDir("assets/fonts-device");
+    addFontDir("assets/fonts-fast");
+    KindleFonts kindle;
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    Canvas c(1236, 1547);
+    r->draw(c);
+    test::checkGolden(c, "tests/golden/font-picker.png");
+    r->onGesture(tapAt(r->menus()->fontPickerNextRect().center()), rig.nav);
+    r->draw(c);
+    test::checkGolden(c, "tests/golden/font-picker-fast.png");
 }

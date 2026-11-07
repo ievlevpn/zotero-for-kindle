@@ -49,11 +49,7 @@ Rect ReaderMenus::lightPanelRect() { return {0, H() - kPanelH - kLightH, W(), kL
 Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, H() - kPanelH - kLightH + 50, W() - 2 * kMargin - 240, 70}; }
 
 Rect ReaderMenus::displayPanelRect() { return {0, H() - kPanelH - kDisplayH, W(), kDisplayH}; }
-Rect ReaderMenus::fontRect(int i) {
-    const int w = (W() - 2 * kMargin - 110) / 4;
-    return {kMargin + i * w, H() - kPanelH - kDisplayH + 24, w - 12, 90};
-}
-Rect ReaderMenus::fontMoreRect() { return {W() - kMargin - 100, H() - kPanelH - kDisplayH + 24, 100, 90}; }
+Rect ReaderMenus::fontRowRect() { return {kMargin, H() - kPanelH - kDisplayH + 24, W() - 2 * kMargin, 90}; }
 Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, H() - kPanelH - kDisplayH + 134, 160, 90}; }
 Rect ReaderMenus::sizePlusRect() { return {W() - kMargin - 160, H() - kPanelH - kDisplayH + 134, 160, 90}; }
 Rect ReaderMenus::marginRect(int i) {
@@ -80,21 +76,149 @@ Rect ReaderMenus::penRect(int i) {
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 354, w - 12, 90};
 }
 
+namespace {
+std::vector<std::string> g_testFonts;
+}  // namespace
+
+void ReaderMenus::setFontsForTests(std::vector<std::string> f) { g_testFonts = std::move(f); }
+
 const std::vector<std::string>& ReaderMenus::fonts() {
+    if (!g_testFonts.empty()) return g_testFonts;
     // Scanning fonts reads every file with FreeType: once per process, not per menu.
-    static const std::vector<std::string> all = readingFonts(readingFontDirs());
+    static const std::vector<std::string> all = [] {
+        auto f = readingFonts(readingFontDirs());
+        std::stable_partition(f.begin(), f.end(), [](const std::string& n) { return !isFastFont(n); });
+        return f;
+    }();
     return all;
+}
+
+// ---- The font pop-up --------------------------------------------------------------------------
+
+namespace {
+constexpr int kPickerTitleH = 120, kPickerRowH = 100, kPickerHeadingH = 70, kPickerFooterH = 110, kPickerGap = 60;
+}  // namespace
+
+Rect ReaderMenus::fontPickerRect() const {
+    // Above the bottom panel, as tall as it needs (or may) be.
+    const int w = std::min(W() - 2 * kMargin, 900);
+    const int maxH = H() - kPanelH - 2 * kPickerGap;
+    return {(W() - w) / 2, kPickerGap, w, maxH};
+}
+
+std::vector<ReaderMenus::PickerPage> ReaderMenus::pickerPages() {
+    const auto& f = fonts();
+    auto height = [&](size_t i) {
+        const bool heading = isFastFont(f[i]) && (i == 0 || !isFastFont(f[i - 1]));
+        return kPickerRowH + (heading ? kPickerHeadingH : 0);
+    };
+    int all = 0;
+    for (size_t i = 0; i < f.size(); ++i) all += height(i);
+    const int room = fontPickerRect().h - kPickerTitleH - (all + kPickerTitleH + 30 <= fontPickerRect().h ? 0 : kPickerFooterH);
+    std::vector<PickerPage> pages;
+    for (size_t i = 0; i < f.size();) {
+        PickerPage p{i, i};
+        for (int used = 0; p.to < f.size() && (p.to == p.from || used + height(p.to) <= room); ++p.to) used += height(p.to);
+        pages.push_back(p);
+        i = p.to;
+    }
+    if (pages.empty()) pages.push_back({});
+    return pages;
+}
+
+std::vector<std::pair<std::string, Rect>> ReaderMenus::fontPickerRows() {
+    std::vector<std::pair<std::string, Rect>> rows;
+    if (!picker_) return rows;
+    const auto pages = pickerPages();
+    const PickerPage p = pages[std::min(*picker_, pages.size() - 1)];
+    const Rect box = fontPickerRect();
+    int y = box.y + kPickerTitleH;
+    for (size_t i = p.from; i < p.to; ++i) {
+        if (isFastFont(fonts()[i]) && (i == 0 || !isFastFont(fonts()[i - 1]))) y += kPickerHeadingH;
+        rows.push_back({fonts()[i], {box.x, y, box.w, kPickerRowH}});
+        y += kPickerRowH;
+    }
+    return rows;
+}
+
+Rect ReaderMenus::fontPickerPrevRect() {
+    if (!picker_ || *picker_ == 0) return {};
+    const Rect box = fontPickerRect();
+    return {box.x, box.y + box.h - kPickerFooterH, box.w / 3, kPickerFooterH};
+}
+
+Rect ReaderMenus::fontPickerNextRect() {
+    if (!picker_ || *picker_ + 1 >= pickerPages().size()) return {};
+    const Rect box = fontPickerRect();
+    return {box.x + box.w - box.w / 3, box.y + box.h - kPickerFooterH, box.w / 3, kPickerFooterH};
+}
+
+void ReaderMenus::onPickerTap(Point p, Nav& nav) {
+    const Rect box = fontPickerRect();
+    if (fontPickerPrevRect().contains(p) || fontPickerNextRect().contains(p)) {
+        picker_ = *picker_ + (fontPickerNextRect().contains(p) ? 1 : -1);
+        nav.damage(box, Waveform::Ui);
+        return;
+    }
+    std::string chosen;
+    for (const auto& [font, r] : fontPickerRows())
+        if (r.contains(p)) chosen = font;
+    picker_.reset();
+    nav.damage(box, Waveform::Quality);  // the page under it, without ghosts
+    nav.damage(displayPanelRect(), Waveform::Ui);
+    if (chosen.empty() || chosen == reader_.layout().font) return;
+    Layout l = reader_.layout();
+    l.font = chosen;
+    reader_.applyLayout(l, nav);
+}
+
+void ReaderMenus::drawPicker(cairo_t* cr) {
+    const Rect box = fontPickerRect();
+    const auto rows = fontPickerRows();
+    const auto pages = pickerPages();
+    const bool paged = pages.size() > 1;
+    // As tall as this page's rows (the box's own height is the most it may take).
+    const int contentBottom = rows.empty() ? box.y + kPickerTitleH : rows.back().second.y + kPickerRowH;
+    const int bottom = paged ? box.y + box.h : contentBottom + 30;
+    const Rect shown{box.x, box.y, box.w, bottom - box.y};
+    gray(cr, 255);
+    roundedRect(cr, shown.x + 1.5, shown.y + 1.5, shown.w - 3, shown.h - 3, 18);
+    cairo_fill_preserve(cr);
+    gray(cr, kInk);
+    cairo_set_line_width(cr, 3);
+    cairo_stroke(cr);
+    drawText(cr, "Font", {kSans, 9, 700}, {box.x + 50, box.y + 36, box.w - 100, 60}, 1);
+    const std::string current = reader_.layout().font;
+    for (const auto& [font, r] : rows) {
+        const auto it = std::find(fonts().begin(), fonts().end(), font);
+        const size_t i = static_cast<size_t>(it - fonts().begin());
+        if (isFastFont(font) && (i == 0 || !isFastFont(fonts()[i - 1])))
+            drawText(cr, "FAST READING", {kSans, 6.5, 700, false, kSecondary}, {r.x + 50, r.y - kPickerHeadingH + 20, r.w - 100, 44}, 1);
+        hRule(cr, r.y, r.x + 30, r.x + r.w - 30, 220);
+        centredText(cr, font, {font.c_str(), 9, 400}, {r.x + 50, r.y, r.w - 180, r.h}, Align::Left);
+        if (font == current) centredText(cr, "✓", {kSans, 10, 700}, {r.x + r.w - 120, r.y, 70, r.h});
+    }
+    if (paged) {
+        const std::string where = std::to_string(*picker_ + 1) + " / " + std::to_string(pages.size());
+        const int fy = box.y + box.h - kPickerFooterH;
+        centredText(cr, where, {kSans, 7.5, 400, false, kSecondary}, {box.x, fy, box.w, kPickerFooterH});
+        if (!fontPickerPrevRect().empty()) centredText(cr, "‹", {kSans, 14, 400}, fontPickerPrevRect());
+        if (!fontPickerNextRect().empty()) centredText(cr, "›", {kSans, 14, 400}, fontPickerNextRect());
+    }
 }
 
 bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
     if (!displayPanelRect().contains(p)) return false;
     Layout l = reader_.layout();
     if (showsTextOptions()) {
-        for (int i = 0; i < 4; ++i)
-            if (fontRect(i).contains(p) && fontOffset_ + i < fonts().size()) l.font = fonts()[fontOffset_ + i];
-        if (fontMoreRect().contains(p) && fonts().size() > 4) {
-            fontOffset_ = fontOffset_ + 4 < fonts().size() ? fontOffset_ + 4 : 0;
-            nav.damage(displayPanelRect(), Waveform::Ui);
+        if (fontRowRect().contains(p)) {
+            const auto& f = fonts();
+            const auto pages = pickerPages();
+            picker_ = 0;  // the page with the current font
+            for (size_t i = 0; i < pages.size(); ++i)
+                for (size_t k = pages[i].from; k < pages[i].to; ++k)
+                    if (f[k] == l.font) picker_ = i;
+            nav.damage(fontPickerRect(), Waveform::Ui);
             return true;
         }
         if (sizeMinusRect().contains(p)) l.sizePt = std::max(kMinSize, l.sizePt - kSizeStep);
@@ -142,17 +266,14 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
     const Layout l = reader_.layout();
     const TextStyle label{kSans, 8, 500};
     if (showsTextOptions()) {
-        for (int i = 0; i < 4 && fontOffset_ + i < fonts().size(); ++i) {
-            const std::string& f = fonts()[fontOffset_ + i];
-            const Rect r = fontRect(i);
-            const bool on = f == l.font;
-            gray(cr, on ? kInk : 170);
-            roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, 14);
-            cairo_set_line_width(cr, on ? 5 : 3);
-            cairo_stroke(cr);
-            centredText(cr, f, {f.c_str(), 8, 400}, {r.x + 8, r.y, r.w - 16, r.h});
-        }
-        if (fonts().size() > 4) centredText(cr, "›", {kSans, 14, 400}, fontMoreRect());
+        const Rect fr = fontRowRect();
+        centredText(cr, "Font", label, {kMargin, fr.y, 220, 90}, Align::Left);
+        gray(cr, 170);
+        roundedRect(cr, fr.x + 240 + 1.5, fr.y + 1.5, fr.w - 240 - 3, fr.h - 3, 14);
+        cairo_set_line_width(cr, 3);
+        cairo_stroke(cr);
+        centredText(cr, l.font, {l.font.c_str(), 8.5, 400}, {fr.x + 270, fr.y, fr.w - 240 - 120, fr.h}, Align::Left);
+        centredText(cr, "›", {kSans, 14, 400}, {fr.x + fr.w - 80, fr.y, 60, fr.h});
         centredText(cr, "Size", label, {kMargin, sizeMinusRect().y, 220, 90}, Align::Left);
         drawButton(cr, sizeMinusRect(), "A−", false);
         drawButton(cr, sizePlusRect(), "A+", false);
@@ -251,6 +372,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (picker_) return onPickerTap(g.pos, nav);  // over everything: a tap outside only closes it
     if (backRect().contains(g.pos)) {
         reader_.flushInk(nav);  // handwriting becomes annotations first, so the sync sends them
         nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
@@ -357,6 +479,7 @@ void ReaderMenus::draw(Canvas& canvas) {
         if (i == 4 && syncing_) label = "Syncing…";
         drawButton(cr, buttonRect(i), label, (i == 3 && lightOpen_) || (i == 2 && displayOpen_));
     }
+    if (picker_) drawPicker(cr);
 }
 
 }  // namespace zk

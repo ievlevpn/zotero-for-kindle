@@ -39,8 +39,7 @@ public:
     static Rect lightPanelRect();
     static Rect lightSliderRect();
     static Rect displayPanelRect();
-    static Rect fontRect(int i);  // up to 4 fonts per row; fontMoreRect() shows the next ones
-    static Rect fontMoreRect();
+    static Rect fontRowRect();  // "Font  Bookerly ›": opens the font pop-up
     static Rect sizeMinusRect();
     static Rect sizePlusRect();
     static Rect marginRect(int i);   // EPUB: Narrow, Normal, Wide, Extra wide (a share of the page width)
@@ -52,7 +51,16 @@ public:
     bool displayOpen() const { return displayOpen_; }
     bool showsTextOptions() const;
     bool showsPenOptions() const;
-    const std::vector<std::string>& fonts();
+    const std::vector<std::string>& fonts();  // the Fast fonts last
+    // Tests: the fonts to offer instead of the ones found (a Kindle's, on the desktop); empty: found.
+    static void setFontsForTests(std::vector<std::string>);
+
+    // The font pop-up: every font, its name in its own face, a page at a time.
+    bool fontPickerOpen() const { return picker_.has_value(); }
+    Rect fontPickerRect() const;
+    std::vector<std::pair<std::string, Rect>> fontPickerRows();  // this page's fonts
+    Rect fontPickerPrevRect();  // empty on the first page
+    Rect fontPickerNextRect();  // empty on the last
 
     std::string notesLabel() const { return "Notes (" + std::to_string(notes_) + ")"; }
     bool lightOpen() const { return lightOpen_; }
@@ -69,7 +77,14 @@ private:
     std::optional<int> dragPage_;
     bool lightOpen_ = false;
     bool displayOpen_ = false;
-    size_t fontOffset_ = 0;
+    std::optional<size_t> picker_;  // the font pop-up's page
+    // A page of the pop-up: its fonts (from fonts()) and whether it starts the Fast ones.
+    struct PickerPage {
+        size_t from = 0, to = 0;
+    };
+    std::vector<PickerPage> pickerPages();
+    void onPickerTap(Point, Nav&);
+    void drawPicker(cairo_t*);
     bool onDisplayTap(Point, Nav&);
     void drawDisplay(cairo_t*);
     int light_ = -1;

@@ -14,4 +14,7 @@ std::vector<std::string> readingFontDirs();
 // offered, as on the Kindle's own Display menu; fonts added to the app's folder all are.
 bool offeredFamily(const std::string& family, bool systemFont);
 
+// Fast Font (bundled): bold word beginnings; listed last, under "Fast reading".
+inline bool isFastFont(const std::string& family) { return family.rfind("Fast ", 0) == 0; }
+
 }  // namespace zk
