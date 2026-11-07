@@ -23,7 +23,8 @@ public:
 std::unique_ptr<Keyboard> makeKeyboard(Lipc&);
 
 // lipc "x:y:w:h" in screen coordinates -> window rect (window top at `windowTop`); empty if malformed.
-Rect parseKeyboardBounds(const std::string& lipcValue, int windowTop);
+// `scale`: screen pixels per app pixel when the screen isn't 300 ppi (ScaledDisplay).
+Rect parseKeyboardBounds(const std::string& lipcValue, int windowTop, double scale = 1.0);
 
 // Where the keyboard is when lipc doesn't say: the device's keyboard height at the window's
 // bottom, full width; the lower half on a device whose keyboard we haven't measured.

@@ -14,11 +14,17 @@ struct Metrics {
     Point origin{0, 101};
     int ppi = 300;
     std::string device = "PaperWhite 5";  // FBInk's name
+    // Screen pixels per layout pixel: 1 on 300-ppi screens; ppi / 300 elsewhere, where the window
+    // above is the screen's size at 300 ppi and ScaledDisplay shrinks it (origin stays in screen pixels).
+    double scale = 1.0;
     Rect window() const { return {0, 0, width, height}; }
 };
 
 inline const Metrics kPw5{1236, 1547, {0, 101}, 300, "PaperWhite 5"};
 inline const Metrics kScribe{1860, 2379, {0, 101}, 300, "Scribe"};
+// The Kindle 10th gen (KT4): a 600×800 screen at 167 ppi, its window (600×744 under the status bar,
+// estimated: not measured on one) at 300 ppi.
+inline const Metrics kKt4{1078, 1337, {0, 56}, 167, "Kindle 10", 167.0 / 300};
 
 const Metrics& metrics();
 void setMetrics(const Metrics&);

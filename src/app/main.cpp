@@ -1,6 +1,6 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
-//   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe] [--landscape]
+//   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
 //                                                  render a screen to a PNG and exit
 
 #include <chrono>
@@ -52,6 +52,7 @@
 #include "ui/widgets.h"
 #include "update/install.h"
 #include "update/release_key.h"
+#include "platform/scaled_display.h"
 #include "update/update_notice.h"
 #include "update/updater.h"
 
@@ -204,9 +205,13 @@ int main(int argc, char** argv) {
         std::printf("zotero-for-kindle %s (%s)\n", ZK_VERSION, ZK_BACKEND);
         return 0;
     }
-    // --device pw5|scribe: the window to imitate (the desktop; and --screenshot on any build).
+    // --device pw5|scribe|kt4: the window to imitate (the desktop; and --screenshot on any build).
+    // kt4: the desktop window is the KT4's screen (600×744 at 167 ppi), shrunk to as on the device.
     for (int i = 1; i + 1 < argc; ++i)
-        if (!std::strcmp(argv[i], "--device")) setMetrics(!std::strcmp(argv[i + 1], "scribe") ? kScribe : kPw5);
+        if (!std::strcmp(argv[i], "--device")) {
+            const char* d = argv[i + 1];
+            setMetrics(!std::strcmp(d, "scribe") ? kScribe : !std::strcmp(d, "kt4") ? kKt4 : kPw5);
+        }
     // --landscape (with --screenshot): the device's window turned, as measured on it.
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--landscape")) {
@@ -255,11 +260,16 @@ int main(int argc, char** argv) {
     {
         // The window, device and ppi everything lays out from (Plan 6).
         const DeviceProfile profile = profileFor(display->deviceName(), display->ppi());
-        setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name});
         log(LogLevel::Info, "device: %s, %d ppi, window %dx%d at (%d,%d)", profile.name.c_str(), profile.ppi,
             display->width(), display->height(), display->origin().x, display->origin().y);
-        if (profile.ppi != 300)
-            log(LogLevel::Warn, "UI drawn at 300 ppi on a %d ppi screen (no scaling yet)", profile.ppi);
+        double scale = 1.0;
+        if (profile.ppi > 0 && profile.ppi != 300) {  // laid out at 300 ppi, shrunk onto the screen
+            scale = profile.ppi / 300.0;
+            display = std::make_unique<ScaledDisplay>(std::move(display), scale);
+            log(LogLevel::Info, "UI at 300 ppi shrunk to %d ppi: window %dx%d", profile.ppi, display->width(),
+                display->height());
+        }
+        setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name, scale});
     }
     NullSync nullSync;
     App app(*display, lib, nullSync, *keyboard);

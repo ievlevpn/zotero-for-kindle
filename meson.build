@@ -128,6 +128,7 @@ endif
 ui_lib = static_library('zk-ui',
   'src/ui/gesture.cpp',
   'src/ui/canvas.cpp',
+  'src/platform/scaled_display.cpp',
   'src/ui/metrics.cpp',
   'src/ui/item_icons.cpp',
   'src/ui/text.cpp',

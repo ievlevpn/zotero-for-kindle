@@ -34,6 +34,7 @@ public:
     Rect flashMinusRect() const;  // "Full refresh every N pages" (reader), 1–12
     Rect flashPlusRect() const;
     Rect updateRect() const;
+    Rect aboutTextRect() const;  // the About row's second line (two lines at most)
     std::string updateLine() const;  // the About row's second line: version, or the last check's result
 
 private:

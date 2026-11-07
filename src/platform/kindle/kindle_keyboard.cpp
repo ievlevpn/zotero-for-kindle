@@ -16,7 +16,7 @@ public:
         // The argument names our window's ID from its title (S3).
         lipc_.set("com.lab126.keyboard", "open", "org.zotero.kindle:abc:0");
         // Our window sits under the status bar: its measured top, not the PW5's 101.
-        bounds_ = parseKeyboardBounds(lipc_.get("com.lab126.keyboard", "bounds"), metrics().origin.y);
+        bounds_ = parseKeyboardBounds(lipc_.get("com.lab126.keyboard", "bounds"), metrics().origin.y, metrics().scale);
         if (bounds_.w == 0) bounds_ = keyboardFallback(metrics(), profileFor(metrics().device, metrics().ppi));
         shown_ = true;
     }

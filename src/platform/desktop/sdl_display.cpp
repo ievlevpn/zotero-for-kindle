@@ -1,5 +1,6 @@
 // Desktop display for development: an SDL window showing the 8-bit gray framebuffer at
 // half size. Mouse = finger. Waveforms are logged, not simulated.
+#include <cmath>
 #include <SDL.h>
 
 #include <chrono>
@@ -12,7 +13,6 @@ namespace zk {
 
 namespace {
 
-constexpr int kScale = 2;
 
 int64_t nowMs() {
     using namespace std::chrono;
@@ -21,8 +21,12 @@ int64_t nowMs() {
 
 class SdlDisplay final : public Display {
 public:
-    // The window of the Kindle being imitated (metrics(): --device pw5|scribe).
-    SdlDisplay() : kW(metrics().width), kH(metrics().height) {
+    // The screen of the Kindle being imitated (metrics(): --device pw5|scribe|kt4), in its own
+    // pixels: a KT4's 167-ppi screen is smaller than the window the app lays out in.
+    SdlDisplay()
+        : kW(static_cast<int>(std::lround(metrics().width * metrics().scale))),
+          kH(static_cast<int>(std::lround(metrics().height * metrics().scale))),
+          kScale(metrics().scale < 1 ? 1 : 2) {
         SDL_Init(SDL_INIT_VIDEO);
         win_ = SDL_CreateWindow("Zotero for Kindle (desktop)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                 kW / kScale, kH / kScale, 0);
@@ -33,7 +37,9 @@ public:
     }
 
     int kW, kH;
+    const int kScale;  // desktop window: half size, but a small screen at full size
     std::string deviceName() const override { return metrics().device; }  // the Kindle imitated
+    int ppi() const override { return metrics().ppi; }
     // Turning swaps the window's sides, as the Kindle's window manager does.
     void setOrientation(Orientation o) override {
         if (o == orientation_) return;
