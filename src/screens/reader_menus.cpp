@@ -9,6 +9,7 @@
 #include "screens/book_search.h"
 #include "screens/contents.h"
 #include "screens/reader.h"
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -20,7 +21,8 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
 const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
@@ -32,34 +34,34 @@ constexpr double kMinSize = 7, kMaxSize = 16, kSizeStep = 0.5;
 
 }  // namespace
 
-Rect ReaderMenus::topBarRect() { return {0, 0, kW, kTopH}; }
-Rect ReaderMenus::panelRect() { return {0, kH - kPanelH, kW, kPanelH}; }
+Rect ReaderMenus::topBarRect() { return {0, 0, W(), kTopH}; }
+Rect ReaderMenus::panelRect() { return {0, H() - kPanelH, W(), kPanelH}; }
 Rect ReaderMenus::backRect() { return {0, 0, 320, kTopH}; }
-Rect ReaderMenus::searchRect() { return {kW - kMargin - 190, 30, 80, 80}; }
-Rect ReaderMenus::contentsIconRect() { return {kW - kMargin - 90, 30, 90, 80}; }
-Rect ReaderMenus::sliderRect() { return {kMargin, kH - kPanelH + 100, kW - 2 * kMargin, 70}; }
+Rect ReaderMenus::searchRect() { return {W() - kMargin - 190, 30, 80, 80}; }
+Rect ReaderMenus::contentsIconRect() { return {W() - kMargin - 90, 30, 90, 80}; }
+Rect ReaderMenus::sliderRect() { return {kMargin, H() - kPanelH + 100, W() - 2 * kMargin, 70}; }
 Rect ReaderMenus::buttonRect(int i) {
-    const int w = (kW - 2 * kMargin) / 5;
-    return {kMargin + i * w, kH - kPanelH + 210, w - 12, 120};
+    const int w = (W() - 2 * kMargin) / 5;
+    return {kMargin + i * w, H() - kPanelH + 210, w - 12, 120};
 }
-Rect ReaderMenus::lightPanelRect() { return {0, kH - kPanelH - kLightH, kW, kLightH}; }
-Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, kH - kPanelH - kLightH + 50, kW - 2 * kMargin - 240, 70}; }
+Rect ReaderMenus::lightPanelRect() { return {0, H() - kPanelH - kLightH, W(), kLightH}; }
+Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, H() - kPanelH - kLightH + 50, W() - 2 * kMargin - 240, 70}; }
 
-Rect ReaderMenus::displayPanelRect() { return {0, kH - kPanelH - kDisplayH, kW, kDisplayH}; }
+Rect ReaderMenus::displayPanelRect() { return {0, H() - kPanelH - kDisplayH, W(), kDisplayH}; }
 Rect ReaderMenus::fontRect(int i) {
-    const int w = (kW - 2 * kMargin - 110) / 4;
-    return {kMargin + i * w, kH - kPanelH - kDisplayH + 24, w - 12, 90};
+    const int w = (W() - 2 * kMargin - 110) / 4;
+    return {kMargin + i * w, H() - kPanelH - kDisplayH + 24, w - 12, 90};
 }
-Rect ReaderMenus::fontMoreRect() { return {kW - kMargin - 100, kH - kPanelH - kDisplayH + 24, 100, 90}; }
-Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, kH - kPanelH - kDisplayH + 134, 160, 90}; }
-Rect ReaderMenus::sizePlusRect() { return {kW - kMargin - 160, kH - kPanelH - kDisplayH + 134, 160, 90}; }
+Rect ReaderMenus::fontMoreRect() { return {W() - kMargin - 100, H() - kPanelH - kDisplayH + 24, 100, 90}; }
+Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, H() - kPanelH - kDisplayH + 134, 160, 90}; }
+Rect ReaderMenus::sizePlusRect() { return {W() - kMargin - 160, H() - kPanelH - kDisplayH + 134, 160, 90}; }
 Rect ReaderMenus::marginRect(int i) {
-    const int w = (kW - 2 * kMargin - 240) / 3;
-    return {kMargin + 240 + i * w, kH - kPanelH - kDisplayH + 244, w - 12, 90};
+    const int w = (W() - 2 * kMargin - 240) / 3;
+    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
 }
 Rect ReaderMenus::spacingRect(int i) {
-    const int w = (kW - 2 * kMargin - 240) / 3;
-    return {kMargin + 240 + i * w, kH - kPanelH - kDisplayH + 354, w - 12, 90};
+    const int w = (W() - 2 * kMargin - 240) / 3;
+    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 354, w - 12, 90};
 }
 
 bool ReaderMenus::showsTextOptions() const { return reader_.type() != DocType::Pdf; }
@@ -96,7 +98,7 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
 void ReaderMenus::drawDisplay(cairo_t* cr) {
     const Rect d = displayPanelRect();
     fillRect(cr, d, 255);
-    hRule(cr, d.y, 0, kW, 190);
+    hRule(cr, d.y, 0, W(), 190);
     const Layout l = reader_.layout();
     const TextStyle label{kSans, 8, 500};
     if (showsTextOptions()) {
@@ -239,7 +241,7 @@ void ReaderMenus::draw(Canvas& canvas) {
     // Top bar.
     const Rect top = topBarRect();
     fillRect(cr, top, 255);
-    hRule(cr, top.y + top.h - 2, 0, kW, 190);
+    hRule(cr, top.y + top.h - 2, 0, W(), 190);
     gray(cr, kInk);
     cairo_set_line_width(cr, 6);
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
@@ -249,7 +251,7 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_stroke(cr);
     centredText(cr, "Library", {kSans, 8.5, 500}, {kMargin + 44, 30, 220, 90}, Align::Left);
     centredText(cr, reader_.row().title.empty() ? "Untitled" : reader_.row().title, {kSerif, 9, 700},
-                {320, 30, kW - 320 - 260, 90});
+                {320, 30, W() - 320 - 260, 90});
     const Rect sr = searchRect();
     searchIcon(cr, sr.x + sr.w / 2.0 - 4, sr.y + sr.h / 2.0 - 4, kInk);
     const Rect ci = contentsIconRect();
@@ -259,7 +261,7 @@ void ReaderMenus::draw(Canvas& canvas) {
     if (lightOpen_) {
         const Rect lp = lightPanelRect();
         fillRect(cr, lp, 255);
-        hRule(cr, lp.y, 0, kW, 190);
+        hRule(cr, lp.y, 0, W(), 190);
         centredText(cr, "Light", {kSans, 8, 500}, {kMargin, lp.y + 40, 110, 90}, Align::Left);
         const Rect ls = lightSliderRect();
         const double f = light_ < 0 ? 0 : static_cast<double>(light_) / kMaxLight;
@@ -273,13 +275,13 @@ void ReaderMenus::draw(Canvas& canvas) {
     // Bottom panel.
     const Rect p = panelRect();
     fillRect(cr, p, 255);
-    hRule(cr, p.y, 0, kW, 190);
+    hRule(cr, p.y, 0, W(), 190);
     const int shown = dragPage_ ? *dragPage_ : reader_.page();
     const std::string where = reader_.type() == DocType::Pdf
                                   ? "Page " + std::to_string(shown + 1) + " of " + std::to_string(reader_.pageCount())
                                   : "Page " + std::to_string(shown + 1) + " of " + std::to_string(reader_.pageCount());
-    drawText(cr, reader_.chapter(), {kSans, 8, 500}, {kMargin, p.y + 28, kW - 2 * kMargin - 380, 50}, 1);
-    drawText(cr, where, {kSans, 7.5, 400, false, kSecondary}, {kW - kMargin - 380, p.y + 30, 380, 50}, 1, Align::Right);
+    drawText(cr, reader_.chapter(), {kSans, 8, 500}, {kMargin, p.y + 28, W() - 2 * kMargin - 380, 50}, 1);
+    drawText(cr, where, {kSans, 7.5, 400, false, kSecondary}, {W() - kMargin - 380, p.y + 30, 380, 50}, 1, Align::Right);
     const Rect s = sliderRect();
     const double f = reader_.pageCount() > 1 ? static_cast<double>(shown) / (reader_.pageCount() - 1) : 0;
     progressBar(cr, {s.x, s.y + s.h / 2 - 6, s.w, 12}, f);

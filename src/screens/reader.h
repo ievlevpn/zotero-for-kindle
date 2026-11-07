@@ -42,7 +42,7 @@ public:
     bool showsTabBar() const override { return false; }
     bool wantsKeyboard() const override;
 
-    static Rect pageArea();    // 1236 × 1487 from the top
+    static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
     static Rect footerArea();  // the 60 px below it
 
     int page() const { return page_; }

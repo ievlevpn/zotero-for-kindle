@@ -1,5 +1,8 @@
 #include "screens/annotation_bar.h"
 
+#include "platform/device_profile.h"
+#include "ui/metrics.h"
+
 #include <algorithm>
 
 #include "docs/document.h"
@@ -97,7 +100,12 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
 AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor)
     : annotation_(std::move(a)), bar_(AnnotationBar::Mode::Edit, anchor, annotation_.color) {}
 
-Rect AnnotationEditor::commentRect() { return {40, 690, 1236 - 80, 260}; }
+// Just above the device's keyboard (on the PW5: {40, 690, 1156, 260}).
+Rect AnnotationEditor::commentRect() {
+    const int keyboard = profileFor(metrics().device, 300).keyboardHeightPx;
+    const int top = keyboard > 0 ? metrics().height - keyboard : metrics().height / 2;
+    return {40, top - 290, metrics().width - 80, 260};
+}
 
 Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentRect() : bar_.rect(); }
 
