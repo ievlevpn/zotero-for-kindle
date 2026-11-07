@@ -88,6 +88,15 @@ sync_lib = static_library('zk-sync',
   dependencies : [zotero_dep, miniz_dep, md5_dep])
 sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep])
 
+# Device services shared by the app and its tests: lipc, keep-awake, storage watch, paths.
+services_lib = static_library('zk-services',
+  'src/platform/power.cpp',
+  'src/app/paths.cpp',
+  backend == 'kindle' ? 'src/platform/kindle/kindle_lipc.cpp' : 'src/platform/desktop/null_lipc.cpp',
+  include_directories : inc,
+  dependencies : [core_dep])
+services_dep = declare_dependency(link_with : services_lib, dependencies : [core_dep])
+
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 
