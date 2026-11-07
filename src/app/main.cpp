@@ -3,17 +3,20 @@
 //   zotero --screenshot home OUT.png [--db PATH]   render a screen to a PNG and exit
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "app/app.h"
 #include "docs/fonts.h"
 #include "app/paths.h"
 #include "app/lifecycle.h"
 #include "app/settings_store.h"
+#include "app/stall_watchdog.h"
 #include "app/startup.h"
 #include "core/log.h"
 #include "net/errors.h"
@@ -246,8 +249,23 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
+    // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
+    // Kindle home). Stays on through shutdown, which must not hang either.
+    StallWatchdog watchdog(15'000, [](int64_t ms, const std::string& doing) {
+        log(LogLevel::Error, "UI stuck for %lld ms (%s): exiting", static_cast<long long>(ms), doing.c_str());
+        std::_Exit(3);
+    });
+    app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    if (std::getenv("ZK_DEBUG_STALL")) {  // proves the escape path on the device: freeze the UI on purpose
+        const int64_t at = app.nowMs() + 5000;
+        app.setWatchdog([at, &app] {
+            if (app.nowMs() >= at) std::this_thread::sleep_for(std::chrono::seconds(60));
+            return true;
+        }, 1000);
+    }
     const int rc = app.run();
+    watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     if (service) service->stop();
     keyboard->hide();

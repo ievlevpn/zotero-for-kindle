@@ -157,7 +157,7 @@ screens_lib = static_library('zk-screens',
 screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
 
 app_lib = static_library('zk-app',
-  'src/app/app.cpp',
+  'src/app/stall_watchdog.cpp', 'src/app/app.cpp',
   'src/app/startup.cpp',
   'src/app/lifecycle.cpp',
   include_directories : ui_incs,
