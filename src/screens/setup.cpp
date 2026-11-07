@@ -19,7 +19,7 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kFieldsY = 300, kFieldStep = 145;
-const char* kLabels[SetupScreen::kFields] = {"Zotero user ID", "API key", "WebDAV URL (optional)", "WebDAV user",
+const char* kLabels[SetupScreen::kFields] = {"Zotero user ID", "API key", "WebDAV URL (empty: Zotero storage)", "WebDAV user",
                                              "WebDAV password"};
 
 }  // namespace
@@ -39,6 +39,10 @@ UserError checkAccount(Http& http, const Config& c) {
     if (!c.webdavUrl.empty()) {
         WebDav dav(http, c.webdavUrl, c.webdavUser, c.webdavPassword);
         if (!dav.check(&err)) return err;
+    } else if (!key->canReadFiles) {  // books come from Zotero storage
+        return {ErrorKind::ApiKeyRejected,
+                "This API key can't download files. Allow file access for it at zotero.org/settings/keys, or set up WebDAV.",
+                "access.user.files false"};
     }
     return {};
 }

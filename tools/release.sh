@@ -28,7 +28,7 @@ sys.exit(0 if v(sys.argv[2]) > v(sys.argv[1]) else 1)
 PY
 
 sed -i '' "s/^  version : '$CURRENT',$/  version : '$VERSION',/" meson.build
-restore() { [ "$DRY" = 1 ] && git checkout -q meson.build; }
+restore() { if [ "$DRY" = 1 ]; then git checkout -q meson.build; fi; }  # (an exit trap's status is the script's)
 trap restore EXIT
 tools/build-kindle.sh
 tools/package.sh

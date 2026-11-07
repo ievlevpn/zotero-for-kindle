@@ -1,5 +1,5 @@
 project('zotero-kindle', 'c', 'cpp',
-  version : '0.2.0',
+  version : '0.2.1',
   license : 'AGPL-3.0-or-later',
   default_options : ['cpp_std=c++20', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -94,7 +94,7 @@ services_dep = declare_dependency(link_with : services_lib, dependencies : [core
 
 sync_lib = static_library('zk-sync',
   'src/sync/sync_engine.cpp',
-  'src/sync/webdav.cpp',
+  'src/sync/webdav.cpp', 'src/sync/zotero_storage.cpp',
   'src/sync/config.cpp',
   'src/sync/sync_service.cpp',
   'third_party/pugixml/pugixml.cpp',

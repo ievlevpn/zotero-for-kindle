@@ -113,6 +113,7 @@ std::optional<KeyInfo> ZoteroApi::keyInfo(UserError* err) {
     const json user = j.contains("access") && j["access"].is_object() ? j["access"].value("user", json::object()) : json::object();
     info.canRead = user.is_object() && user.value("library", false);
     info.canWrite = user.is_object() && user.value("write", false);
+    info.canReadFiles = user.is_object() && user.value("files", false);
     return info;
 }
 

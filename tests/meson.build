@@ -34,6 +34,7 @@ test_sources = files(
   'test_update_install.cpp',
   'test_launcher.cpp',
   'test_update_screen.cpp',
+  'test_zotero_storage.cpp',
   'test_layout_scribe.cpp',
   'test_keyboard_bounds.cpp',
   'test_review_fixes6.cpp',

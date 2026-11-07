@@ -36,7 +36,8 @@ Open the Kindle library and tap **Zotero**. It has a Zotero cover. The first scr
 - **Zotero user ID and API key.** Create a key at [zotero.org/settings/keys](https://www.zotero.org/settings/keys)
   with *Allow library access* and *Allow write access*. Write access lets highlights made on the Kindle go back to
   Zotero. Your user ID is shown at the top of that page ("Your user ID for use in API calls is …").
-- **WebDAV URL, user and password.** These are the same as in Zotero desktop, under *Settings → Sync → File Syncing*.
+- **WebDAV URL, user and password**, only if Zotero desktop syncs your files with WebDAV (*Settings → Sync → File
+  Syncing*), copied from there. With Zotero storage, the default, leave these empty.
   The address can be entered either with or without the trailing `zotero/`.
 
 Tap **Connect**. The first sync of a big library takes a few minutes.
@@ -44,6 +45,8 @@ Tap **Connect**. The first sync of a big library takes a few minutes.
 ### Or put the account in a file
 
 To avoid typing on the Kindle, save this as `zotero/config.json` on the Kindle before step 3:
+
+Leave out the three `webdav` lines if you use Zotero storage.
 
 ```json
 {

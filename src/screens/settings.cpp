@@ -82,7 +82,7 @@ void SettingsScreen::draw(Canvas& canvas) {
     hRule(cr, kWebDavY - 30, kMargin, W() - kMargin);
 
     drawText(cr, "WebDAV", label, {kMargin, kWebDavY, w, 50}, 1);
-    drawText(cr, config_.webdavUrl.empty() ? "Not set" : hostOf(config_.webdavUrl), value, {kMargin, kWebDavY + 54, w, 50}, 1);
+    drawText(cr, config_.webdavUrl.empty() ? "Not used: files come from Zotero storage" : hostOf(config_.webdavUrl), value, {kMargin, kWebDavY + 54, w, 50}, 1);
     hRule(cr, kIntervalY - 30, kMargin, W() - kMargin);
 
     drawText(cr, "Sync every", label, {kMargin, kIntervalY, w, 50}, 1);

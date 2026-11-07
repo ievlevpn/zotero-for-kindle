@@ -20,6 +20,7 @@ namespace zk {
 struct KeyInfo {
     int64_t userId = 0;
     bool canRead = false, canWrite = false;
+    bool canReadFiles = false;  // Zotero storage downloads
 };
 
 struct VersionMap {

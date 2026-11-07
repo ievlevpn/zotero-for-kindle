@@ -98,7 +98,7 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     // Redirects only for reads, only to https: a write approved by the WriteGuard for one URL
     // must not land somewhere else, and the API key header must not leak over plain http.
     const bool read = req.method == "GET" || req.method == "HEAD";
-    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, read ? 1L : 0L);
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, read && req.followRedirects ? 1L : 0L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(h, CURLOPT_REDIR_PROTOCOLS_STR, "https");
     curl_easy_setopt(h, CURLOPT_ACCEPT_ENCODING, "");
