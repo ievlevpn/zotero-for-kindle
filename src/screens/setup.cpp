@@ -3,6 +3,7 @@
 #include <thread>
 
 #include "sync/webdav.h"
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -15,7 +16,8 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kFieldsY = 300, kFieldStep = 145;
 const char* kLabels[SetupScreen::kFields] = {"Zotero user ID", "API key", "WebDAV URL (optional)", "WebDAV user",
                                              "WebDAV password"};
@@ -52,8 +54,8 @@ SetupScreen::SetupScreen(Config initial, bool imported, std::string configDir, C
     fields_[4].setText(initial.webdavPassword);
 }
 
-Rect SetupScreen::fieldRect(int i) { return {kMargin, kFieldsY + i * kFieldStep + 44, kW - 2 * kMargin, 88}; }
-Rect SetupScreen::connectRect() { return {kMargin, kFieldsY + kFields * kFieldStep + 20, kW - 2 * kMargin, 100}; }
+Rect SetupScreen::fieldRect(int i) { return {kMargin, kFieldsY + i * kFieldStep + 44, W() - 2 * kMargin, 88}; }
+Rect SetupScreen::connectRect() { return {kMargin, kFieldsY + kFields * kFieldStep + 20, W() - 2 * kMargin, 100}; }
 
 Config SetupScreen::config() const {
     Config c;
@@ -121,11 +123,11 @@ void SetupScreen::onTick(Nav& nav) {
 
 void SetupScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, 1547}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "Set up Zotero", canGoBack_);
     const std::string intro = imported_ ? "Settings loaded from config.json. Connect to check them."
                                         : "Create an API key at zotero.org/settings/keys with access to your library.";
-    drawText(cr, intro, {kSans, 8, 400, false, kSecondary}, {kMargin, kHeaderH + 10, kW - 2 * kMargin, 120}, 3);
+    drawText(cr, intro, {kSans, 8, 400, false, kSecondary}, {kMargin, kHeaderH + 10, W() - 2 * kMargin, 120}, 3);
     for (int i = 0; i < kFields; ++i) {
         const Rect f = fieldRect(i);
         drawText(cr, kLabels[i], {kSans, 7, 500, false, kSecondary}, {f.x, f.y - 42, f.w, 40}, 1);
@@ -137,7 +139,7 @@ void SetupScreen::draw(Canvas& canvas) {
         centredText(cr, v, {kSans, 8.5, 400}, {f.x + 28, f.y, f.w - 56, f.h}, Align::Left);
     }
     drawButton(cr, connectRect(), checking_ ? "Checking…" : "Connect", true);
-    if (error_) drawBanner(cr, {0, connectRect().y + connectRect().h + 30, kW, 150}, *error_);
+    if (error_) drawBanner(cr, {0, connectRect().y + connectRect().h + 30, W(), 150}, *error_);
 }
 
 void SetupScreen::onGesture(const Gesture& g, Nav& nav) {

@@ -1,7 +1,10 @@
 #include "screens/home.h"
 
+#include <algorithm>
+
 #include <ctime>
 
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -13,7 +16,8 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kCardY = 292, kCoverW = 290, kCoverH = 400;
 constexpr int kRecentLabelY = kCardY + kCoverH + 80;
 constexpr int kRowsY = kRecentLabelY + 56;
@@ -43,18 +47,18 @@ std::string openedAgo(int64_t openedMs, int64_t nowMs) {
 HomeScreen::HomeScreen(SyncStatus& status, HomeActions actions, std::function<int64_t()> wallMs)
     : status_(status), actions_(std::move(actions)), wallMs_(std::move(wallMs)) {}
 
-Rect HomeScreen::syncIndicatorRect() { return {kW - kMargin - 80, 34, 80, 96}; }
-Rect HomeScreen::settingsRect() { return {kW - kMargin - 180, 34, 80, 96}; }
-Rect HomeScreen::searchFieldRect() { return {kMargin, 150, kW - 2 * kMargin, 92}; }
-Rect HomeScreen::cardRect() { return {kMargin, kCardY, kW - 2 * kMargin, kCoverH}; }
+Rect HomeScreen::syncIndicatorRect() { return {W() - kMargin - 80, 34, 80, 96}; }
+Rect HomeScreen::settingsRect() { return {W() - kMargin - 180, 34, 80, 96}; }
+Rect HomeScreen::searchFieldRect() { return {kMargin, 150, W() - 2 * kMargin, 92}; }
+Rect HomeScreen::cardRect() { return {kMargin, kCardY, W() - 2 * kMargin, kCoverH}; }
 
-Rect HomeScreen::bannerRect() const { return {0, kH - kTabBarH - kBannerH, kW, kBannerH}; }
+Rect HomeScreen::bannerRect() const { return {0, H() - kTabBarH - kBannerH, W(), kBannerH}; }
 
 std::vector<Rect> HomeScreen::recentRowRects() const {
     std::vector<Rect> rows;
-    const int bottom = status_.hasError() ? bannerRect().y : kH - kTabBarH;
+    const int bottom = status_.hasError() ? bannerRect().y : H() - kTabBarH;
     for (int i = 0, y = kRowsY; i < static_cast<int>(recent_.size()) && y + kRowH <= bottom; ++i, y += kRowH)
-        rows.push_back({kMargin, y, kW - 2 * kMargin, kRowH});
+        rows.push_back({kMargin, y, W() - 2 * kMargin, kRowH});
     return rows;
 }
 
@@ -79,7 +83,9 @@ void HomeScreen::reload(Library& lib) {
             }
     }
     if (card_ && !card_->attachmentKey.empty()) cardHighlights_ = lib.annotationsFor(card_->attachmentKey).size();
-    // Recent: the books read last (after the one in the card), then the newest items if fewer.
+    // Recent: the books read last (after the one in the card), then the newest items if fewer —
+    // as many as fit under the card (3 on the PW5).
+    const size_t fit = static_cast<size_t>(std::max(1, (H() - kTabBarH - kRowsY) / kRowH));
     recent_.clear();
     auto seen = [&](const std::string& key) {
         if (card_ && card_->key == key) return true;
@@ -87,13 +93,13 @@ void HomeScreen::reload(Library& lib) {
             if (r.key == key) return true;
         return false;
     };
-    for (auto& r : lib.recentlyOpened(4))
-        if (recent_.size() < 3 && !seen(r.key)) recent_.push_back(std::move(r));
-    if (recent_.size() < 3) {
+    for (auto& r : lib.recentlyOpened(static_cast<int>(fit) + 1))
+        if (recent_.size() < fit && !seen(r.key)) recent_.push_back(std::move(r));
+    if (recent_.size() < fit) {
         ListQuery newest;
-        newest.limit = 6;
+        newest.limit = static_cast<int>(2 * fit);
         for (auto& r : lib.rows(newest))
-            if (recent_.size() < 3 && !seen(r.key)) recent_.push_back(std::move(r));
+            if (recent_.size() < fit && !seen(r.key)) recent_.push_back(std::move(r));
     }
 }
 
@@ -114,8 +120,8 @@ std::string HomeScreen::cardMeta() const {
 
 void HomeScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    const int contentW = kW - 2 * kMargin;
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    const int contentW = W() - 2 * kMargin;
+    fillRect(cr, {0, 0, W(), H()}, 255);
 
     // Header: title, status line, settings, sync.
     drawText(cr, "Zotero", {kSans, 17, 700}, {kMargin, 18, contentW - 200, 100}, 1);
@@ -146,7 +152,7 @@ void HomeScreen::draw(Canvas& canvas) {
         // Continue reading (or, before anything was opened, the newest readable item).
         const Rect cover{kMargin, kCardY, kCoverW, kCoverH};
         generatedCover(cr, cover, card_->title.empty() ? "Untitled" : card_->title, authorsOf(card_->byline), true);
-        const int colX = cover.x + cover.w + 48, colW = kW - kMargin - colX;
+        const int colX = cover.x + cover.w + 48, colW = W() - kMargin - colX;
         drawText(cr, cardOpened_ ? "CONTINUE READING" : "START READING", {kSans, 7, 700, false, kSecondary},
                  {colX, kCardY + 6, colW, 50}, 1);
         const Rect bar{colX, kCardY + kCoverH - 92, colW, 10};
@@ -160,7 +166,7 @@ void HomeScreen::draw(Canvas& canvas) {
         drawText(cr, cardMeta(), {kSans, 7, 400, false, kSecondary}, {colX, kCardY + kCoverH - 64, colW, 70}, 2);
     }
     if (total_ > 0) {
-        hRule(cr, kCardY + kCoverH + 44, 0, kW);
+        hRule(cr, kCardY + kCoverH + 44, 0, W());
         drawText(cr, "RECENT", {kSans, 7, 700, false, kSecondary}, {kMargin, kRecentLabelY, contentW, 50}, 1);
         auto rects = recentRowRects();
         for (size_t i = 0; i < rects.size(); ++i)
@@ -198,10 +204,10 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     switch (e.kind) {
         case SyncEvent::Kind::SyncStarted:
         case SyncEvent::Kind::SyncProgress:
-            nav.damage({0, 0, kW, kHeaderH}, Waveform::Ui);
+            nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
             if (total_ == 0) {
                 reload(nav.library());  // the first items may have arrived
-                nav.damage({0, kCardY, kW, kH - kCardY - kTabBarH}, total_ ? Waveform::Quality : Waveform::Ui);
+                nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, total_ ? Waveform::Quality : Waveform::Ui);
             }
             break;
         case SyncEvent::Kind::SyncFinished:
@@ -217,13 +223,13 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         case SyncEvent::Kind::DownloadFinished:
         case SyncEvent::Kind::AnnotationsReady:
             reload(nav.library());
-            nav.damage({0, kCardY, kW, kH - kCardY - kTabBarH}, Waveform::Quality);
+            nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
             break;
         case SyncEvent::Kind::PushStarted:  // "Uploading 3 changes…", then the header as before
-            nav.damage({0, 0, kW, kHeaderH}, Waveform::Ui);
+            nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
             break;
         case SyncEvent::Kind::PushFinished:
-            nav.damage({0, 0, kW, kHeaderH}, Waveform::Quality);
+            nav.damage({0, 0, W(), kHeaderH}, Waveform::Quality);
             break;
         default: break;
     }

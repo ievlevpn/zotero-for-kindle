@@ -2,7 +2,9 @@
 // A Nav for screen tests: records damages, pushes and pops; owns a FakeSync and a keyboard.
 
 #include "fake_sync.h"
+#include "platform/device_profile.h"
 #include "platform/keyboard.h"
+#include "ui/metrics.h"
 #include "screens/screen.h"
 
 #include <memory>
@@ -15,7 +17,12 @@ class FakeKeyboard : public Keyboard {
 public:
     void show() override { shown = true; ++shows; }
     void hide() override { shown = false; ++hides; }
-    Rect bounds() const override { return shown ? Rect{0, 980, 1236, 567} : Rect{}; }
+    // The device's keyboard at the bottom of the window (the PW5's: {0, 980, 1236, 567}).
+    Rect bounds() const override {
+        if (!shown) return {};
+        const int h = profileFor(metrics().device, 300).keyboardHeightPx;
+        return {0, metrics().height - h, metrics().width, h};
+    }
     bool shown = false;
     int shows = 0, hides = 0;
 };

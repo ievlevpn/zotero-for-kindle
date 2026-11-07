@@ -13,11 +13,11 @@ struct Metrics {
     int width = 1236, height = 1547;
     Point origin{0, 101};
     int ppi = 300;
-    std::string device = "PW5";
+    std::string device = "PaperWhite 5";  // FBInk's name
     Rect window() const { return {0, 0, width, height}; }
 };
 
-inline const Metrics kPw5{1236, 1547, {0, 101}, 300, "PW5"};
+inline const Metrics kPw5{1236, 1547, {0, 101}, 300, "PaperWhite 5"};
 inline const Metrics kScribe{1860, 2379, {0, 101}, 300, "Scribe"};
 
 const Metrics& metrics();

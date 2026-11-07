@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -13,7 +14,8 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kTopH = 420;  // header + cover block
 
 std::string sizeText(uintmax_t bytes) {
@@ -25,7 +27,7 @@ std::string sizeText(uintmax_t bytes) {
 
 BookScreen::BookScreen(ItemRow row) : row_(std::move(row)) {}
 
-Rect BookScreen::listArea() const { return {0, kTopH, kW, kH - kTabBarH - kTopH}; }
+Rect BookScreen::listArea() const { return {0, kTopH, W(), H() - kTabBarH - kTopH}; }
 
 void BookScreen::load(Library& lib) {
     all_ = lib.annotationsFor(row_.attachmentKey);
@@ -51,38 +53,38 @@ void BookScreen::onShow(Nav& nav) { load(nav.library()); }
 
 void BookScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "", true);
     const Rect cover{kMargin, 110, 210, 290};
     const size_t dot = row_.byline.find(" · ");
     generatedCover(cr, cover, row_.title.empty() ? "Untitled" : row_.title,
                    dot == std::string::npos ? row_.byline : row_.byline.substr(0, dot), true);
-    const int x = cover.x + cover.w + 40, w = kW - kMargin - x;
+    const int x = cover.x + cover.w + 40, w = W() - kMargin - x;
     TextResult t = drawText(cr, row_.title.empty() ? "Untitled" : row_.title, {kSerif, 12, 700}, {x, 116, w, 150}, 3);
     drawText(cr, row_.byline, {kSans, 8, 400, false, kSecondary}, {x, 116 + t.height + 12, w, 50}, 1);
     drawText(cr, fileLine_, {kSans, 7, 400, false, kTertiary}, {x, 116 + t.height + 62, w, 46}, 1);
-    hRule(cr, kTopH - 12, 0, kW);
+    hRule(cr, kTopH - 12, 0, W());
 
     const Rect area = listArea();
     if (loading_) {
-        drawText(cr, "Loading highlights…", {kSerif, 10, 400, false, kSecondary}, {kMargin, area.y + 120, kW - 2 * kMargin, 80},
+        drawText(cr, "Loading highlights…", {kSerif, 10, 400, false, kSecondary}, {kMargin, area.y + 120, W() - 2 * kMargin, 80},
                  1, Align::Center);
         return;
     }
     if (error_ && all_.empty()) {
-        drawBanner(cr, {0, area.y + 40, kW, 150}, UserError{error_->kind, "Couldn't load the highlights: " + error_->message,
+        drawBanner(cr, {0, area.y + 40, W(), 150}, UserError{error_->kind, "Couldn't load the highlights: " + error_->message,
                                                               error_->details});
         return;
     }
     if (all_.empty()) {
         drawText(cr, "No highlights in this book yet.", {kSerif, 10, 400, false, kSecondary},
-                 {kMargin, area.y + 120, kW - 2 * kMargin, 80}, 1, Align::Center);
+                 {kMargin, area.y + 120, W() - 2 * kMargin, 80}, 1, Align::Center);
         return;
     }
     for (int i = 0; i < pager_.perPage() && pager_.offset() + i < static_cast<int64_t>(all_.size()); ++i)
-        drawNoteRow(cr, {kMargin, area.y + i * kNoteRowH, kW - 2 * kMargin, kNoteRowH},
+        drawNoteRow(cr, {kMargin, area.y + i * kNoteRowH, W() - 2 * kMargin, kNoteRowH},
                     all_[static_cast<size_t>(pager_.offset() + i)]);
-    drawPageIndicator(cr, {0, area.y + area.h - kPageIndicatorH, kW, kPageIndicatorH}, pager_.page(), pager_.pages());
+    drawPageIndicator(cr, {0, area.y + area.h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
 }
 
 void BookScreen::onGesture(const Gesture& g, Nav& nav) {

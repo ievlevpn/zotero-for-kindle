@@ -1,5 +1,6 @@
 #include "screens/library.h"
 
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -11,7 +12,8 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kChipsH = 80, kChipsGap = 10;
 const SortBy kSorts[] = {SortBy::Recent, SortBy::Title, SortBy::Author, SortBy::Year};
 
@@ -32,13 +34,13 @@ LibraryScreen::LibraryScreen(std::function<void(const ItemRow&)> openItem, Statu
     list_.setStatusFn(std::move(status));
 }
 
-Rect LibraryScreen::chipsArea() { return {kMargin, kHeaderH, kW - 2 * kMargin, kChipsH}; }
+Rect LibraryScreen::chipsArea() { return {kMargin, kHeaderH, W() - 2 * kMargin, kChipsH}; }
 Rect LibraryScreen::listArea() {
     const int y = kHeaderH + kChipsH + kChipsGap;  // 6 rows + page indicator fit below
-    return {0, y, kW, kH - kTabBarH - y};
+    return {0, y, W(), H() - kTabBarH - y};
 }
-Rect LibraryScreen::sortButtonRect() { return {kW - kMargin - 260, 40, 260, 80}; }
-Rect LibraryScreen::menuRect() const { return {kW - kMargin - 360, 124, 360, 4 * 100}; }
+Rect LibraryScreen::sortButtonRect() { return {W() - kMargin - 260, 40, 260, 80}; }
+Rect LibraryScreen::menuRect() const { return {W() - kMargin - 360, 124, 360, 4 * 100}; }
 
 std::vector<std::string> LibraryScreen::chipLabels() const {
     std::vector<std::string> labels = {"All", "EPUB", "PDF", "Unread"};
@@ -78,12 +80,12 @@ void LibraryScreen::selectSort(SortBy s, Nav& nav) {
 void LibraryScreen::selectChip(int index, Nav& nav) {
     chip_ = index;
     apply(nav);
-    nav.damage({0, kHeaderH, kW, kH - kTabBarH - kHeaderH}, Waveform::Quality);
+    nav.damage({0, kHeaderH, W(), H() - kTabBarH - kHeaderH}, Waveform::Quality);
 }
 
 void LibraryScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "Library", false);
     const Rect sort = sortButtonRect();
     drawText(cr, std::string(sortLabel(query_.sort)) + " ▾", {kSans, 8.5, 500, false, kSecondary},
@@ -91,7 +93,7 @@ void LibraryScreen::draw(Canvas& canvas) {
     drawChips(cr, chipsArea(), chipLabels(), chip_);
     list_.draw(cr, listArea());
     if (list_.rows().empty())
-        drawText(cr, "Nothing here yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, listArea().y + 200, kW - 2 * kMargin, 100},
+        drawText(cr, "Nothing here yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, listArea().y + 200, W() - 2 * kMargin, 100},
                  1, Align::Center);
     if (menuOpen_) {
         const Rect m = menuRect();

@@ -42,7 +42,7 @@ private:
     std::string searched_;
     bool pending_ = false;
     int64_t lastKeyMs_ = 0;
-    int bottom_ = 1547;  // above the keyboard
+    int bottom_;  // above the keyboard (the window's bottom without one)
 };
 
 }  // namespace zk

@@ -28,6 +28,7 @@ test_sources = files(
   'test_stall_watchdog.cpp',
   'test_device_requests.cpp',
   'test_metrics.cpp',
+  'test_layout_scribe.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',
