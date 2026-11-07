@@ -9,6 +9,7 @@
 #include "screens/book_notes.h"
 #include "screens/book_search.h"
 #include "screens/contents.h"
+#include "screens/goto_page.h"
 #include "screens/reader.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -218,7 +219,16 @@ void ReaderMenus::setLight(int x, Nav& nav) {
 
 void ReaderMenus::openContents(Nav& nav) {
     ReaderScreen* r = &reader_;
-    nav.push(std::make_unique<ContentsScreen>(reader_.toc(), reader_.page(), [r](const TocEntry& t) { r->jumpTo(t.pos); }));
+    auto contents = std::make_unique<ContentsScreen>(reader_.toc(), reader_.page(), [r](const TocEntry& t) { r->jumpTo(t.pos); });
+    contents->setBookmarks(reader_.bookmarks());
+    contents->setGoTo([r](Nav& n) {
+        Nav* outer = &n;
+        n.push(std::make_unique<GoToPageScreen>(r->pageCount(), r->page(), [r, outer](int page) {
+            outer->pop();  // Contents too: straight back to the book, at the page
+            r->goToPage(page);
+        }));
+    });
+    nav.push(std::move(contents));
 }
 
 void ReaderMenus::openNotes(Nav& nav) {

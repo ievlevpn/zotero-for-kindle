@@ -56,6 +56,17 @@ public:
     static Rect positionGoRect();
     static Rect positionStayRect();
 
+    // Back after a jump (Contents, search, Notes, Go to, the slider, Zotero's position): the
+    // footer offers "‹ Back to page 12" until a few pages are read at the new place.
+    std::optional<std::string> backLabel() const;
+    static Rect backRect();
+    // Bookmarks (on this Kindle only): the page's top-right corner sets or removes one.
+    static Rect bookmarkRect();
+    bool bookmarked() const;
+    std::vector<TocEntry> bookmarks() const;  // by page, for Contents
+    void goToPage(int page);                  // Go to… (a jump)
+    bool turning() const { return turning_; }
+
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
     static Rect footerArea();  // the 60 px below it
 
@@ -167,6 +178,19 @@ private:
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
+    void markJumpOrigin();  // before a jump: where Back returns to
+    void back(Nav&);
+    void toggleBookmark(Nav&);
+    void sendBookmarks();
+    struct BackEntry {
+        DocPosition pos;
+        int page = 0;
+    };
+    std::vector<BackEntry> back_;
+    int turnsSinceJump_ = 0;
+    static constexpr int kBackTurns = 3;  // pages read at the new place before Back goes
+    std::vector<Bookmark> marks_;
+    std::vector<int> markPages_;  // the page of each of marks_ (from the worker)
     void answerPosition(bool go, Nav&);
     uint64_t placeId_ = 0;  // where Zotero's newer position falls (a Placed event)
     std::string placeAfterFirstPage_;  // Zotero's newer position, asked about once the book shows a page

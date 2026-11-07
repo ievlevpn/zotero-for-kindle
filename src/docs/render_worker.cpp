@@ -62,6 +62,7 @@ struct RenderWorker::Impl {
     };
     std::optional<PointRequest> selectRequest, hitRequest;
     std::optional<std::pair<uint64_t, std::string>> placeRequest;
+    std::optional<std::vector<DocPosition>> bookmarkRequest;
     uint64_t nextPointId = 1;
     struct InkRequest {
         uint64_t id = 0;
@@ -74,6 +75,12 @@ struct RenderWorker::Impl {
     // Worker-only state.
     std::unique_ptr<DocumentEngine> engine;
     std::vector<AnnotationRecord> anns;
+    std::vector<DocPosition> bookmarks;
+    std::vector<int> bookmarkPages;  // of `bookmarks`, in the current layout
+    void placeBookmarks() {
+        bookmarkPages.clear();
+        for (const auto& b : bookmarks) bookmarkPages.push_back(b.value.empty() ? -1 : engine->pageOf(b));
+    }
     std::vector<TocEntry> toc;
     std::map<int, Entry> cache;
     std::map<int, int64_t> wordsOnPage;
@@ -88,7 +95,7 @@ struct RenderWorker::Impl {
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
         return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
-               hitRequest || placeRequest || !inkRequests.empty();
+               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest;
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
@@ -131,6 +138,7 @@ struct RenderWorker::Impl {
         ev.wordsLeftInChapter = wordsLeft(page);
         ev.position = engine->positionOfPage(page);
         ev.zoteroPosition = engine->zoteroPosition(page);
+        ev.bookmarkPages = bookmarkPages;
         return ev;
     }
     void relaid(int page) {
@@ -140,6 +148,7 @@ struct RenderWorker::Impl {
         std::sort(toc.begin(), toc.end(), [](const TocEntry& a, const TocEntry& b) { return a.page < b.page; });
         pageCount = engine->pageCount();
         current = std::clamp(page, 0, std::max(0, pageCount - 1));
+        placeBookmarks();  // pages move with the layout
         RenderEvent ev;
         ev.kind = RenderEvent::Kind::Opened;
         ev.page = current;
@@ -171,7 +180,7 @@ void RenderWorker::Impl::run() {
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
-                           selectRequest || hitRequest || placeRequest || !inkRequests.empty();
+                           selectRequest || hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest;
                 });
             if (stop) break;
         }
@@ -199,6 +208,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<std::vector<AnnotationRecord>> a;
     std::optional<PointRequest> sel, hit;
     std::optional<std::pair<uint64_t, std::string>> place;
+    std::optional<std::vector<DocPosition>> marks;
     std::deque<InkRequest> inks;
     uint64_t gen = 0;
     {
@@ -219,6 +229,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         hitRequest.reset();
         place = std::move(placeRequest);
         placeRequest.reset();
+        marks = std::move(bookmarkRequest);
+        bookmarkRequest.reset();
         inks.swap(inkRequests);
         gen = generation;
     }
@@ -248,6 +260,11 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         postCurrent = true;
     }
     if (!engine) return;
+    if (marks) {
+        bookmarks = std::move(*marks);
+        placeBookmarks();
+        postCurrent = true;
+    }
     // Ink first: its device points belong to the layout they were drawn on.
     for (auto& k : inks) {
         RenderEvent ev;
@@ -410,6 +427,10 @@ void RenderWorker::showAnnotation(AnnotationRecord a) {
         impl_->target = {Impl::Target::Kind::Annotation, 0, {}, std::move(a)};
         ++impl_->generation;
     });
+}
+
+void RenderWorker::setBookmarks(std::vector<DocPosition> marks) {
+    request(*impl_, [&] { impl_->bookmarkRequest = std::move(marks); });
 }
 
 uint64_t RenderWorker::placeZotero(std::string json) {

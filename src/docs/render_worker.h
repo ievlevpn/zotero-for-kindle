@@ -34,6 +34,7 @@ struct RenderEvent {
     std::optional<InkPlacement> ink;     // Ink (nullopt: the format has no ink)
     UserError error;                 // Error
     DocPosition position;            // of this page
+    std::vector<int> bookmarkPages;  // Page: the page of each bookmark given to setBookmarks (-1: nowhere)
     std::string zoteroPosition;      // Page: this page in Zotero's terms (lastPageIndex), "" if none
                                      // Placed: page (-1 if it can't be placed), chapter, progress
 };
@@ -61,6 +62,8 @@ public:
     uint64_t annotationAt(int page, Point p);
     // Where a Zotero position (lastPageIndex) falls: a Placed event with this request id.
     uint64_t placeZotero(std::string json);
+    // The book's bookmarks: each Page event says which page each one is on (the page is posted again).
+    void setBookmarks(std::vector<DocPosition>);
     // Handwriting on `page` placed for Zotero; every request is answered, in order.
     uint64_t ink(int page, std::vector<std::vector<Point>> paths, int widthPx);
     bool poll(RenderEvent&);  // UI thread, non-blocking

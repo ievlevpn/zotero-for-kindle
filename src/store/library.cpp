@@ -933,6 +933,39 @@ std::vector<ReadingPosition> Library::dirtyPositions() {
     });
 }
 
+std::vector<Bookmark> Library::bookmarks(const std::string& key) {
+    std::vector<Bookmark> out;
+    const auto j = json::parse(metaValue("bookmarks:" + key), nullptr, false);
+    if (!j.is_array()) return out;
+    for (const auto& b : j)
+        if (b.is_object() && b.contains("pos") && b["pos"].is_string())
+            out.push_back({b["pos"].get<std::string>(), b.value("chapter", ""), b.value("ms", int64_t{0})});
+    return out;
+}
+
+namespace {
+std::string bookmarksJson(const std::vector<Bookmark>& marks) {
+    json j = json::array();
+    for (const auto& b : marks) j.push_back({{"pos", b.position}, {"chapter", b.chapter}, {"ms", b.createdMs}});
+    return j.dump();
+}
+}  // namespace
+
+void Library::addBookmark(const std::string& key, const Bookmark& b) {
+    auto marks = bookmarks(key);
+    for (const auto& m : marks)
+        if (m.position == b.position) return;
+    marks.push_back(b);
+    setMetaValue("bookmarks:" + key, bookmarksJson(marks));
+}
+
+void Library::removeBookmark(const std::string& key, const std::string& position) {
+    auto marks = bookmarks(key);
+    marks.erase(std::remove_if(marks.begin(), marks.end(), [&](const Bookmark& m) { return m.position == position; }),
+                marks.end());
+    setMetaValue("bookmarks:" + key, bookmarksJson(marks));
+}
+
 int64_t Library::settingsVersion() {
     const std::string v = metaValue("settings.version");
     return v.empty() ? 0 : std::stoll(v);

@@ -287,6 +287,8 @@ void ReaderScreen::onShow(Nav& nav) {
     }
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start, zoteroStart);
+    marks_ = nav.library().bookmarks(row_.attachmentKey);
+    sendBookmarks();
     if (openAt_) {
         turning_ = true;
         worker_->showAnnotation(*openAt_);
@@ -377,6 +379,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 turning_ = false;
                 layoutPending_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
+                markPages_ = e.bookmarkPages;
                 // On Zotero's page, Zotero's exact place (not this page's start) stays the Kindle's.
                 if (!e.zoteroPosition.empty())
                     nav.library().setLocalPosition(row_.attachmentKey,
@@ -407,6 +410,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     commitInk();
     const int target = page_ + delta;
     if (target < 0 || (pageCount_ > 0 && target >= pageCount_)) return;
+    if (!back_.empty() && ++turnsSinceJump_ >= kBackTurns) back_.clear();  // read on: no way back
     // Reading on answers Zotero's position: the Kindle's place it is.
     // (Also while Zotero's position is still being placed, or can't be.)
     if (question_) {
@@ -423,6 +427,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
 
 void ReaderScreen::turnTo(int page) {
     if (!worker_ || layoutPending_) return;
+    markJumpOrigin();
     commitInk();
     turning_ = true;
     worker_->show(page);
@@ -431,6 +436,7 @@ void ReaderScreen::turnTo(int page) {
 void ReaderScreen::jumpTo(const DocPosition& pos) {
     menus_.reset();  // we're not visible (a pushed screen called us); the next Page repaints all
     if (!worker_) return;
+    markJumpOrigin();
     commitInk();
     turning_ = true;
     worker_->showPosition(pos);
@@ -442,6 +448,7 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
         openAt_ = a;  // opening from Notes: the worker starts in onShow
         return;
     }
+    markJumpOrigin();
     commitInk();
     turning_ = true;
     worker_->showAnnotation(a);
@@ -495,6 +502,11 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (menus_) {
         menus_->onGesture(g, nav);
         return;
+    }
+    if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
+        if (backLabel() && backRect().contains(g.pos)) return back(nav);
+        if (bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)))
+            return toggleBookmark(nav);
     }
     if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()
         if (positionGoRect().contains(g.pos)) return answerPosition(true, nav);
@@ -782,7 +794,24 @@ void ReaderScreen::draw(Canvas& canvas) {
     }
     if (selection_) drawSelection(canvas, selection_->rects);
     const Rect f = footerArea();
-    drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, W() - 2 * kMargin - 260, 40}, 1);
+    if (auto b = backLabel())  // after a jump: the way back, where the chapter line was
+        drawText(cr, *b, {kSans, 7, 700}, {kMargin, f.y + 10, W() - 2 * kMargin - 260, 44}, 1);
+    else
+        drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, W() - 2 * kMargin - 260, 40}, 1);
+    if (bookmarked()) {  // a ribbon hanging from the top-right corner
+        const double x = W() - 110, w = 54, h = 110;
+        cairo_move_to(cr, x, 0);
+        cairo_line_to(cr, x + w, 0);
+        cairo_line_to(cr, x + w, h);
+        cairo_line_to(cr, x + w / 2, h - 22);
+        cairo_line_to(cr, x, h);
+        cairo_close_path(cr);
+        gray(cr, kInk);
+        cairo_fill_preserve(cr);
+        cairo_set_line_width(cr, 3);  // a white edge: it shows on dark scans too
+        gray(cr, 255);
+        cairo_stroke(cr);
+    }
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {W() - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
     if (bar_) bar_->draw(cr);
     if (editor_) editor_->draw(cr);
@@ -817,6 +846,72 @@ void ReaderScreen::draw(Canvas& canvas) {
     if (menus_) menus_->draw(canvas);
 }
 
+// --- Getting around: Back, bookmarks, Go to ---------------------------------------------------
+
+void ReaderScreen::markJumpOrigin() {
+    turnsSinceJump_ = 0;
+    if (page_ < 0 || position_.value.empty()) return;
+    if (!back_.empty() && back_.back().page == page_) return;
+    back_.push_back({position_, page_});
+}
+
+std::optional<std::string> ReaderScreen::backLabel() const {
+    if (back_.empty()) return std::nullopt;
+    return "‹ Back to page " + std::to_string(back_.back().page + 1);
+}
+
+Rect ReaderScreen::backRect() { return {0, H() - kFooterH, W() / 2, kFooterH}; }
+
+void ReaderScreen::back(Nav& nav) {
+    const BackEntry to = back_.back();
+    back_.pop_back();
+    turnsSinceJump_ = 0;
+    commitInk();
+    turning_ = true;
+    worker_->showPosition(to.pos);
+    nav.damage(footerArea(), Waveform::Ui);
+}
+
+Rect ReaderScreen::bookmarkRect() { return {W() - 150, 0, 150, 160}; }
+
+bool ReaderScreen::bookmarked() const {
+    return std::find(markPages_.begin(), markPages_.end(), page_) != markPages_.end() && page_ >= 0;
+}
+
+std::vector<TocEntry> ReaderScreen::bookmarks() const {
+    std::vector<TocEntry> out;
+    for (size_t i = 0; i < marks_.size() && i < markPages_.size(); ++i) {
+        if (markPages_[i] < 0) continue;
+        // The page number shows beside it, as in the chapter list.
+        out.push_back({marks_[i].chapter.empty() ? "Bookmark" : marks_[i].chapter, 0, {marks_[i].position}, markPages_[i]});
+    }
+    std::stable_sort(out.begin(), out.end(), [](const TocEntry& a, const TocEntry& b) { return a.page < b.page; });
+    return out;
+}
+
+void ReaderScreen::sendBookmarks() {
+    if (!worker_) return;
+    std::vector<DocPosition> positions;
+    for (const auto& m : marks_) positions.push_back({m.position});
+    worker_->setBookmarks(std::move(positions));
+}
+
+void ReaderScreen::toggleBookmark(Nav& nav) {
+    if (bookmarked()) {
+        for (size_t i = 0; i < marks_.size() && i < markPages_.size(); ++i)
+            if (markPages_[i] == page_) nav.library().removeBookmark(row_.attachmentKey, marks_[i].position);
+    } else {
+        nav.library().addBookmark(row_.attachmentKey, {position_.value, chapter_, nav.nowMs()});
+    }
+    marks_ = nav.library().bookmarks(row_.attachmentKey);
+    sendBookmarks();  // the page comes again, with or without its ribbon
+}
+
+void ReaderScreen::goToPage(int page) {
+    menus_.reset();
+    turnTo(page);
+}
+
 std::optional<std::string> ReaderScreen::positionQuestion() const {
     if (!question_) return std::nullopt;
     return question_->text;
@@ -836,6 +931,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (!question_) return;
     nav.library().answerRemotePosition(row_.attachmentKey, go, remoteVersion_);
     if (go && worker_) {
+        markJumpOrigin();
         turning_ = true;
         worker_->show(question_->page);
     }

@@ -64,6 +64,13 @@ struct ReadingPosition {
     std::string lastSent;       // the Kindle's last upload (its echo is not news, even if its answer was lost)
 };
 
+// A bookmark, kept on this Kindle only: the engine's own position of the page start.
+struct Bookmark {
+    std::string position;  // DocPosition::value
+    std::string chapter;   // when it was set (for the list)
+    int64_t createdMs = 0;
+};
+
 struct CollectionEntry {
     CollectionRecord collection;
     int64_t items = 0;
@@ -195,6 +202,10 @@ public:
     void answerRemotePosition(const std::string& attachmentKey, bool go, int64_t version);
     std::vector<ReadingPosition> dirtyPositions();
     int64_t settingsVersion();  // library version the settings pull reached
+    // Bookmarks of a file, oldest first (on this Kindle only; Zotero has none).
+    std::vector<Bookmark> bookmarks(const std::string& attachmentKey);
+    void addBookmark(const std::string& attachmentKey, const Bookmark&);
+    void removeBookmark(const std::string& attachmentKey, const std::string& position);
     void setSettingsVersion(int64_t);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
