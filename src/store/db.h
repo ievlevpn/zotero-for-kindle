@@ -33,6 +33,7 @@ public:
     Stmt& bind(int index, const std::string& v);  // 1-based, like SQLite
     Stmt& bind(int index, int64_t v);
     Stmt& bindNull(int index);
+    Stmt& bindReal(int index, double v);
     bool step();  // true while a row is available; throws on error
     void reset();
 

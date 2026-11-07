@@ -23,6 +23,16 @@ App::App(Display& display, Library& lib, SyncControl& sync, Keyboard& keyboard, 
     : display_(display), lib_(lib), sync_(&sync), keyboard_(keyboard), clock_(clock ? std::move(clock) : steadyMs),
       canvas_(display.width(), display.height()) {}
 
+App::~App() { closeAll(); }
+
+void App::closeAll() {
+    while (!graveyard_.empty()) graveyard_.pop_back();
+    for (int t = 0; t < kTabs; ++t) {
+        const int tab = (tab_ + t) % kTabs;  // the visible tab first
+        while (!stacks_[tab].empty()) stacks_[tab].pop_back();
+    }
+}
+
 void App::setRoot(int tab, std::unique_ptr<Screen> s) {
     stacks_[tab].clear();
     stacks_[tab].push_back(std::move(s));
@@ -63,6 +73,7 @@ void App::showTop() {
 }
 
 void App::replaceRoot(int tab, std::unique_ptr<Screen> s) {
+    for (auto& old : stacks_[tab]) graveyard_.push_back(std::move(old));
     stacks_[tab].clear();
     stacks_[tab].push_back(std::move(s));
     tab_ = tab;
@@ -76,6 +87,7 @@ void App::push(std::unique_ptr<Screen> s) {
 
 void App::pop() {
     if (stacks_[tab_].size() <= 1) return;
+    graveyard_.push_back(std::move(stacks_[tab_].back()));
     stacks_[tab_].pop_back();
     showTop();
 }
@@ -85,7 +97,10 @@ void App::switchTab(int index) {
     if (index == tab_) {
         // Tapping the current tab goes back to its root.
         if (stacks_[tab_].size() > 1) {
-            stacks_[tab_].resize(1);
+            while (stacks_[tab_].size() > 1) {
+                graveyard_.push_back(std::move(stacks_[tab_].back()));
+                stacks_[tab_].pop_back();
+            }
             showTop();
         }
         return;
@@ -209,6 +224,7 @@ void App::step(int timeout_ms) {
     deferred_.clear();
     for (auto& f : deferred) guard(f);
     flush();
+    while (!graveyard_.empty()) graveyard_.pop_back();  // newest (topmost) first
 }
 
 void App::flush() {
@@ -239,7 +255,7 @@ void App::flush() {
 }
 
 int App::run() {
-    while (!quit_ && !closed_) step(50);
+    while (!quit_ && !closed_ && visibleTop()) step(50);
     return 0;
 }
 

@@ -138,3 +138,30 @@ TEST_CASE("app shell: a long press on the header quits") {
     rig.display.closed = true;
     CHECK(rig.app.run() == 0);
 }
+
+TEST_CASE("app shell: a screen that pops itself can still use its members afterwards") {
+    Rig rig;
+    struct SelfPopper : Screen {
+        std::string* out;
+        std::string payload = "still here";
+        explicit SelfPopper(std::string* o) : out(o) {}
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture& g, Nav& nav) override {
+            if (g.type != GestureType::Tap) return;
+            nav.pop();
+            *out = payload;  // a member read after pop(): must still be alive until the step ends
+        }
+    };
+    std::string seen;
+    rig.app.push(std::make_unique<SelfPopper>(&seen));
+    rig.display.tap({600, 600}, rig.now);
+    rig.run(3);
+    CHECK(seen == "still here");
+}
+
+TEST_CASE("app shell: closeAll destroys every screen (before the process waits for render workers)") {
+    Rig rig;
+    rig.app.closeAll();
+    rig.display.closed = true;
+    CHECK(rig.app.run() == 0);  // nothing left to show, no crash
+}

@@ -18,3 +18,15 @@ None of these come from Pavel's Zotero library.
 
 Licences: Standard Ebooks productions are CC0; Project Gutenberg texts are public domain in the US
 (the Gutenberg licence text inside each file applies to redistribution with the trademark).
+
+## CFI reference data (`tests/data/cfi/*.zotero.json`)
+
+For each book above: test ranges selected and annotated by Zotero 11.0's own reader (run headless
+in spike S1, `spikes/s1-cfi/harness`): Zotero's `cfi`, `sortIndex` and the selected `text`. No
+Zotero library was involved; the books are public domain.
+
+## Generated fixtures
+
+`no-toc.epub` (two spine items, no NCX/nav), `drm.epub` (META-INF/encryption.xml with AES on a
+content file) and `broken.epub` (the first third of waste-land-poetry.epub) are made by the
+project for error-handling tests.

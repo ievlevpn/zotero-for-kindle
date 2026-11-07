@@ -36,6 +36,12 @@ Stmt& Stmt::bind(int index, int64_t v) {
     return *this;
 }
 
+Stmt& Stmt::bindReal(int index, double v) {
+    int rc = sqlite3_bind_double(st_, index, v);
+    if (rc != SQLITE_OK) fail(db_, rc, "bind");
+    return *this;
+}
+
 Stmt& Stmt::bindNull(int index) {
     int rc = sqlite3_bind_null(st_, index);
     if (rc != SQLITE_OK) fail(db_, rc, "bind");

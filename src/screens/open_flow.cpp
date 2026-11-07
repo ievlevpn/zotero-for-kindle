@@ -11,6 +11,11 @@ std::string OpenFlow::statusFor(const std::string& key) const {
 
 void OpenFlow::openNow(const ItemRow& row, Nav& nav) {
     nav.library().markOpened(row.key, row.attachmentKey, wallMs_());
+    if (readerFactory_)
+        if (auto reader = readerFactory_(row, nav)) {
+            nav.push(std::move(reader));
+            return;
+        }
     nav.push(std::make_unique<BookScreen>(row));
 }
 

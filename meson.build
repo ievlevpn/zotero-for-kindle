@@ -118,10 +118,18 @@ ui_lib = static_library('zk-ui',
   'src/ui/widgets.cpp',
   'src/ui/pager.cpp',
   'src/ui/text_field.cpp',
+  'src/docs/fonts.cpp',
   include_directories : ui_incs,
   dependencies : [core_dep, cairo_dep, pango_deps])
 
 ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps])
+
+fs = import('fs')
+cxx = meson.get_compiler('cpp')
+deps_prefix = meson.project_source_root() / 'build-deps' / backend / 'prefix'
+docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp', 'src/docs/render_worker.cpp',
+  include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
+docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, dependency('threads'), cxx.find_library('dl', required : false)])
 
 screens_lib = static_library('zk-screens',
   'src/screens/home.cpp',
@@ -135,11 +143,16 @@ screens_lib = static_library('zk-screens',
   'src/screens/notes.cpp',
   'src/screens/setup.cpp',
   'src/screens/settings.cpp',
+  'src/screens/reader.cpp',
+  'src/screens/reader_menus.cpp',
+  'src/screens/contents.cpp',
+  'src/screens/book_notes.cpp',
+  'src/screens/book_search.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
-  dependencies : [ui_dep, store_dep, sync_dep])
+  dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
 
-screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep])
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
 
 app_lib = static_library('zk-app',
   'src/app/app.cpp',
@@ -162,6 +175,74 @@ else
     'src/platform/desktop/sdl_keyboard.cpp',
     include_directories : ui_incs, dependencies : [ui_dep, services_dep, dependency('sdl2')])
   platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('sdl2')])
+endif
+
+# ---- Readers (Plan 4): each engine is a shared module loaded at runtime ---------------------
+# crengine and MuPDF bring their own static freetype/harfbuzz; inside a module linked
+# -Bsymbolic with a version script exporting only the factory, they never meet the firmware's
+# copies that pango uses (spike README). The app links neither engine.
+module_link_args = []
+if host_machine.system() == 'darwin'
+  module_link_args += ['-Wl,-exported_symbol,_zk_*_engine_create']
+else
+  module_link_args += ['-Wl,-Bsymbolic', '-Wl,--version-script=' + meson.project_source_root() / 'src/docs/zk-engine.map']
+endif
+
+if fs.exists(deps_prefix / 'lib' / 'libcrengine.a')
+  cre_libs = [
+    cxx.find_library('crengine', dirs : deps_prefix / 'lib', static : true),
+    cxx.find_library('unibreak', dirs : deps_prefix / 'lib', static : true),
+  ]
+  cre_link_args = []
+  if backend == 'kindle'
+    foreach l : ['harfbuzz', 'freetype', 'fribidi', 'utf8proc', 'zstd', 'png16', 'jpeg', 'xxhash', 'z']
+      cre_libs += cxx.find_library(l, dirs : deps_prefix / 'lib', static : true)
+    endforeach
+    cre_link_args = ['-lpthread', '-ldl']
+  else
+    foreach p : ['freetype2', 'harfbuzz', 'fribidi', 'libutf8proc', 'libzstd', 'libpng', 'libjpeg', 'zlib', 'libxxhash']
+      cre_libs += dependency(p)
+    endforeach
+  endif
+  engine_crengine_dep = declare_dependency(
+    include_directories : include_directories(
+      'build-deps' / backend / 'prefix/include',
+      'build-deps' / backend / 'prefix/include/crengine',
+      'build-deps' / backend / 'prefix/include/harfbuzz',
+      'build-deps' / backend / 'prefix/include/freetype2', is_system : true),
+    dependencies : cre_libs,
+    link_args : cre_link_args)
+  shared_module('zk-epub',
+    'src/docs/epub/epub_module.cpp',
+    'src/docs/epub/epub_engine.cpp',
+    'src/docs/epub/cfi.cpp',
+    'third_party/pugixml/pugixml.cpp',
+    'src/docs/shade.cpp',
+    name_prefix : 'lib', name_suffix : 'so',
+    include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
+    cpp_args : ['-fvisibility=hidden'],
+    dependencies : [engine_crengine_dep],
+    link_args : module_link_args,
+    install : true, install_dir : 'lib')
+endif
+
+if fs.exists(deps_prefix / 'lib' / 'libmupdf.a')
+  mupdf_libs = [cxx.find_library('mupdf', dirs : deps_prefix / 'lib', static : true),
+                cxx.find_library('mupdf-third', dirs : deps_prefix / 'lib', static : true)]
+  if backend == 'desktop'
+    mupdf_libs += dependency('zlib')  # MuPDF built with the system zlib on macOS
+  endif
+  shared_module('zk-pdf',
+    'src/docs/pdf/pdf_module.cpp',
+    'src/docs/pdf/pdf_engine.cpp',
+    'src/docs/shade.cpp',
+    name_prefix : 'lib', name_suffix : 'so',
+    include_directories : [inc, include_directories('third_party', is_system : true),
+                           include_directories('build-deps' / backend / 'prefix/include', is_system : true)],
+    cpp_args : ['-fvisibility=hidden'],
+    dependencies : mupdf_libs,
+    link_args : module_link_args + (backend == 'kindle' ? ['-lm', '-lpthread'] : []),
+    install : true, install_dir : 'lib')
 endif
 
 executable('zotero', 'src/app/main.cpp',

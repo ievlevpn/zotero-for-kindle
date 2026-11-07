@@ -18,7 +18,10 @@ public:
     void open(const ItemRow&, Nav&);
     void onSyncEvent(const SyncEvent&, Nav&);  // from App::setEventHook
     std::string statusFor(const std::string& attachmentKey) const;
-    void reset() { pending_.clear(); }  // a new sync service: forget downloads the old one had
+    void reset() { pending_.clear(); }
+    // Opens a downloaded book in the reader; returns nullptr when it can't (then the Book screen).
+    using ReaderFactory = std::function<std::unique_ptr<Screen>(const ItemRow&, Nav&)>;
+    void setReaderFactory(ReaderFactory f) { readerFactory_ = std::move(f); }  // a new sync service: forget downloads the old one had
     StatusFn statusFn() const {
         return [this](const std::string& k) { return statusFor(k); };
     }
@@ -33,6 +36,7 @@ private:
     void openNow(const ItemRow&, Nav&);
 
     std::function<int64_t()> wallMs_;
+    ReaderFactory readerFactory_;
     std::map<std::string, Pending> pending_;  // by attachment key
 };
 

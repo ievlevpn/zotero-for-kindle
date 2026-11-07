@@ -1,5 +1,6 @@
 #include "screens/settings.h"
 
+#include <algorithm>
 #include <filesystem>
 
 #include "app/settings_store.h"
@@ -20,7 +21,8 @@ const int kIntervals[] = {0, 5, 10, 30};
 const char* kIntervalLabels[] = {"Off", "5 min", "10 min", "30 min"};
 
 // Section rows, top to bottom.
-constexpr int kAccountY = 170, kWebDavY = 320, kIntervalY = 470, kHighlightsY = 640, kStorageY = 850, kAboutY = 1080;
+constexpr int kAccountY = 170, kWebDavY = 320, kIntervalY = 470, kHighlightsY = 640, kStorageY = 850, kFlashY = 1080,
+              kAboutY = 1230;
 
 std::string mb(int64_t bytes) {
     if (bytes < 1024 * 1024) return std::to_string((bytes + 1023) / 1024) + " KB";
@@ -35,10 +37,13 @@ SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount
 Rect SettingsScreen::accountRect() const { return {kW - kMargin - 240, kAccountY + 20, 240, 80}; }
 Rect SettingsScreen::intervalRect(int i) const { return {kMargin + i * 279, kIntervalY + 60, 259, 80}; }
 Rect SettingsScreen::toggleRect() const { return {kW - kMargin - 140, kHighlightsY, 140, 80}; }
+Rect SettingsScreen::flashMinusRect() const { return {kW - kMargin - 460, kFlashY + 10, 120, 80}; }
+Rect SettingsScreen::flashPlusRect() const { return {kW - kMargin - 120, kFlashY + 10, 120, 80}; }
 Rect SettingsScreen::removeRect() const { return {kMargin, kStorageY + 80, kW - 2 * kMargin, 92}; }
 
 void SettingsScreen::load(Library& lib) {
     interval_ = loadSettings(lib).syncIntervalMinutes;
+    flashEvery_ = loadSettings(lib).flashEvery;
     allOffline_ = lib.allAnnotationsOffline();
     downloadedBytes_ = 0;
     for (const auto& a : lib.downloadedAttachments()) {
@@ -92,6 +97,13 @@ void SettingsScreen::draw(Canvas& canvas) {
     drawButton(cr, removeRect(), confirmRemove_ ? "Tap again to remove them" : "Remove downloaded files", false);
     hRule(cr, kAboutY - 30, kMargin, kW - kMargin);
 
+    drawText(cr, "Full refresh every", label, {kMargin, kFlashY + 24, w - 420, 50}, 1);
+    drawButton(cr, flashMinusRect(), "−", false);
+    drawButton(cr, flashPlusRect(), "+", false);
+    centredText(cr, std::to_string(flashEvery_) + (flashEvery_ == 1 ? " page" : " pages"), {kSans, 8, 400},
+                {flashMinusRect().x + 120, kFlashY + 10, flashPlusRect().x - flashMinusRect().x - 120, 80});
+    hRule(cr, kAboutY - 30, kMargin, kW - kMargin);
+
     drawText(cr, "About", label, {kMargin, kAboutY, w, 50}, 1);
     drawText(cr, "Zotero for Kindle 0.3 · open source (AGPL-3.0)", value, {kMargin, kAboutY + 54, w, 50}, 1);
 }
@@ -116,6 +128,14 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
             nav.damage({0, kIntervalY, kW, 160}, Waveform::Fast);
             return;
         }
+    if (flashMinusRect().contains(g.pos) || flashPlusRect().contains(g.pos)) {
+        AppSettings st = loadSettings(nav.library());
+        st.flashEvery = std::clamp(st.flashEvery + (flashPlusRect().contains(g.pos) ? 1 : -1), 1, 12);
+        saveSettings(nav.library(), st);
+        flashEvery_ = st.flashEvery;
+        nav.damage({0, kFlashY, kW, 120}, Waveform::Fast);
+        return;
+    }
     if (toggleRect().contains(g.pos)) {
         allOffline_ = !allOffline_;
         nav.sync().setAllHighlightsOffline(allOffline_);

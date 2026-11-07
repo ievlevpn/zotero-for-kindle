@@ -17,6 +17,8 @@ public:
     static constexpr int kFlashEvery = 6;  // every 6th full-screen change is a Full refresh
 
     App(Display&, Library&, SyncControl&, Keyboard&, std::function<int64_t()> clock = {});
+    ~App();  // screens are destroyed top first (a pushed screen may refer to the one under it)
+    void closeAll();  // the same, now: main closes the readers before waiting for their workers
 
     void setRoot(int tab, std::unique_ptr<Screen>);
     void start();               // shows tab 0 with a Full refresh
@@ -76,6 +78,8 @@ private:
     bool quit_ = false;
     std::function<void(const SyncEvent&, Nav&)> hook_;
     std::vector<std::function<void()>> deferred_;
+    // Screens removed during a step; destroyed after it, so a screen may pop itself and return.
+    std::vector<std::unique_ptr<Screen>> graveyard_;
     std::function<void(bool)> lifecycle_;
     std::function<bool()> watchdog_;
     int64_t watchdogPeriodMs_ = 0, lastWatchdogMs_ = 0;

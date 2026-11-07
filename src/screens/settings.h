@@ -22,12 +22,15 @@ public:
     Rect toggleRect() const;
     Rect removeRect() const;
     Rect accountRect() const;
+    Rect flashMinusRect() const;  // "Full refresh every N pages" (reader), 1–12
+    Rect flashPlusRect() const;
 
 private:
     void load(Library&);
     Config config_;
     std::function<void(Nav&)> changeAccount_;
     int interval_ = 10;
+    int flashEvery_ = 6;
     bool allOffline_ = false;
     bool confirmRemove_ = false;
     int64_t downloadedBytes_ = 0;

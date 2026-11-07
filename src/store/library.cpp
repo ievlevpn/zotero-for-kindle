@@ -831,6 +831,26 @@ std::optional<ReadingState> Library::lastOpened() {
     });
 }
 
+std::optional<ReadingState> Library::readingState(const std::string& itemKey) {
+    return guarded([&]() -> std::optional<ReadingState> {
+        Stmt st = db_.prepare("SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state WHERE itemKey = ?");
+        st.bind(1, itemKey);
+        if (!st.step()) return std::nullopt;
+        return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
+    });
+}
+
+void Library::saveReading(const std::string& itemKey, const std::string& location, double progress) {
+    guarded([&] {
+        Stmt st = db_.prepare(
+            "INSERT INTO reading_state (itemKey, location, progress) VALUES (?, ?, ?) ON CONFLICT(itemKey) DO UPDATE "
+            "SET location = excluded.location, progress = excluded.progress");
+        st.bind(1, itemKey).bind(2, location);
+        st.bindReal(3, progress);
+        st.step();
+    });
+}
+
 void Library::setFileState(const std::string& attachmentKey, AttachmentRecord::State state, const std::string& localPath) {
     guarded([&] {
         Stmt st = db_.prepare("UPDATE attachments SET state = ?, localPath = ? WHERE key = ?");

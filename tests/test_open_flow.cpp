@@ -188,3 +188,23 @@ TEST_CASE("book, notes and empty notes match the reviewed goldens") {
     none.draw(c);
     test::checkGolden(c, "tests/golden/notes-empty.png");
 }
+
+TEST_CASE("open flow: with a reader available, a downloaded book opens in it") {
+    Rig rig;
+    struct Marker : Screen {
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+    };
+    std::vector<std::string> made;
+    rig.flow.setReaderFactory([&](const ItemRow& r, Nav&) -> std::unique_ptr<Screen> {
+        made.push_back(r.key);
+        return std::make_unique<Marker>();
+    });
+    const ItemRow r = rig.row(3);
+    rig.lib.setFileState(r.attachmentKey, AttachmentRecord::State::Local, "/tmp/x.epub");
+    rig.screen->onShow(rig.nav);
+    rig.screen->onGesture(tapAt(rig.rowRect(3).center()), rig.nav);
+    REQUIRE(made.size() == 1);
+    REQUIRE(rig.nav.pushed.size() == 1);
+    CHECK(dynamic_cast<Marker*>(rig.nav.pushed[0].get()));
+}
