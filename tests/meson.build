@@ -33,6 +33,7 @@ test_sources = files(
   'test_review_fixes6.cpp',
   'test_item_icons.cpp',
   'test_landscape.cpp',
+  'test_reading_options.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',

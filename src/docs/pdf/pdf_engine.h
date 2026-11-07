@@ -5,6 +5,9 @@
 
 #include "docs/document.h"
 
+#include <array>
+#include <map>
+
 struct fz_context;
 struct fz_document;
 
@@ -33,12 +36,15 @@ private:
     std::string pageText(int page);
     // Page space -> device: scale and offset for fitting page `page` into the layout area.
     bool fit(int page, double& scale, double& dx, double& dy);
+    // The page's inked area (page space), for trimmed margins; measured once per page.
+    bool contentBox(int page, float box[4]);
 
     fz_context* ctx_ = nullptr;
     fz_document* doc_ = nullptr;
     Layout layout_;
     std::vector<TocEntry> toc_;
     bool tocLoaded_ = false;
+    std::map<int, std::array<float, 4>> contentBoxes_;
 };
 
 }  // namespace zk

@@ -96,7 +96,7 @@ void EpubEngine::applyLayout() {
     view_->setPageMargins(lvRect(layout_.marginPx, layout_.marginPx, layout_.marginPx, layout_.marginPx / 2));
     view_->setPageHeaderInfo(0);
     view_->setDefaultInterlineSpace(layout_.lineSpacingPct);
-    view_->setViewMode(DVM_PAGES, 1);
+    view_->setViewMode(DVM_PAGES, cols());  // two pages side by side in landscape
     view_->Resize(layout_.width, layout_.height);
 }
 
@@ -125,7 +125,7 @@ bool EpubEngine::open(const std::string& path, UserError* err) {
     applyLayout();
     if (!view_->LoadDocument(path.c_str()) || !view_->getDocument())
         return fail("This EPUB is damaged and can't be opened.", "crengine: LoadDocument failed");
-    view_->setViewMode(DVM_PAGES, 1);
+    view_->setViewMode(DVM_PAGES, cols());
     settle();
     if (view_->getPageCount() <= 0) return fail("This EPUB is damaged and can't be opened.", "no pages");
     dom_ = std::make_unique<EpubDom>(view_->getDocument(), path);
@@ -139,12 +139,12 @@ void EpubEngine::setLayout(const Layout& l) {
     if (view_) settle();
 }
 
-int EpubEngine::pageCount() { return view_ ? view_->getPageCount() : 0; }
+int EpubEngine::pageCount() { return view_ ? (view_->getPageCount() + cols() - 1) / cols() : 0; }
 
 PageImage EpubEngine::render(int page) {
     PageImage img;
     if (!view_) return img;
-    view_->goToPage(page);
+    view_->goToPage(crPage(page));
     LVGrayDrawBuf buf(layout_.width, layout_.height, 8);
     view_->Draw(buf, false);
     img.width = layout_.width;
@@ -157,7 +157,7 @@ PageImage EpubEngine::render(int page) {
 
 DocPosition EpubEngine::positionOfPage(int page) {
     if (!view_) return {};
-    ldomXPointer p = view_->getPageBookmark(page);
+    ldomXPointer p = view_->getPageBookmark(crPage(page));
     return p.isNull() ? DocPosition{} : DocPosition{utf8(p.toString())};
 }
 
@@ -165,7 +165,7 @@ int EpubEngine::pageOf(const DocPosition& pos) {
     if (!view_ || pos.value.empty()) return 0;
     ldomXPointer p = view_->getDocument()->createXPointer(Utf8ToUnicode(lString8(pos.value.c_str())));
     if (p.isNull()) return 0;
-    const int page = view_->getBookmarkPage(p);
+    const int page = spreadOf(view_->getBookmarkPage(p));
     return page < 0 ? 0 : page;
 }
 
@@ -180,7 +180,7 @@ std::vector<TocEntry> EpubEngine::toc() {
             LVTocItem* c = item->getChild(i);
             ldomXPointer xp = c->getXPointer();
             toc_.push_back({utf8(c->getName()), c->getLevel() - 1, {xp.isNull() ? std::string{} : utf8(xp.toString())},
-                            c->getPage()});
+                            spreadOf(c->getPage())});
             walk(c);
         }
     };
@@ -207,7 +207,7 @@ std::vector<SearchHit> EpubEngine::search(const std::string& query, int maxHits)
         ldomXPointer start = r->getStart();
         SearchHit h;
         h.pos = {utf8(start.toString())};
-        h.page = view_->getBookmarkPage(start);
+        h.page = spreadOf(view_->getBookmarkPage(start));
         // A snippet of about 40 characters either side, from the paragraph's text.
         const lString32 text = start.getNode() ? start.getNode()->getText() : lString32();
         const int at = start.getOffset();
@@ -233,13 +233,13 @@ int EpubEngine::pageOfAnnotation(const AnnotationRecord& a) {
     if (!view_ || !dom_) return -1;
     auto r = dom_->resolve(cfiOf(a));
     if (!r) return -1;
-    return view_->getBookmarkPage(r->start);
+    return spreadOf(view_->getBookmarkPage(r->start));
 }
 
 std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<AnnotationRecord>& anns) {
     std::vector<HighlightBox> out;
     if (!view_ || !dom_) return out;
-    view_->goToPage(page);
+    view_->goToPage(crPage(page));
     for (const auto& a : anns) {
         auto r = dom_->resolve(cfiOf(a));
         if (!r) continue;
@@ -259,7 +259,8 @@ std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<Ann
 
 int64_t EpubEngine::wordsBetween(int fromPage, int toPage) {
     if (!view_ || toPage <= fromPage) return 0;
-    ldomXPointer a = view_->getPageBookmark(fromPage), b = view_->getPageBookmark(std::min(toPage, pageCount() - 1));
+    ldomXPointer a = view_->getPageBookmark(crPage(fromPage)),
+                 b = view_->getPageBookmark(std::min(crPage(toPage), view_->getPageCount() - 1));
     if (a.isNull() || b.isNull()) return 0;
     const lString32 text = ldomXRange(a, b).getRangeText();
     int64_t words = 0;
@@ -306,7 +307,7 @@ ldomXPointer wordEnd(ldomXPointer p) {
 
 std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
     if (!view_ || !dom_ || page < 0 || page >= pageCount()) return std::nullopt;
-    view_->goToPage(page);
+    view_->goToPage(crPage(page));
     // The drag stays on this page: a finger over the footer means the page's last line.
     to.y = std::clamp(to.y, 0, layout_.height - layout_.marginPx / 2 - 1);
     // A press in a margin selects nothing (crengine would snap it to the nearest text).
@@ -325,11 +326,12 @@ std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
     ldomXPointerEx first(a), last(b);
     if (last.compare(first) < 0) std::swap(first, last);
     ldomXPointer start = wordStart(first), end = wordEnd(last);
-    LVRef<ldomXRange> pageRange = view_->getPageDocumentRange(page);
-    if (!pageRange.isNull()) {
-        if (ldomXPointerEx(start).compare(ldomXPointerEx(pageRange->getStart())) < 0) start = pageRange->getStart();
-        if (ldomXPointerEx(end).compare(ldomXPointerEx(pageRange->getEnd())) > 0) end = pageRange->getEnd();
-    }
+    // The spread's text: from its first page's start to its last page's end.
+    LVRef<ldomXRange> firstRange = view_->getPageDocumentRange(crPage(page));
+    LVRef<ldomXRange> lastRange = view_->getPageDocumentRange(std::min(crPage(page) + cols() - 1, view_->getPageCount() - 1));
+    if (!firstRange.isNull() && ldomXPointerEx(start).compare(ldomXPointerEx(firstRange->getStart())) < 0)
+        start = firstRange->getStart();
+    if (!lastRange.isNull() && ldomXPointerEx(end).compare(ldomXPointerEx(lastRange->getEnd())) > 0) end = lastRange->getEnd();
     if (ldomXPointerEx(end).compare(ldomXPointerEx(start)) <= 0) return std::nullopt;
 
     auto generated = dom_->generate(start, end);

@@ -43,11 +43,30 @@ struct SearchHit {
 struct Layout {
     std::string font = "Bookerly";
     double sizePt = 9;
-    int marginPx = 60;
+    int marginPx = 60;      // from marginLevel and the page width (marginPxFor), set by the reader
     int lineSpacingPct = 120;
     int width = 1236, height = 1547 - 60;  // the page area: set by the reader from the window
+    int marginLevel = 1;    // 0 Narrow, 1 Normal, 2 Wide, 3 Extra wide (EPUB)
+    bool trimMargins = false;  // PDF: crop the page's white border so the text is larger
+    int columns = 1;        // EPUB: 2 in landscape (pages are then spreads of two)
     bool operator==(const Layout&) const = default;
 };
+
+// Margins as a share of the page width, so they suit every screen: 40, 60, 100 px on the PW5
+// (as before), wider on the Scribe; and back from an old per-book pixel setting.
+inline int marginPxFor(int level, int pageWidth) {
+    static const double share[] = {0.0324, 0.0486, 0.081, 0.13};
+    const int i = level < 0 ? 0 : level > 3 ? 3 : level;
+    return static_cast<int>(pageWidth * share[i] + 0.5);
+}
+inline int marginLevelFor(int marginPx, int pageWidth) {
+    int best = 1, bestDiff = 1 << 30;
+    for (int i = 0; i < 4; ++i) {
+        const int d = marginPxFor(i, pageWidth) - marginPx;
+        if ((d < 0 ? -d : d) < bestDiff) bestDiff = d < 0 ? -d : d, best = i;
+    }
+    return best;
+}
 
 struct HighlightBox {
     std::string annotationKey;

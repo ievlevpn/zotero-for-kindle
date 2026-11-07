@@ -32,6 +32,10 @@ public:
 
 private:
     void applyLayout();
+    // With two columns our "page" is a spread of crengine's pages: first page of a spread, and back.
+    int cols() const { return layout_.columns > 1 ? 2 : 1; }
+    int crPage(int spread) const { return spread * cols(); }
+    int spreadOf(int crPage) const { return crPage < 0 ? crPage : crPage / cols(); }
     void settle();
 
     EngineEnv env_;

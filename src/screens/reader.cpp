@@ -26,22 +26,37 @@ constexpr int kWordsPerMinute = 250;
 
 std::string layoutKey(const std::string& itemKey) { return "layout:" + itemKey; }
 
-Layout loadLayout(Library& lib, const std::string& itemKey) {
-    Layout l;
-    l.width = ReaderScreen::pageArea().w;  // the page is the window above the footer
+// What follows from the window and the book: the page is the window above the footer; an EPUB
+// in landscape gets two columns; margins are a share of a column's width.
+void fitLayout(Layout& l, DocType type) {
+    l.width = ReaderScreen::pageArea().w;
     l.height = ReaderScreen::pageArea().h;
+    l.columns = type == DocType::Epub && l.width > l.height ? 2 : 1;
+    l.marginPx = marginPxFor(l.marginLevel, l.width / l.columns);
+}
+
+Layout loadLayout(Library& lib, const std::string& itemKey, DocType type) {
+    Layout l;
     auto j = nlohmann::json::parse(lib.metaValue(layoutKey(itemKey)), nullptr, false);
-    if (!j.is_object()) return l;
-    l.font = j.value("font", l.font);
-    l.sizePt = j.value("sizePt", l.sizePt);
-    l.marginPx = j.value("marginPx", l.marginPx);
-    l.lineSpacingPct = j.value("lineSpacingPct", l.lineSpacingPct);
+    if (j.is_object()) {
+        l.font = j.value("font", l.font);
+        l.sizePt = j.value("sizePt", l.sizePt);
+        l.lineSpacingPct = j.value("lineSpacingPct", l.lineSpacingPct);
+        if (j.contains("marginLevel") && j["marginLevel"].is_number_integer()) l.marginLevel = j["marginLevel"].get<int>();
+        else if (j.contains("marginPx") && j["marginPx"].is_number_integer())  // saved before margins were sizes
+            l.marginLevel = marginLevelFor(j["marginPx"].get<int>(), 1236);
+        l.trimMargins = j.value("trimMargins", false);
+    }
+    fitLayout(l, type);
     return l;
 }
 
 void saveLayout(Library& lib, const std::string& itemKey, const Layout& l) {
-    lib.setMetaValue(layoutKey(itemKey), nlohmann::json{{"font", l.font}, {"sizePt", l.sizePt}, {"marginPx", l.marginPx},
-                                                        {"lineSpacingPct", l.lineSpacingPct}}
+    lib.setMetaValue(layoutKey(itemKey), nlohmann::json{{"font", l.font},
+                                                        {"sizePt", l.sizePt},
+                                                        {"marginLevel", l.marginLevel},
+                                                        {"lineSpacingPct", l.lineSpacingPct},
+                                                        {"trimMargins", l.trimMargins}}
                                              .dump());
 }
 
@@ -136,7 +151,7 @@ void ReaderScreen::onShow(Nav& nav) {
         refreshHighlights(nav);
         return;
     }
-    layout_ = loadLayout(nav.library(), row_.key);
+    layout_ = loadLayout(nav.library(), row_.key, type_);
     if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
     DocPosition start;
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
@@ -245,8 +260,7 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
 }
 
 void ReaderScreen::onResize(Nav& nav) {
-    layout_.width = pageArea().w;
-    layout_.height = pageArea().h;
+    fitLayout(layout_, type_);
     bar_.reset();  // anchored to the old page
     if (editor_) closeEditor(nav);
     if (!worker_) return;
@@ -254,7 +268,9 @@ void ReaderScreen::onResize(Nav& nav) {
     worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
 }
 
-void ReaderScreen::applyLayout(const Layout& l, Nav& nav) {
+void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
+    Layout l = wanted;
+    fitLayout(l, type_);  // the margin size in pixels, the columns
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;
     layout_ = l;

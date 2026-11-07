@@ -28,8 +28,7 @@ constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
 const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
 constexpr int kDisplayH = 580;
-const int kMargins[] = {40, 60, 100};
-const char* kMarginNames[] = {"Narrow", "Normal", "Wide"};
+const char* kMarginNames[] = {"Narrow", "Normal", "Wide", "Extra wide"};
 const int kSpacings[] = {100, 120, 140};
 constexpr double kMinSize = 7, kMaxSize = 16, kSizeStep = 0.5;
 
@@ -57,7 +56,11 @@ Rect ReaderMenus::fontMoreRect() { return {W() - kMargin - 100, H() - kPanelH - 
 Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, H() - kPanelH - kDisplayH + 134, 160, 90}; }
 Rect ReaderMenus::sizePlusRect() { return {W() - kMargin - 160, H() - kPanelH - kDisplayH + 134, 160, 90}; }
 Rect ReaderMenus::marginRect(int i) {
-    const int w = (W() - 2 * kMargin - 240) / 3;
+    const int w = (W() - 2 * kMargin - 240) / 4;
+    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
+}
+Rect ReaderMenus::trimRect(int i) {
+    const int w = (W() - 2 * kMargin - 240) / 2;
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
 }
 Rect ReaderMenus::orientationRect(int i) {
@@ -102,8 +105,13 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
             nav.orientationChanged();  // the app turns the screen (a Resize follows)
             return true;
         }
-    for (int i = 0; i < 3; ++i)
-        if (marginRect(i).contains(p)) l.marginPx = kMargins[i];
+    if (showsTextOptions()) {
+        for (int i = 0; i < 4; ++i)
+            if (marginRect(i).contains(p)) l.marginLevel = i;
+    } else {
+        for (int i = 0; i < 2; ++i)
+            if (trimRect(i).contains(p)) l.trimMargins = i == 1;
+    }
     reader_.applyLayout(l, nav);
     nav.damage(displayPanelRect(), Waveform::Ui);
     return true;
@@ -137,8 +145,13 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
         for (int i = 0; i < 3; ++i)
             drawButton(cr, spacingRect(i), std::to_string(kSpacings[i]) + "%", l.lineSpacingPct == kSpacings[i]);
     }
-    centredText(cr, "Margins", label, {kMargin, marginRect(0).y, 220, 90}, Align::Left);
-    for (int i = 0; i < 3; ++i) drawButton(cr, marginRect(i), kMarginNames[i], l.marginPx == kMargins[i]);
+    if (showsTextOptions()) {
+        centredText(cr, "Margins", label, {kMargin, marginRect(0).y, 220, 90}, Align::Left);
+        for (int i = 0; i < 4; ++i) drawButton(cr, marginRect(i), kMarginNames[i], l.marginLevel == i);
+    } else {
+        centredText(cr, "Page margins", label, {kMargin, trimRect(0).y, 220, 90}, Align::Left);
+        for (int i = 0; i < 2; ++i) drawButton(cr, trimRect(i), i ? "Trim" : "Keep", l.trimMargins == (i == 1));
+    }
     centredText(cr, "Orientation", label, {kMargin, orientationRect(0).y, 220, 90}, Align::Left);
     for (int i = 0; i < 2; ++i) drawButton(cr, orientationRect(i), i ? "Landscape" : "Portrait", landscape_ == (i == 1));
 }

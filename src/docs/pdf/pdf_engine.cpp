@@ -80,11 +80,47 @@ bool PdfEngine::fit(int page, double& scale, double& dx, double& dy) {
     fz_always(ctx_) { fz_drop_page(ctx_, p); }
     fz_catch(ctx_) { ok = false; }
     if (!ok || r.x1 <= r.x0 || r.y1 <= r.y0) return false;
+    float c[4];
+    if (layout_.trimMargins && contentBox(page, c)) {
+        // The inked area plus a little white around it (2% of the page), never beyond the page.
+        const float pad = 0.02f * std::max(r.x1 - r.x0, r.y1 - r.y0);
+        r = fz_intersect_rect(r, fz_make_rect(c[0] - pad, c[1] - pad, c[2] + pad, c[3] + pad));
+    }
     const double w = r.x1 - r.x0, h = r.y1 - r.y0;
     scale = std::min(layout_.width / w, layout_.height / h);
     dx = (layout_.width - w * scale) / 2 - r.x0 * scale;
     dy = (layout_.height - h * scale) / 2 - r.y0 * scale;
     return true;
+}
+
+bool PdfEngine::contentBox(int page, float box[4]) {
+    if (auto it = contentBoxes_.find(page); it != contentBoxes_.end()) {
+        std::copy(it->second.begin(), it->second.end(), box);
+        return it->second[2] > it->second[0];
+    }
+    fz_rect bbox = fz_empty_rect;
+    fz_page* p = nullptr;
+    fz_device* dev = nullptr;
+    fz_var(p);
+    fz_var(dev);
+    bool ok = true;
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, page);
+        dev = fz_new_bbox_device(ctx_, &bbox);
+        fz_run_page(ctx_, p, dev, fz_identity, nullptr);
+        fz_close_device(ctx_, dev);
+    }
+    fz_always(ctx_) {
+        fz_drop_device(ctx_, dev);
+        fz_drop_page(ctx_, p);
+    }
+    fz_catch(ctx_) { ok = false; }
+    const bool found = ok && !fz_is_empty_rect(bbox) && bbox.x1 > bbox.x0 && bbox.y1 > bbox.y0;
+    const std::array<float, 4> v = found ? std::array<float, 4>{bbox.x0, bbox.y0, bbox.x1, bbox.y1}
+                                         : std::array<float, 4>{0, 0, 0, 0};
+    contentBoxes_[page] = v;
+    std::copy(v.begin(), v.end(), box);
+    return found;
 }
 
 PageImage PdfEngine::render(int page) {
