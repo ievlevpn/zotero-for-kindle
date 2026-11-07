@@ -207,7 +207,7 @@ void App::presentInk(bool force) {
     lastInkPresentMs_ = now;
 }
 
-void App::handlePen(const PenEvent& p) {
+void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     if (p.type == PenEvent::Type::Leave) {
         penNear_ = false;
         penLeftMs_ = p.t_ms ? p.t_ms : clock_();
@@ -216,9 +216,20 @@ void App::handlePen(const PenEvent& p) {
     }
     Screen* s = visibleTop();
     if (!s) return;
+    bool took = false;
     caller_ = s;
-    guard([&] { s->onPen(p, *this); });
+    guard([&] { took = s->onPen(p, *this); });
     caller_ = nullptr;
+    if (p.type == PenEvent::Type::Down) penAsTouch_ = !took;  // decided for the whole stroke
+    if (!penAsTouch_ || p.type == PenEvent::Type::Near) return;
+    TouchEvent t{TouchEvent::Type::Move, kPenFinger, p.pos, p.t_ms ? p.t_ms : clock_()};
+    if (p.type == PenEvent::Type::Down) t.type = TouchEvent::Type::Down;
+    if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) {
+        t.type = TouchEvent::Type::Up;
+        penAsTouch_ = false;
+    }
+    auto g = gestures_.feed(t);
+    gestures.insert(gestures.end(), g.begin(), g.end());
 }
 
 // A finger that lands while the pen is near (or just left) is the palm: it and its later samples
@@ -318,7 +329,7 @@ void App::step(int timeout_ms) {
                 resized();
                 break;
             case InputEvent::Kind::Pen:
-                if (!background_) handlePen(e.pen);
+                if (!background_) handlePen(e.pen, gestures);
                 break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");

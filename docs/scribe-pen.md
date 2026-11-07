@@ -1,7 +1,8 @@
 # Writing with the Scribe's pen
 
-On a Kindle Scribe the pen writes on PDF pages. Strokes become Zotero `ink` annotations (Zotero has no
-ink for EPUB; there the pen shows "Handwriting works in PDFs.") and sync like highlights.
+On a Kindle Scribe the pen writes on PDF pages. Strokes become Zotero `ink` annotations and sync like
+highlights. Everywhere else (lists, menus, EPUB, where Zotero has no ink) the pen is a finger: a stroke
+the visible screen doesn't take (`Screen::onPen` returns false for its Down) is fed to the gestures.
 
 - Strokes made within 1.5 s of each other are one annotation; a page turn, a jump or the menus save
   at once. Ink is black, 7 px wide on the screen (`ReaderScreen::kInkWidthPx`), stored in PDF points.
@@ -83,5 +84,4 @@ Notebook open sequence: 1:0a, 7:window, 1:0a, 8:thickness, 5:exclusions, 1:00, 8
 - Strokes made less than 1.5 s before the reader closes other than through the menus are lost.
 - Wet ink drawn while the page is being repainted (just after a save) can vanish from the screen; the
   stroke itself is saved and comes back with the annotation.
-- Whether the pen can tap buttons outside the reader while wet ink is connected (paused).
 - Kindles with a pen other than the Scribe (1st generation, firmware 5.16.8 tested).

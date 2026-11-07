@@ -715,7 +715,7 @@ bool ReaderScreen::penAllowed() const {
            !layoutPending_ && !turning_;
 }
 
-void ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
+bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     const bool eraserNear = p.eraser && p.type != PenEvent::Type::Leave;
     if (eraserNear != eraserNear_) {
         eraserNear_ = eraserNear;
@@ -738,23 +738,19 @@ void ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
             eraseAlong(eraserPath_, nav);
             eraserPath_.clear();
         }
-        return;
+        return false;
     }
-    if (p.type == PenEvent::Type::Near) return;
+    if (p.type == PenEvent::Type::Near) return false;
     if (p.type == PenEvent::Type::Down) {
-        if (type_ != DocType::Pdf) {
-            if (!inkToastShown_ && image_) nav.toast("Handwriting works in PDFs.");
-            inkToastShown_ = true;
-            return;
-        }
-        if (!penAllowed() || !pageArea().contains(p.pos)) {
+        // EPUB (Zotero has no ink there), menus, selection, the footer: the pen is a finger.
+        if (type_ != DocType::Pdf || !penAllowed() || !pageArea().contains(p.pos)) {
             if (nav.systemInk()) wipeFrom_ = p.pos;  // the system may have inked it: repaint on lift
-            return;
+            return false;
         }
         if (p.eraser) {
             erasing_ = true;
             eraserPath_ = {p.pos};
-            return;
+            return true;
         }
         if (inkPage_ != page_) commitInk();
         inkPage_ = page_;
@@ -764,24 +760,25 @@ void ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         if (!nav.systemInk())  // the system's wet ink already shows the line
             nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
                      [&](cairo_t* cr) { strokePaths(cr, {{p.pos}}, kInkWidthPx); });
-        return;
+        return true;
     }
     // Move.
     if (erasing_) {
         if (eraserPath_.empty() || std::abs(eraserPath_.back().x - p.pos.x) + std::abs(eraserPath_.back().y - p.pos.y) >= 4)
             eraserPath_.push_back(p.pos);
-        return;
+        return true;
     }
-    if (!inkDown_ || inkStroke_.empty()) return;
+    if (!inkDown_ || inkStroke_.empty()) return false;
     const Point a = inkStroke_.back(), b = p.pos;
-    if (std::abs(a.x - b.x) + std::abs(a.y - b.y) < 2) return;
+    if (std::abs(a.x - b.x) + std::abs(a.y - b.y) < 2) return true;
     inkStroke_.push_back(b);
-    if (nav.systemInk()) return;
+    if (nav.systemInk()) return true;
     const int pad = kInkWidthPx + 1;
     const Rect r{std::min(a.x, b.x) - pad, std::min(a.y, b.y) - pad, std::abs(a.x - b.x) + 2 * pad + 1,
                  std::abs(a.y - b.y) + 2 * pad + 1};
     nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
                  [&](cairo_t* cr) { strokePaths(cr, {{a, b}}, kInkWidthPx); });
+    return true;
 }
 
 void ReaderScreen::commitInk() {
