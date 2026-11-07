@@ -1,6 +1,8 @@
 #!/bin/sh
 # Cuts a release: version, Kindle build, signed package, the public repository, the GitHub release.
 #   tools/release.sh [--dry-run] VERSION NOTES.md
+#   CO_AUTHORS="Name <email>;Other <email>" tools/release.sh …   credits contributors on the public
+#                                                               commit (Co-authored-by trailers)
 # 1. master must be clean and VERSION newer than meson.build's; the version is set and committed.
 # 2. tools/build-kindle.sh, tools/package.sh, tools/sign-release.sh dist VERSION.
 # 3. The public branch gets master's tree without research/, spikes/ and docs/superpowers/ (they
@@ -48,7 +50,17 @@ git worktree add -q "$PUB" public
     git checkout master -- .
     git rm -rq --cached --ignore-unmatch research spikes docs/superpowers >/dev/null
     rm -rf research spikes docs/superpowers
-    git commit -qm "Zotero for Kindle $VERSION"
+    MSG="Zotero for Kindle $VERSION"
+    if [ -n "${CO_AUTHORS:-}" ]; then
+        MSG="$MSG
+"
+        OLDIFS=$IFS
+        IFS=';'
+        for who in $CO_AUTHORS; do MSG="$MSG
+Co-authored-by: $who"; done
+        IFS=$OLDIFS
+    fi
+    git commit -qm "$MSG"
     git tag "v$VERSION"
     git push -q origin public:master "v$VERSION"
 )
