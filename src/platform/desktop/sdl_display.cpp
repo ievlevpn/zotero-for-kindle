@@ -32,8 +32,21 @@ public:
         gray_.assign((size_t)kW * kH, 0xff);
     }
 
-    const int kW, kH;
+    int kW, kH;
     std::string deviceName() const override { return metrics().device; }  // the Kindle imitated
+    // Turning swaps the window's sides, as the Kindle's window manager does.
+    void setOrientation(Orientation o) override {
+        if (o == orientation_) return;
+        orientation_ = o;
+        std::swap(kW, kH);
+        SDL_SetWindowSize(win_, kW / kScale, kH / kScale);
+        SDL_DestroyTexture(tex_);
+        tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
+        gray_.assign((size_t)kW * kH, 0xff);
+        resized_ = true;
+    }
+    Orientation orientation_ = Orientation::Portrait;
+    bool resized_ = false;
 
     ~SdlDisplay() override {
         SDL_DestroyTexture(tex_);
@@ -55,6 +68,12 @@ public:
     }
 
     bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
+        if (resized_) {
+            resized_ = false;
+            InputEvent e;
+            e.kind = InputEvent::Kind::Resize;
+            out.push_back(e);
+        }
         SDL_Event ev;
         if (!SDL_WaitEventTimeout(&ev, timeout_ms)) return true;
         do {

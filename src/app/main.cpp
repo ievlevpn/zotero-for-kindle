@@ -322,6 +322,7 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
+    app.setReadingLandscape([&lib] { return loadSettings(lib).landscapeReading; });
     // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
     // Kindle home). Stays on through shutdown, which must not hang either.
     StallWatchdog watchdog(15'000, [](int64_t ms, const std::string& doing) {
@@ -337,6 +338,10 @@ int main(int argc, char** argv) {
             return true;
         }, 1000);
     }
+    for (int i = 1; i + 1 < argc; ++i)  // --open <attachmentKey>: open a book at start (device checks)
+        if (!std::strcmp(argv[i], "--open"))
+            if (auto att = lib.attachment(argv[i + 1]))
+                if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey)) flow.open(*row, app);
     const int rc = app.run();
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");

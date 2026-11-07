@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <string>
 
 #include "core/log.h"
 #include "platform/display.h"
@@ -75,6 +76,15 @@ public:
     Point origin() const override { return {originX_, originY_}; }
     std::string deviceName() const override { return deviceName_; }
     int ppi() const override { return ppi_; }
+    // The window manager turns the screen for our window when the title's orientation field
+    // changes (O:U upright, O:L landscape; spike 2026-11-07); ConfigureNotify then brings the size.
+    void setOrientation(Orientation o) override {
+        if (!dpy_) return;
+        std::string title = kWindowTitle;
+        title.back() = o == Orientation::Landscape ? 'L' : 'U';
+        XStoreName(dpy_, win_, title.c_str());
+        XFlush(dpy_);
+    }
 
     void present(const Canvas& canvas, Rect r, Waveform w) override {
         r = r.intersected({0, 0, w_, h_});
@@ -140,6 +150,9 @@ public:
                     log(LogLevel::Debug, "focus in");
                     setBackground(false, out);
                     break;
+                case ConfigureNotify:
+                    if (ev.xconfigure.width != w_ || ev.xconfigure.height != h_) resize(ev.xconfigure.width, ev.xconfigure.height, out);
+                    break;
                 case DestroyNotify: return false;
                 default: break;
             }
@@ -183,6 +196,27 @@ private:
         }
         Window child;
         XTranslateCoordinates(dpy_, win_, DefaultRootWindow(dpy_), 0, 0, &originX_, &originY_, &child);
+    }
+
+    // The window turned (or the window manager settled its size): new backing store, FBInk state
+    // for the rotated framebuffer, and a Resize for the app.
+    void resize(int w, int h, std::vector<InputEvent>& out) {
+        w_ = w;
+        h_ = h;
+        Window child;
+        XTranslateCoordinates(dpy_, win_, DefaultRootWindow(dpy_), 0, 0, &originX_, &originY_, &child);
+        if (image_) {
+            image_->data = nullptr;
+            XDestroyImage(image_);
+        }
+        backing_.assign((size_t)w_ * h_, 0xff);
+        image_ = XCreateImage(dpy_, DefaultVisual(dpy_, DefaultScreen(dpy_)), 8, ZPixmap, 0,
+                              reinterpret_cast<char*>(backing_.data()), w_, h_, 8, w_);
+        if (fb_ >= 0 && fbink_reinit(fb_, &cfg_) < 0) log(LogLevel::Warn, "FBInk reinit after a turn failed");
+        log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
+        InputEvent e;
+        e.kind = InputEvent::Kind::Resize;
+        out.push_back(e);
     }
 
     void putAndRefresh(Rect r, Waveform w) {
