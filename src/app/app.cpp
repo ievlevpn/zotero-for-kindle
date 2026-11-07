@@ -1,5 +1,6 @@
 #include "app/app.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "core/log.h"
@@ -48,7 +49,7 @@ void App::toast(const std::string& text) {
     toast_ = text;
     lastToast_ = text;
     toastUntil_ = clock_() + 3000;
-    pending_.push_back({toastRect(), Waveform::Fast});
+    pending_.push_back({toastRect(), Waveform::Ui});
 }
 
 Rect App::tabBar() const { return {0, canvas_.height() - kTabBarH, canvas_.width(), kTabBarH}; }
@@ -169,7 +170,7 @@ void App::handle(const Gesture& g) {
             if (!r.contains(g.pos)) continue;
             // Instant feedback on the tab bar (fast waveform), then the new screen.
             drawTabBar(canvas_.cr(), tabBar(), kTabNames, i);
-            display_.present(canvas_, tabBar(), Waveform::Fast);
+            display_.present(canvas_, tabBar(), Waveform::Ui);
             switchTab(i);
         }
         return;
@@ -286,9 +287,9 @@ void App::step(int timeout_ms) {
 void App::flush() {
     if (pending_.empty() || !visibleTop()) return;
     const Rect all{0, 0, canvas_.width(), canvas_.height()};
-    Rect fast, quality, full;
+    Rect fast, ui, quality, full;
     for (const auto& [r, w] : pending_) {
-        Rect& u = w == Waveform::Fast ? fast : w == Waveform::Quality ? quality : full;
+        Rect& u = w == Waveform::Fast ? fast : w == Waveform::Ui ? ui : w == Waveform::Quality ? quality : full;
         u = u.united(r.intersected(all));
     }
     pending_.clear();
@@ -303,10 +304,11 @@ void App::flush() {
         toastShown_ = true;
     }
     if (!full.empty()) {
-        display_.present(canvas_, full.united(quality).united(fast), Waveform::Full);
+        display_.present(canvas_, full.united(quality).united(ui).united(fast), Waveform::Full);
         return;
     }
     if (!fast.empty()) display_.present(canvas_, fast, Waveform::Fast);
+    if (!ui.empty()) display_.present(canvas_, ui, Waveform::Ui);
     if (!quality.empty()) display_.present(canvas_, quality, Waveform::Quality);
 }
 

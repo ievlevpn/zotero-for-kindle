@@ -71,7 +71,7 @@ TEST_CASE("open flow: a remote book downloads with progress in its row") {
     rig.event(p);
     CHECK(rig.flow.statusFor(r.attachmentKey) == "Downloading 42%");
     REQUIRE(rig.nav.damages.size() == 1);
-    CHECK(rig.nav.damages[0].waveform == Waveform::Fast);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect == rig.rowRect(1));
     rig.screen->onGesture(tapAt(rig.rowRect(1).center()), rig.nav);  // a second tap while downloading
     CHECK(rig.nav.syncFake.opened.size() == 1);

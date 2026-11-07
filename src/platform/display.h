@@ -13,7 +13,10 @@ namespace zk {
 //   Fast:    tap feedback, menus, selection (DU on the Kindle)
 //   Quality: page content without a flash (GC16 partial)
 //   Full:    GC16 with a black flash, clears ghosting (every N page turns, on wake)
-enum class Waveform { Fast, Quality, Full };
+// Fast: black/white only, quickest (DU) — feedback that moves (a selection, a slider, typing).
+// Ui: grays kept, no flash (GL16) — menus, panels, bars, buttons. Quality: page content (GC16).
+// Full: GC16 with a flash, to clear ghosting.
+enum class Waveform { Fast, Ui, Quality, Full };
 
 class Display {
 public:

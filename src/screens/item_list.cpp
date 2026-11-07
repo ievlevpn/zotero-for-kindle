@@ -52,7 +52,7 @@ void ItemList::onDownloadEvent(const SyncEvent& e, Rect area, Nav& nav) {
         nav.damage(area, Waveform::Quality);
         return;
     }
-    nav.damage(rowRects(area)[static_cast<size_t>(indexOfAttachment(e.attachmentKey))], Waveform::Fast);
+    nav.damage(rowRects(area)[static_cast<size_t>(indexOfAttachment(e.attachmentKey))], Waveform::Ui);
 }
 
 int ItemList::indexOfAttachment(const std::string& key) const {

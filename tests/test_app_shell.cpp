@@ -83,7 +83,7 @@ TEST_CASE("app shell: tapping a tab shows that tab's screen") {
     CHECK(has(rig.log, "collections:show"));
     CHECK(has(rig.log, "collections:draw"));
     REQUIRE(rig.display.presents.size() >= 2);
-    CHECK(rig.display.presents[0].waveform == Waveform::Fast);  // tab feedback first
+    CHECK(rig.display.presents[0].waveform == Waveform::Ui);  // tab feedback first
     CHECK(rig.display.presents[0].rect.y >= 1547 - kTabBarH);
     CHECK(rig.display.presents.back().waveform == Waveform::Quality);
     CHECK(rig.display.presents.back().rect == Rect{0, 0, 1236, 1547});

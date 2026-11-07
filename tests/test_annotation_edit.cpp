@@ -73,9 +73,9 @@ TEST_CASE("annotation edit: a tap on a highlight opens the edit bar for it, not 
     CHECK_FALSE(rig.reader->menusOpen());
     CHECK(rig.editor()->bar().mode() == AnnotationBar::Mode::Edit);
     CHECK(rig.editor()->bar().colour() == "#ffd400");
-    bool fast = false;
-    for (const auto& d : rig.nav.damages) fast |= d.waveform == Waveform::Fast && d.rect == rig.editor()->rect();
-    CHECK(fast);
+    bool ui = false;
+    for (const auto& d : rig.nav.damages) ui |= d.waveform == Waveform::Ui && d.rect == rig.editor()->rect();
+    CHECK(ui);
     // A tap in the middle away from highlights still opens the menus.
     rig.tap({600, 900});
     CHECK_FALSE(rig.editor());

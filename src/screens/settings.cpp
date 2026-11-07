@@ -125,7 +125,7 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
             saveSettings(nav.library(), s);
             interval_ = kIntervals[i];
             nav.sync().setIntervalMinutes(interval_);
-            nav.damage({0, kIntervalY, kW, 160}, Waveform::Fast);
+            nav.damage({0, kIntervalY, kW, 160}, Waveform::Ui);
             return;
         }
     if (flashMinusRect().contains(g.pos) || flashPlusRect().contains(g.pos)) {
@@ -133,13 +133,13 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
         st.flashEvery = std::clamp(st.flashEvery + (flashPlusRect().contains(g.pos) ? 1 : -1), 1, 12);
         saveSettings(nav.library(), st);
         flashEvery_ = st.flashEvery;
-        nav.damage({0, kFlashY, kW, 120}, Waveform::Fast);
+        nav.damage({0, kFlashY, kW, 120}, Waveform::Ui);
         return;
     }
     if (toggleRect().contains(g.pos)) {
         allOffline_ = !allOffline_;
         nav.sync().setAllHighlightsOffline(allOffline_);
-        nav.damage({0, kHighlightsY, kW, 200}, Waveform::Fast);
+        nav.damage({0, kHighlightsY, kW, 200}, Waveform::Ui);
         return;
     }
     if (removeRect().contains(g.pos)) {
@@ -149,12 +149,12 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
             confirmRemove_ = false;
             nav.sync().removeDownloads();
         }
-        nav.damage({0, kStorageY, kW, 200}, Waveform::Fast);
+        nav.damage({0, kStorageY, kW, 200}, Waveform::Ui);
         return;
     }
     if (confirmRemove_) {
         confirmRemove_ = false;
-        nav.damage({0, kStorageY, kW, 200}, Waveform::Fast);
+        nav.damage({0, kStorageY, kW, 200}, Waveform::Ui);
     }
 }
 

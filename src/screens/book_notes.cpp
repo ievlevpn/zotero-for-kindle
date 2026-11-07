@@ -84,7 +84,7 @@ void BookNotesScreen::onGesture(const Gesture& g, Nav& nav) {
         for (size_t k = 0; k < rects.size(); ++k)
             if (rects[k].contains(g.pos)) {
                 editor_ = std::make_unique<AnnotationEditor>(all_[static_cast<size_t>(pager_.offset()) + k], rects[k]);
-                nav.damage(editor_->rect(), Waveform::Fast);
+                nav.damage(editor_->rect(), Waveform::Ui);
                 return;
             }
         return;

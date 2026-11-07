@@ -110,7 +110,7 @@ bool AnnotationEditor::takeChanged() {
 }
 
 void AnnotationEditor::enter(State s, Nav& nav) {
-    nav.damage(rect(), Waveform::Fast);
+    nav.damage(rect(), Waveform::Ui);
     if (s == State::Comment) {
         comment_ = annotation_.comment;
         nav.keyboard().show();
@@ -118,7 +118,7 @@ void AnnotationEditor::enter(State s, Nav& nav) {
         nav.keyboard().hide();
     }
     state_ = s;
-    nav.damage(rect(), Waveform::Fast);
+    nav.damage(rect(), Waveform::Ui);
 }
 
 void AnnotationEditor::draw(cairo_t* cr) const {
@@ -174,7 +174,7 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             changed_ = true;
         }
         bar_.setColour(colour);
-        nav.damage(bar_.rect(), Waveform::Fast);
+        nav.damage(bar_.rect(), Waveform::Ui);
     } else if (hit.action == AnnotationBar::Action::Comment) {
         enter(State::Comment, nav);
     } else if (hit.action == AnnotationBar::Action::Delete) {

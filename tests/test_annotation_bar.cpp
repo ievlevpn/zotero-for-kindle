@@ -80,7 +80,7 @@ TEST_CASE("annotation bar: a long-press selects the word under the finger with a
     REQUIRE(rig.reader->selection());
     CHECK(rig.reader->selection()->text == "p0w0");
     CHECK(rig.damaged({100, 200, 100, 50}, Waveform::Fast));
-    CHECK(rig.damaged(rig.reader->annotationBar()->rect(), Waveform::Fast));
+    CHECK(rig.damaged(rig.reader->annotationBar()->rect(), Waveform::Ui));
     // The bar sits clear of the selection.
     CHECK(rig.reader->annotationBar()->rect().intersected({100, 200, 100, 50}).empty());
 }

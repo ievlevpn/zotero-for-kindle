@@ -279,7 +279,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
             case GestureType::DragStart:
                 selDragging_ = true;
                 if (bar_) {
-                    nav.damage(bar_->rect(), Waveform::Fast);
+                    nav.damage(bar_->rect(), Waveform::Ui);
                     bar_.reset();
                 }
                 requestSelection(g.pos);
@@ -345,7 +345,7 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
     for (const auto& h : highlights_)
         if (h.annotationKey == key) anchor = anchor.united(h.rect);
     editor_ = std::make_unique<AnnotationEditor>(*a, anchor);
-    nav.damage(editor_->rect(), Waveform::Fast);
+    nav.damage(editor_->rect(), Waveform::Ui);
     return true;
 }
 
@@ -397,7 +397,7 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
 void ReaderScreen::showBar(Nav& nav) {
     if (!selection_) return;
     bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_);
-    nav.damage(bar_->rect(), Waveform::Fast);
+    nav.damage(bar_->rect(), Waveform::Ui);
 }
 
 void ReaderScreen::onBarTap(Point p, Nav& nav) {
@@ -406,7 +406,7 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
         case AnnotationBar::Action::Colour:
             colour_ = zoteroColours()[hit.colour].hex;
             bar_->setColour(colour_);
-            nav.damage(bar_->rect(), Waveform::Fast);
+            nav.damage(bar_->rect(), Waveform::Ui);
             break;
         case AnnotationBar::Action::Highlight:
             saveSelection("highlight", "", nav);
@@ -415,11 +415,11 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             saveSelection("underline", "", nav);
             break;
         case AnnotationBar::Action::Note:
-            nav.damage(bar_->rect(), Waveform::Fast);
+            nav.damage(bar_->rect(), Waveform::Ui);
             bar_.reset();
             note_.emplace();
             nav.keyboard().show();
-            nav.damage(noteRect(), Waveform::Fast);
+            nav.damage(noteRect(), Waveform::Ui);
             break;
         default:
             break;

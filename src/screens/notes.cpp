@@ -120,7 +120,7 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
             }
             if (noteRowButtonRect(rects[i], 1).contains(g.pos)) {
                 discardKey_ = a.key;
-                nav.damage(kConfirm, Waveform::Fast);
+                nav.damage(kConfirm, Waveform::Ui);
                 return;
             }
         }

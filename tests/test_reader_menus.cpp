@@ -61,7 +61,7 @@ TEST_CASE("reader menus: a middle tap opens them fast; a tap outside closes them
     REQUIRE(rig.reader->menusOpen());
     REQUIRE_FALSE(rig.nav.damages.empty());
     for (const auto& d : rig.nav.damages) {
-        CHECK(d.waveform == Waveform::Fast);
+        CHECK(d.waveform == Waveform::Ui);
         CHECK((d.rect == ReaderMenus::topBarRect() || d.rect == ReaderMenus::panelRect()));
     }
     rig.nav.damages.clear();

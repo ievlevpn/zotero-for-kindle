@@ -126,7 +126,7 @@ TEST_CASE("home: sync progress repaints only the header; a finished sync repaint
     e.progress = {"annotations", 50, 300};
     rig.home.onSyncEvent(e, rig.nav);
     REQUIRE(rig.nav.damages.size() == 1);
-    CHECK(rig.nav.damages[0].waveform == Waveform::Fast);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect.y + rig.nav.damages[0].rect.h <= kHeaderH);
     rig.nav.damages.clear();
     e.kind = SyncEvent::Kind::SyncFinished;
@@ -183,7 +183,7 @@ TEST_CASE("home: an upload repaints the header, fast when it starts and quality 
     e.total = 2;
     rig.home.onSyncEvent(e, rig.nav);
     REQUIRE(rig.nav.damages.size() == 1);
-    CHECK(rig.nav.damages[0].waveform == Waveform::Fast);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect.y + rig.nav.damages[0].rect.h <= kHeaderH);
     CHECK(rig.status.line(0) == "Uploading 2 changes…");
     rig.nav.damages.clear();

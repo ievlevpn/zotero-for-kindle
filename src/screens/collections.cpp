@@ -174,7 +174,7 @@ void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());
         auto rects = lineRects();
         for (size_t i = 0; i < page_.size(); ++i)
-            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Fast);
+            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Ui);
         return;
     }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
