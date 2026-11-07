@@ -6,9 +6,7 @@ namespace zk {
 
 namespace {
 
-constexpr int64_t kDayMs = 24 * 3600 * 1000LL;
-constexpr int64_t kCheckEveryMs = 7 * kDayMs;
-constexpr int64_t kRetryAfterMs = kDayMs;
+constexpr int64_t kCheckEveryMs = 3600 * 1000LL;  // an hour: one small GET (GitHub allows 60 an hour)
 
 int64_t metaMs(Library& lib, const char* key) {
     const std::string v = lib.metaValue(key);
@@ -42,8 +40,8 @@ void UpdateNotice::onSyncFinished(Library& lib, bool ok) {
         return;
     }
     if (checked && now - checked < kCheckEveryMs) return;
-    if (failed && failed > checked && now - failed < kRetryAfterMs) return;
-    log(LogLevel::Info, "update: the weekly check");
+    if (failed && failed > checked && now - failed < kCheckEveryMs) return;
+    log(LogLevel::Info, "update: the hourly check");
     updater_.check();
     serial_ = -1;  // note its answer even if the status looks the same
 }

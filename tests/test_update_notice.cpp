@@ -16,7 +16,7 @@ using namespace zk::test;
 
 namespace {
 
-constexpr int64_t kDay = 24 * 3600 * 1000LL;
+constexpr int64_t kHour = 3600 * 1000LL;
 
 // GitHub's latest release, as an Updater on 0.2.0 sees it; every request counted.
 struct Rig {
@@ -55,15 +55,15 @@ struct Rig {
 
 }  // namespace
 
-TEST_CASE("update notice: checks after a successful sync, then not for a week") {
+TEST_CASE("update notice: checks after a successful sync, then not for an hour") {
     Rig rig;
     rig.synced();
     CHECK(*rig.requests == 1);
     rig.synced();
-    rig.now += 6 * kDay;
+    rig.now += 50 * 60 * 1000LL;
     rig.synced();
     CHECK(*rig.requests == 1);
-    rig.now += kDay + 1;
+    rig.now += 10 * 60 * 1000LL + 1;
     rig.synced();
     CHECK(*rig.requests == 2);
 }
@@ -74,16 +74,16 @@ TEST_CASE("update notice: no check after a failed sync") {
     CHECK(*rig.requests == 0);
 }
 
-TEST_CASE("update notice: a failed check tries again the next day, not before") {
+TEST_CASE("update notice: a failed check tries again an hour later, not before") {
     Rig rig;
     *rig.down = true;
     rig.synced();
     CHECK(*rig.requests == 1);
     CHECK_FALSE(rig.notice->available(rig.lib));
-    rig.now += 2 * 3600 * 1000LL;
+    rig.now += 30 * 60 * 1000LL;
     rig.synced();
     CHECK(*rig.requests == 1);
-    rig.now += kDay;
+    rig.now += kHour;
     rig.synced();
     CHECK(*rig.requests == 2);
 }
@@ -97,7 +97,7 @@ TEST_CASE("update notice: names the newer version; dismissed, it waits for a new
     CHECK_FALSE(rig.notice->available(rig.lib));
     CHECK(rig.notice->pending(rig.lib)->str() == "0.3.0");  // Settings still says so
     *rig.tag = "v0.4.0";
-    rig.now += 8 * kDay;
+    rig.now += 2 * kHour;
     rig.synced();
     REQUIRE(rig.notice->available(rig.lib));
     CHECK(rig.notice->available(rig.lib)->str() == "0.4.0");
@@ -119,7 +119,7 @@ TEST_CASE("update notice: up to date clears an old notice") {
     rig.synced();
     REQUIRE(rig.notice->available(rig.lib));
     *rig.tag = "v0.2.0";  // the release was pulled
-    rig.now += 8 * kDay;
+    rig.now += 2 * kHour;
     rig.synced();
     CHECK_FALSE(rig.notice->available(rig.lib));
 }
@@ -137,9 +137,9 @@ TEST_CASE("update notice: a check from Settings counts as the week's check") {
 TEST_CASE("update notice: a clock set back doesn't stop checks forever") {
     Rig rig;
     rig.synced();
-    rig.now -= 400 * kDay;  // the Kindle's clock was wrong, then fixed backwards
+    rig.now -= 400 * 24 * kHour;  // the Kindle's clock was wrong, then fixed backwards
     rig.synced();
-    rig.now += 7 * kDay + 1;
+    rig.now += kHour + 1;
     rig.synced();
     CHECK(*rig.requests == 2);
 }

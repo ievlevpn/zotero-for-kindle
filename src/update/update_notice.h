@@ -1,6 +1,6 @@
 #pragma once
-// "Version X is available" on Home: a check at most once a week, after a sync that worked (Wi-Fi
-// is up then; nothing turns it on for this). A failed check waits a day. Nothing downloads.
+// "Version X is available" on Home: a check at most once an hour, after a sync that worked (Wi-Fi
+// is up then; nothing turns it on for this), failed or not. Nothing downloads.
 // Kept in the library's meta, so the notice outlives a restart:
 //   update:checkedMs  wall clock of the last check that answered (or of a manual one)
 //   update:failedMs   wall clock of the last check that didn't
