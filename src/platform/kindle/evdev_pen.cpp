@@ -29,6 +29,7 @@ int score(int fd, std::string& name, bool raw) {
     if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof keys), keys) < 0 || ioctl(fd, EVIOCGBIT(EV_ABS, sizeof abs), abs) < 0)
         return 0;
     if (!hasBit(keys, BTN_TOOL_PEN) || !hasBit(abs, ABS_X) || !hasBit(abs, ABS_Y)) return 0;
+    if (hasBit(abs, ABS_MT_SLOT)) return 0;  // a touch controller that also claims a pen tool
     char buf[128] = "";
     ioctl(fd, EVIOCGNAME(sizeof buf - 1), buf);
     name = buf;
@@ -122,13 +123,27 @@ void EvdevPen::read(std::vector<InputEvent>& out, int64_t now_ms) {
     for (;;) {
         const ssize_t n = ::read(fd_, buf, sizeof buf);
         if (n <= 0) break;
-        for (size_t i = 0; i < static_cast<size_t>(n) / sizeof(input_event); ++i)
-            for (const PenEvent& p : decoder_.feed(buf[i].type, buf[i].code, buf[i].value, now_ms)) {
+        auto deliver = [&](const std::vector<PenEvent>& events) {
+            for (const PenEvent& p : events) {
                 InputEvent e;
                 e.kind = InputEvent::Kind::Pen;
                 e.pen = p;
                 out.push_back(e);
             }
+        };
+        for (size_t i = 0; i < static_cast<size_t>(n) / sizeof(input_event); ++i) {
+            deliver(decoder_.feed(buf[i].type, buf[i].code, buf[i].value, now_ms));
+            if (decoder_.needsResync()) {  // events were lost: ask the device where things stand
+                unsigned long keys[KEY_MAX / (sizeof(unsigned long) * 8) + 1] = {};
+                input_absinfo x{}, y{};
+                ioctl(fd_, EVIOCGKEY(sizeof keys), keys);
+                ioctl(fd_, EVIOCGABS(ABS_X), &x);
+                ioctl(fd_, EVIOCGABS(ABS_Y), &y);
+                deliver(decoder_.resync(hasBit(keys, BTN_TOOL_PEN), hasBit(keys, BTN_TOOL_RUBBER),
+                                        hasBit(keys, BTN_TOUCH), hasBit(keys, BTN_STYLUS), x.value, y.value, now_ms));
+                log(LogLevel::Info, "pen: events dropped by the kernel, state read again");
+            }
+        }
     }
 }
 

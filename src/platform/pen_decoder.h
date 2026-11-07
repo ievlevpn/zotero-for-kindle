@@ -13,7 +13,7 @@ namespace zk {
 // The evdev codes the decoder understands (values from linux/input-event-codes.h).
 namespace ev {
 constexpr int SYN = 0x00, KEY = 0x01, ABS = 0x03;
-constexpr int SYN_REPORT = 0x00;
+constexpr int SYN_REPORT = 0x00, SYN_DROPPED = 0x03;
 constexpr int ABS_X = 0x00, ABS_Y = 0x01, ABS_PRESSURE = 0x18;
 constexpr int BTN_TOOL_PEN = 0x140, BTN_TOOL_RUBBER = 0x141, BTN_TOUCH = 0x14a, BTN_STYLUS = 0x14b;
 }  // namespace ev
@@ -44,9 +44,15 @@ public:
 
     // One input event; returns the pen events completed by it (only at SYN_REPORT).
     std::vector<PenEvent> feed(int type, int code, int value, int64_t t_ms);
+    // After SYN_DROPPED (the kernel's buffer overflowed) events are ignored up to the next report;
+    // then the reader asks the device for its state (EVIOCGKEY / EVIOCGABS) and hands it here.
+    bool needsResync() const { return resync_; }
+    std::vector<PenEvent> resync(bool pen, bool rubber, bool touch, bool button, int x, int y, int64_t t_ms);
 
 private:
     PenEvent make(PenEvent::Type t, int64_t t_ms) const;
+    std::vector<PenEvent> report(int64_t t_ms);  // what a SYN_REPORT completes
+    bool dropping_ = false, resync_ = false;
 
     PenMapping map_;
     int x_ = 0, y_ = 0, pressure_ = 0;

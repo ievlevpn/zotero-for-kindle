@@ -44,6 +44,17 @@ PenEvent PenDecoder::make(PenEvent::Type t, int64_t t_ms) const {
 
 std::vector<PenEvent> PenDecoder::feed(int type, int code, int value, int64_t t_ms) {
     std::vector<PenEvent> out;
+    if (type == ev::SYN && code == ev::SYN_DROPPED) {
+        dropping_ = true;
+        return out;
+    }
+    if (dropping_) {  // the events up to the next report are incomplete
+        if (type == ev::SYN && code == ev::SYN_REPORT) {
+            dropping_ = false;
+            resync_ = true;
+        }
+        return out;
+    }
     if (type == ev::ABS) {
         if (code == ev::ABS_X) x_ = value;
         else if (code == ev::ABS_Y) y_ = value;
@@ -58,8 +69,19 @@ std::vector<PenEvent> PenDecoder::feed(int type, int code, int value, int64_t t_
         return out;
     }
     if (type != ev::SYN || code != ev::SYN_REPORT) return out;
+    return report(t_ms);
+}
 
-    const bool inRange = pen_ || rubber_ || touch_;
+std::vector<PenEvent> PenDecoder::resync(bool pen, bool rubber, bool touch, bool button, int x, int y, int64_t t_ms) {
+    resync_ = false;
+    pen_ = pen, rubber_ = rubber, touch_ = touch, button_ = button, x_ = x, y_ = y;
+    return report(t_ms);
+}
+
+std::vector<PenEvent> PenDecoder::report(int64_t t_ms) {
+    std::vector<PenEvent> out;
+    // In range = a tool reported (pen or eraser end); BTN_TOUCH alone is not a pen.
+    const bool inRange = pen_ || rubber_;
     const bool touching = touch_ && inRange;
     const Point pos = map_.map(x_, y_);
     if (touching_ && (!touching || rubber_ != eraser_)) {  // lifted, or turned over on the glass

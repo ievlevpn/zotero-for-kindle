@@ -29,10 +29,25 @@ App::~App() { closeAll(); }
 
 void App::closeAll() {
     while (!graveyard_.empty()) graveyard_.pop_back();
+    lastVisible_ = nullptr;
     for (int t = 0; t < kTabs; ++t) {
         const int tab = (tab_ + t) % kTabs;  // the visible tab first
-        while (!stacks_[tab].empty()) stacks_[tab].pop_back();
+        while (!stacks_[tab].empty()) {
+            close(*stacks_[tab].back());
+            stacks_[tab].pop_back();
+        }
     }
+}
+
+void App::close(Screen& s) {
+    caller_ = &s;
+    guard([&] { s.onClose(*this); });
+    caller_ = nullptr;
+}
+
+void App::retire(std::unique_ptr<Screen> s) {
+    close(*s);
+    graveyard_.push_back(std::move(s));
 }
 
 void App::setRoot(int tab, std::unique_ptr<Screen> s) {
@@ -67,6 +82,13 @@ void App::start() {
 
 void App::showTop() {
     setSystemInk(false);  // the screen that wants it asks again
+    if (lastVisible_ && lastVisible_ != visibleTop()) {
+        Screen* was = lastVisible_;
+        caller_ = was;
+        guard([&] { was->onHide(*this); });
+        caller_ = nullptr;
+    }
+    lastVisible_ = visibleTop();
     Screen* s = visibleTop();
     if (!s) return;
     if (s->wantsKeyboard()) keyboard_.show();
@@ -127,8 +149,11 @@ void App::deliverHeld(Screen* s) {
 }
 
 void App::replaceRoot(int tab, std::unique_ptr<Screen> s) {
-    for (auto& old : stacks_[tab]) graveyard_.push_back(std::move(old));
-    stacks_[tab].clear();
+    while (!stacks_[tab].empty()) {  // top first
+        auto old = std::move(stacks_[tab].back());
+        stacks_[tab].pop_back();
+        retire(std::move(old));
+    }
     stacks_[tab].push_back(std::move(s));
     tab_ = tab;
     showTop();
@@ -141,8 +166,9 @@ void App::push(std::unique_ptr<Screen> s) {
 
 void App::pop() {
     if (stacks_[tab_].size() <= 1) return;
-    graveyard_.push_back(std::move(stacks_[tab_].back()));
+    auto s = std::move(stacks_[tab_].back());
     stacks_[tab_].pop_back();
+    retire(std::move(s));
     showTop();
 }
 
@@ -152,8 +178,9 @@ void App::switchTab(int index) {
         // Tapping the current tab goes back to its root.
         if (stacks_[tab_].size() > 1) {
             while (stacks_[tab_].size() > 1) {
-                graveyard_.push_back(std::move(stacks_[tab_].back()));
+                auto s = std::move(stacks_[tab_].back());
                 stacks_[tab_].pop_back();
+                retire(std::move(s));
             }
             showTop();
         }
@@ -194,8 +221,7 @@ void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& pain
 void App::setSystemInk(bool on) {
     if (on && (background_ || (caller_ && caller_ != visibleTop()))) return;
     if (on == systemInkOn_) return;
-    systemInkOn_ = on;
-    display_.setSystemInk(on);
+    if (display_.setSystemInk(on)) systemInkOn_ = on;  // else asked again on the next tick
 }
 
 void App::presentInk(bool force) {
@@ -207,7 +233,19 @@ void App::presentInk(bool force) {
     lastInkPresentMs_ = now;
 }
 
+// Forget what the pen was doing (its Leave or Up may never come): no palm blocking, and a pen
+// stroke used as a finger is lifted.
+void App::penReset(std::vector<Gesture>& gestures) {
+    penNear_ = false;
+    if (penAsTouch_) {
+        penAsTouch_ = false;
+        auto g = gestures_.feed(TouchEvent{TouchEvent::Type::Up, kPenFinger, penTouchAt_, clock_()});
+        gestures.insert(gestures.end(), g.begin(), g.end());
+    }
+}
+
 void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
+    penLastMs_ = clock_();
     if (p.type == PenEvent::Type::Leave) {
         penNear_ = false;
         penLeftMs_ = p.t_ms ? p.t_ms : clock_();
@@ -223,6 +261,7 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     if (p.type == PenEvent::Type::Down) penAsTouch_ = !took;  // decided for the whole stroke
     if (!penAsTouch_ || p.type == PenEvent::Type::Near) return;
     TouchEvent t{TouchEvent::Type::Move, kPenFinger, p.pos, p.t_ms ? p.t_ms : clock_()};
+    penTouchAt_ = p.pos;
     if (p.type == PenEvent::Type::Down) t.type = TouchEvent::Type::Down;
     if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) {
         t.type = TouchEvent::Type::Up;
@@ -237,7 +276,9 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
 bool App::palmBlocked(const TouchEvent& t) {
     auto it = std::find(palmFingers_.begin(), palmFingers_.end(), t.id);
     if (t.type == TouchEvent::Type::Down) {
-        const bool palm = penNear_ || (penLeftMs_ >= 0 && t.t_ms - penLeftMs_ < kPalmMs);
+        // Near only while it keeps reporting: a Leave that never came must not block touch forever.
+        const bool near = penNear_ && clock_() - penLastMs_ < kPenStaleMs;
+        const bool palm = near || (penLeftMs_ >= 0 && t.t_ms - penLeftMs_ < kPalmMs);
         if (palm && it == palmFingers_.end()) palmFingers_.push_back(t.id);
         if (!palm && it != palmFingers_.end()) palmFingers_.erase(it);
         return palm;
@@ -323,6 +364,12 @@ void App::step(int timeout_ms) {
                 log(LogLevel::Info, "background");
                 setSystemInk(false);  // a system dialog over us: no ink, and the pen is not ours
                 background_ = true;
+                penReset(gestures);
+                if (Screen* s = visibleTop()) {
+                    caller_ = s;
+                    guard([&] { s->onBackground(*this); });
+                    caller_ = nullptr;
+                }
                 if (lifecycle_) lifecycle_(false);
                 break;
             case InputEvent::Kind::Resize:
@@ -330,10 +377,12 @@ void App::step(int timeout_ms) {
                 break;
             case InputEvent::Kind::Pen:
                 if (!background_) handlePen(e.pen, gestures);
+                else if (e.pen.type == PenEvent::Type::Leave) penNear_ = false;
                 break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");
                 background_ = false;
+                penReset(gestures);
                 redrawAll(Waveform::Full);
                 if (lifecycle_) lifecycle_(true);
                 break;

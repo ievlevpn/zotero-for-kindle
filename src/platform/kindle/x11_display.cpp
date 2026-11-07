@@ -38,23 +38,7 @@ public:
             log(LogLevel::Error, "cannot open X display");
             return;
         }
-        int scr = DefaultScreen(dpy_);
-        w_ = DisplayWidth(dpy_, scr);
-        h_ = DisplayHeight(dpy_, scr);
-        win_ = XCreateSimpleWindow(dpy_, RootWindow(dpy_, scr), 0, 0, w_, h_, 0, 0, WhitePixel(dpy_, scr));
-        // Wet ink draws only over the top window: the status bar would be it, so go full screen.
-        if (std::getenv("ZK_NO_WET_INK") == nullptr) wet_ = WetInk::open();
-        if (wet_) title_.replace(title_.find("PC:T"), 4, "PC:N");
-        XStoreName(dpy_, win_, title_.c_str());
-        XSelectInput(dpy_, win_, ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
-                                     Button1MotionMask | FocusChangeMask | VisibilityChangeMask | KeyPressMask);
-        XMapWindow(dpy_, win_);
-        gc_ = XCreateGC(dpy_, win_, 0, nullptr);
-        waitForFinalGeometry();
-        backing_.assign((size_t)w_ * h_, 0xff);
-        image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), 8, ZPixmap, 0, reinterpret_cast<char*>(backing_.data()),
-                              w_, h_, 8, w_);
-
+        // FBInk first: the device it names decides the window (wet ink needs it full screen).
         fb_ = fbink_open();
         std::memset(&cfg_, 0, sizeof cfg_);
         cfg_.is_quiet = true;
@@ -66,6 +50,27 @@ public:
             deviceName_ = state.device_name;
             ppi_ = state.screen_dpi;
         }
+        int scr = DefaultScreen(dpy_);
+        w_ = DisplayWidth(dpy_, scr);
+        h_ = DisplayHeight(dpy_, scr);
+        win_ = XCreateSimpleWindow(dpy_, RootWindow(dpy_, scr), 0, 0, w_, h_, 0, 0, WhitePixel(dpy_, scr));
+        // Wet ink draws only over the top window: the status bar would be it, so go full screen.
+        // Only where its protocol was checked (the 1st-gen Scribe); ZK_WET_INK=1 / ZK_NO_WET_INK=1.
+        const char* forced = std::getenv("ZK_WET_INK");
+        const bool wetInk = std::getenv("ZK_NO_WET_INK") == nullptr &&
+                            (deviceName_ == "Scribe" || (forced && std::strcmp(forced, "1") == 0));
+        if (wetInk) wet_ = WetInk::open();
+        if (wet_) title_.replace(title_.find("PC:T"), 4, "PC:N");
+        XStoreName(dpy_, win_, title_.c_str());
+        XSelectInput(dpy_, win_, ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
+                                     Button1MotionMask | FocusChangeMask | VisibilityChangeMask | KeyPressMask);
+        XMapWindow(dpy_, win_);
+        gc_ = XCreateGC(dpy_, win_, 0, nullptr);
+        waitForFinalGeometry();
+        backing_.assign((size_t)w_ * h_, 0xff);
+        image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), 8, ZPixmap, 0, reinterpret_cast<char*>(backing_.data()),
+                              w_, h_, 8, w_);
+
         {
             // The panel is portrait in its native orientation; the root window shows how it's turned now.
             const int rw = DisplayWidth(dpy_, scr), rh = DisplayHeight(dpy_, scr);
@@ -140,8 +145,8 @@ public:
     }
 
     bool systemInk() const override { return wet_ && wet_->connected(); }
-    void setSystemInk(bool on) override {
-        if (wet_) wet_->setMode(on ? WetInk::Mode::Pen : WetInk::Mode::Paused);
+    bool setSystemInk(bool on) override {
+        return !wet_ || wet_->setMode(on ? WetInk::Mode::Pen : WetInk::Mode::Paused);
     }
 
     bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
@@ -152,6 +157,11 @@ public:
             if (p[1].fd >= 0 && (p[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
                 log(LogLevel::Warn, "pen: the digitizer went away");
                 pen_.reset();
+                InputEvent e;  // whatever it was doing has ended
+                e.kind = InputEvent::Kind::Pen;
+                e.pen.type = PenEvent::Type::Leave;
+                e.pen.t_ms = nowMs();
+                out.push_back(e);
             }
         }
         // The pen first: its strokes are what must not wait (palm touches queued behind it are
@@ -320,6 +330,7 @@ private:
 std::unique_ptr<Display> makeDisplay() { return std::make_unique<X11Display>(); }
 
 void displayEmergencyExit() { WetInk::emergencyOff(); }
+void displayResetSystemInk() { WetInk::forceOff(); }
 
 const char* fontDir() { return "/usr/java/lib/fonts"; }
 

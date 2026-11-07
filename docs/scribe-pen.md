@@ -4,16 +4,21 @@ On a Kindle Scribe the pen writes on PDF pages. Strokes become Zotero `ink` anno
 highlights. Everywhere else (lists, menus, EPUB, where Zotero has no ink) the pen is a finger: a stroke
 the visible screen doesn't take (`Screen::onPen` returns false for its Down) is fed to the gestures.
 
-- Strokes made within 1.5 s of each other are one annotation; a page turn, a jump or the menus save
-  at once. Ink is black, 7 px wide on the screen (`ReaderScreen::kInkWidthPx`), stored in PDF points.
+- Strokes made within 1.5 s of each other are one annotation, up to 24 strokes, 2000 points or 10 s
+  (`kMaxInk*`); a page turn, a jump, the menus, another screen or the background save at once, and
+  closing the book waits (at most 3 s) until every stroke is an annotation (`flushInk`, `onClose`).
+  Strokes are simplified (Douglas-Peucker, 1 px). Ink is black, 7 px wide on the screen
+  (`ReaderScreen::kInkWidthPx`), stored in PDF points.
 - A quick pen touch that hardly moves, with nothing written before it, is a tap (menus, page turns);
   a dot right after writing stays ink (`kTapSlopPx`, `kTapMs`).
-- The eraser end deletes the ink annotations it crosses (and strokes not saved yet).
+- The eraser end takes away the strokes it crosses: an annotation is rewritten without them, and
+  deleted when none is left, unless it has a comment or tags (then a toast points to Notes).
 - Display panel, PDF, once the pen was used: "Pen: Write | Tap" (kept in the library). Tap makes the
   pen a finger on PDF pages too (turn pages, select text); holding the side button (Premium Pen) does
   the same for one stroke.
 - While the pen is near the screen (and 0.7 s after it leaves), touches are taken for the palm and
-  ignored (`App::kPalmMs`).
+  ignored (`App::kPalmMs`). "Near" lapses after 2 s without a pen event (`kPenStaleMs`), and the
+  background resets it, so a lost Leave can't block touch.
 - The line under the pen is drawn by the firmware's own "wet ink" (below), as in the Scribe's
   notebook. Without it (other devices, `ZK_NO_WET_INK=1`) the app draws the line itself, one A2
   update per 25 ms frame (`App::kInkFrameMs`): usable, but visibly behind the pen.
@@ -41,6 +46,10 @@ was used; `tools/wetink/wetink-ctl.c` sends single messages for experiments. It 
 Amazon and may change with firmware updates; the app falls back to drawing the line itself when the
 handler doesn't answer.
 
+Only on the 1st-gen Scribe (FBInk's device name "Scribe"), where the protocol was checked;
+`ZK_WET_INK=1` forces it elsewhere, `ZK_NO_WET_INK=1` turns it off. In landscape the app draws the line
+itself for now (the handler's canvas is registered portrait).
+
 What the app does:
 - Goes full screen (`PC:N` in the window title): the handler only draws over the top window, and the
   status bar would be it.
@@ -48,8 +57,12 @@ What the app does:
   handwriting, acknowledges every stroke and stroke context at once (the strokes themselves aren't
   used: the app reads the digitizer too), drains the handler's replies, and disconnects on exit.
   A session left open with unacknowledged strokes once took the Kindle framework down (a reboot fixed it):
-  fatal signals and the stall watchdog turn the handler off and end the session (`WetInk::emergencyOff`),
-  and a connect that isn't answered first ends a stale session, then retries.
+  fatal signals and the stall watchdog acknowledge waiting strokes, turn the handler off and end the
+  session (`WetInk::emergencyOff`). After an exit that skips all that (SIGKILL, the OOM killer) the
+  launcher runs `zotero --reset-system-ink`, which acts only if the app's session marker
+  (`/tmp/zk-wet-ink-session`) is still there: the firmware reader keeps a session of its own, and a
+  blind disconnect would end it. A connect that isn't answered within 0.5 s takes back everything it
+  posted (SysV semaphores outlive the app) and falls back to the app's own line.
 - Pauses wet ink while the app is in the background (a system dialog over it) and ignores the pen there.
 - Repaints where an ignored stroke (outside the page, or before wet ink paused) may have been inked.
 - Reads the raw digitizer: the handler's re-sent copy (`stylus-custom`, event5) goes quiet while wet

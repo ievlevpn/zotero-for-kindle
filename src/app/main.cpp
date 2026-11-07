@@ -195,6 +195,10 @@ int main(int argc, char** argv) {
     log(LogLevel::Info, "zotero %s starting (backend=%s)", ZK_VERSION, ZK_BACKEND);
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
+    if (argc > 1 && !std::strcmp(argv[1], "--reset-system-ink")) {  // the launcher, after a crash
+        displayResetSystemInk();
+        return 0;
+    }
     if (argc > 1 && !std::strcmp(argv[1], "--version")) {
         std::printf("zotero-for-kindle %s (%s)\n", ZK_VERSION, ZK_BACKEND);
         return 0;

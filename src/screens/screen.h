@@ -61,6 +61,13 @@ public:
     virtual void onSyncEvent(const SyncEvent&, Nav&) {}
     virtual void onShow(Nav&) {}
     virtual void onTick(Nav&) {}  // every loop iteration while visible (timers)
+    // Another screen now shows over this one (or another tab): it stays alive, but gets no ticks.
+    virtual void onHide(Nav&) {}
+    // The app went to the background (a system dialog, the screensaver), this screen visible.
+    virtual void onBackground(Nav&) {}
+    // Just before the screen goes (Back, a new root, the app closing): finish what must not be
+    // lost. May take a moment (bounded); the screen is still where it was.
+    virtual void onClose(Nav&) {}
     // Part of reading (the reader and its panels): turns to landscape when the user chose it.
     virtual bool isReading() const { return false; }
     // The window changed size (turned): lay out again. Most screens just do what showing does.

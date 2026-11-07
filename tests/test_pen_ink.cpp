@@ -13,6 +13,7 @@
 #include "screens/reader.h"
 #include "store/db.h"
 #include "ui/canvas.h"
+#include "ui/metrics.h"
 #include "ui/widgets.h"
 
 #include <nlohmann/json.hpp>
@@ -39,11 +40,15 @@ struct InkRig {
     FakeNav nav{lib};
     ItemRow row;
     std::unique_ptr<ReaderScreen> reader;
-    explicit InkRig(DocType type = DocType::Pdf) {
+    explicit InkRig(DocType type = DocType::Pdf, int renderDelayMs = 0) {
         fillFixtureLibrary(lib, 10);
         row = *lib.rowFor("IT000003");
-        reader = std::make_unique<ReaderScreen>(row, "book.pdf", type, [] {
-            return std::make_unique<RenderWorker>([](DocType) { return std::make_unique<FakeEngine>(); });
+        reader = std::make_unique<ReaderScreen>(row, "book.pdf", type, [renderDelayMs] {
+            return std::make_unique<RenderWorker>([renderDelayMs](DocType) {
+                auto e = std::make_unique<FakeEngine>();
+                e->delayMs = renderDelayMs;
+                return e;
+            });
         }, 6);
         nav.visible = reader.get();
         reader->onShow(nav);
@@ -412,4 +417,141 @@ TEST_CASE("pen ink: a quick pen touch with nothing written is a tap; a dot after
     rig.stroke({{390, 380}});
     CHECK(rig.reader->pendingInkStrokes() == 2);
     CHECK_FALSE(rig.reader->menusOpen());
+}
+
+// --- Review fixes (PR #1) ------------------------------------------------------------------
+
+TEST_CASE("pen ink: closing the book right after writing still saves the handwriting") {
+    InkRig rig(DocType::Pdf, 150);  // a slow page render keeps the worker busy
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.reader->onGesture(tapAt({1100, 700}), rig.nav);  // a turn: the worker renders, the ink waits
+    rig.reader->onClose(rig.nav);                         // Back, or the app closing
+    CHECK(rig.inks().size() == 1);
+}
+
+TEST_CASE("pen ink: erasing ink right after it was saved deletes it") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 400}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    // The page hasn't come back with the annotation yet: the eraser finds it all the same.
+    rig.stroke({{340, 380}, {340, 420}}, /*eraser*/ true);
+    CHECK(rig.inks().empty());
+}
+
+TEST_CASE("pen ink: the eraser takes one stroke out of an annotation, not the whole of it") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 400}});
+    rig.stroke({{300, 900}, {380, 900}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    rig.stroke({{340, 380}, {340, 420}}, /*eraser*/ true);
+    auto left = rig.inks();
+    REQUIRE(left.size() == 1);
+    const auto paths = nlohmann::json::parse(left[0].position)["paths"];
+    REQUIRE(paths.size() == 1);
+    CHECK(paths[0][1] == 900);
+    CHECK(left[0].dirty);
+}
+
+TEST_CASE("pen ink: handwriting with a comment isn't erased away; Notes deletes it") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 400}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    AnnotationRecord a = rig.inks()[0];
+    a.comment = "see chapter 2";
+    rig.lib.editAnnotation(a);
+    rig.stroke({{340, 380}, {340, 420}}, /*eraser*/ true);
+    CHECK(rig.inks().size() == 1);
+    REQUIRE_FALSE(rig.nav.toasts.empty());
+    CHECK(rig.nav.toasts.back() == "This handwriting has a comment or tags: delete it in Notes.");
+}
+
+TEST_CASE("pen ink: steady writing is cut into annotations of at most kMaxInkStrokes strokes") {
+    InkRig rig;
+    for (size_t i = 0; i < ReaderScreen::kMaxInkStrokes; ++i) {
+        const int y = 300 + static_cast<int>(i) * 20;
+        rig.stroke({{300, y}, {360, y}});
+        rig.nav.now += 200;  // no pause long enough to save
+    }
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+}
+
+TEST_CASE("pen ink: wet ink stays off in landscape for now") {
+    InkRig rig;
+    rig.nav.hasSystemInk = true;
+    rig.reader->onTick(rig.nav);
+    REQUIRE(rig.nav.systemInkOn);
+    ScopedMetrics turned(Metrics{2480, 1759, {0, 101}, 300, "Scribe"});  // the window turned
+    rig.reader->onResize(rig.nav);
+    rig.reader->onTick(rig.nav);
+    CHECK_FALSE(rig.nav.systemInkOn);
+}
+
+TEST_CASE("pen ink: a lost Leave doesn't block touch for good; the background resets the pen") {
+    FakeDisplay display;
+    FakeSync sync;
+    NoKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    auto s = std::make_unique<TouchCounter>();
+    TouchCounter* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    auto run = [&](int steps) {
+        for (int i = 0; i < steps; ++i) {
+            app.step(0);
+            now += 70;
+        }
+    };
+    display.pen(PenEvent::Type::Near, {600, 700}, now);  // ... and its Leave is lost
+    run(2);
+    now += App::kPenStaleMs + 10;
+    display.tap({200, 900}, now);
+    run(6);
+    CHECK(screen->gestures == 1);
+
+    display.pen(PenEvent::Type::Near, {600, 700}, now);
+    run(2);
+    display.lifecycle(InputEvent::Kind::Background);
+    display.lifecycle(InputEvent::Kind::Foreground);
+    run(3);
+    display.tap({200, 900}, now);
+    run(6);
+    CHECK(screen->gestures == 2);
+}
+
+TEST_CASE("pen ink: PDF ink lands where it was drawn on a rotated page, and up is up") {
+    UserError err;
+    for (const char* file : {"tests/data/pdf/sample.pdf", "tests/data/pdf/rotated.pdf"}) {
+        CAPTURE(file);
+        auto pdf = loadEngine(DocType::Pdf, EngineEnv{}, &err);
+        REQUIRE(pdf);
+        REQUIRE(pdf->open(file, &err));
+        const std::vector<std::vector<Point>> drawn{{{300, 120}, {360, 140}}, {{300, 1300}, {360, 1320}}};
+        auto placed = pdf->inkPosition(0, drawn, 4);
+        REQUIRE(placed);
+        AnnotationRecord a;
+        a.key = "INKROT01";
+        a.type = "ink";
+        a.color = "#000000";
+        a.position = placed->position;
+        auto boxes = pdf->highlights(0, {a});
+        REQUIRE(boxes.size() == 1);
+        REQUIRE(boxes[0].paths.size() == 2);
+        for (size_t i = 0; i < 2; ++i)
+            for (size_t j = 0; j < 2; ++j) {
+                CHECK(std::abs(boxes[0].paths[i][j].x - drawn[i][j].x) <= 1);
+                CHECK(std::abs(boxes[0].paths[i][j].y - drawn[i][j].y) <= 1);
+            }
+        if (std::string(file).find("sample") != std::string::npos) {
+            // An upright page: the stroke near the top of the screen is higher in PDF space (y up).
+            const auto pos = nlohmann::json::parse(placed->position);
+            CHECK(pos["paths"][0][1].get<double>() > pos["paths"][1][1].get<double>());
+        }
+    }
 }
