@@ -1,6 +1,7 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
-//   zotero --screenshot home OUT.png [--db PATH]   render a screen to a PNG and exit
+//   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe]
+//                                                  render a screen to a PNG and exit
 
 #include <chrono>
 #include <cstdlib>
@@ -101,6 +102,8 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     if (screen == "library") s = std::make_unique<LibraryScreen>(nullptr);
     if (screen == "collections") s = std::make_unique<CollectionsScreen>(nullptr);
     if (screen == "notes") s = std::make_unique<NotesScreen>();
+    if (screen == "settings") s = std::make_unique<SettingsScreen>(loadConfig(defaultPaths().configDir).value_or(Config{}),
+                                                                   [](Nav&) {});
     if (!s) {
         log(LogLevel::Error, "unknown screen %s", screen.c_str());
         return 2;
@@ -138,10 +141,9 @@ int main(int argc, char** argv) {
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
     if (argc > 1 && !std::strcmp(argv[1], "--version")) return 0;
-#ifndef ZK_KINDLE
-    for (int i = 1; i + 1 < argc; ++i)  // the desktop imitates a Kindle's window: --device pw5|scribe
+    // --device pw5|scribe: the window to imitate (the desktop; and --screenshot on any build).
+    for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--device")) setMetrics(!std::strcmp(argv[i + 1], "scribe") ? kScribe : kPw5);
-#endif
     if (argc > 1 && !std::strcmp(argv[1], "--list-fonts")) {  // what Display offers, and how long finding it takes
         const auto t0 = std::chrono::steady_clock::now();
         const auto fonts = readingFonts(readingFontDirs());
