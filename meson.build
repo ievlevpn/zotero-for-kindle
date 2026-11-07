@@ -128,6 +128,12 @@ screens_lib = static_library('zk-screens',
 
 screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep])
 
+app_lib = static_library('zk-app',
+  'src/app/app.cpp',
+  include_directories : ui_incs,
+  dependencies : [screens_dep, services_dep, sync_dep])
+app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep])
+
 if backend == 'kindle'
   fbink_lib = meson.get_compiler('cpp').find_library('fbink',
     dirs : meson.project_source_root() / 'build-deps/kindle/prefix/lib', static : true)
