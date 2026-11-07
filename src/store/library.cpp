@@ -854,10 +854,10 @@ std::optional<ReadingPosition> Library::readingPosition(const std::string& key) 
 
 void Library::setLocalPosition(const std::string& key, const std::string& value) {
     guarded([&] {
-        // To send whenever it differs from what Zotero has.
+        // To send whenever it differs from what Zotero has, unless the reader still has to ask.
         Stmt st = db_.prepare(
             "INSERT INTO reading_positions (attachmentKey, local, dirty) VALUES (?1, ?2, 1) "
-            "ON CONFLICT(attachmentKey) DO UPDATE SET local = ?2, dirty = (?2 != remote)");
+            "ON CONFLICT(attachmentKey) DO UPDATE SET local = ?2, dirty = (?2 != remote AND NOT remoteNew)");
         st.bind(1, key);
         st.bind(2, value);
         st.step();

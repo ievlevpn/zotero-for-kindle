@@ -36,6 +36,7 @@ struct RenderWorker::Impl {
         DocType type;
         Layout layout;
         DocPosition start;
+        std::string zoteroStart;
     };
     struct Entry {
         std::shared_ptr<const PageImage> image;
@@ -60,6 +61,7 @@ struct RenderWorker::Impl {
         Point from, to;
     };
     std::optional<PointRequest> selectRequest, hitRequest;
+    std::optional<std::pair<uint64_t, std::string>> placeRequest;
     uint64_t nextPointId = 1;
     std::deque<RenderEvent> events;
     // Worker-only state.
@@ -79,7 +81,7 @@ struct RenderWorker::Impl {
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
         return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
-               hitRequest;
+               hitRequest || placeRequest;
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
@@ -121,6 +123,7 @@ struct RenderWorker::Impl {
         ev.progress = pageCount > 1 ? static_cast<double>(page) / (pageCount - 1) : 1.0;
         ev.wordsLeftInChapter = wordsLeft(page);
         ev.position = engine->positionOfPage(page);
+        ev.zoteroPosition = engine->zoteroPosition(page);
         return ev;
     }
     void relaid(int page) {
@@ -161,7 +164,7 @@ void RenderWorker::Impl::run() {
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
-                           selectRequest || hitRequest;
+                           selectRequest || hitRequest || placeRequest;
                 });
             if (stop) break;
         }
@@ -188,6 +191,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<std::pair<uint64_t, std::string>> s;
     std::optional<std::vector<AnnotationRecord>> a;
     std::optional<PointRequest> sel, hit;
+    std::optional<std::pair<uint64_t, std::string>> place;
     uint64_t gen = 0;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -205,6 +209,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         selectRequest.reset();
         hit = hitRequest;
         hitRequest.reset();
+        place = std::move(placeRequest);
+        placeRequest.reset();
         gen = generation;
     }
     if (o) {
@@ -226,7 +232,10 @@ void RenderWorker::Impl::step(bool& postCurrent) {
             emit(std::move(ev));
             return;
         }
-        relaid(o->start.value.empty() ? 0 : engine->pageOf(o->start));
+        int first = o->start.value.empty() ? 0 : engine->pageOf(o->start);
+        if (o->start.value.empty() && !o->zoteroStart.empty())
+            if (const int p = engine->pageOfZoteroPosition(o->zoteroStart); p >= 0) first = p;
+        relaid(first);
         postCurrent = true;
     }
     if (!engine) return;
@@ -262,6 +271,18 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.requestId = hit->id;
         ev.page = hit->page;
         ev.annotationKey = engine->annotationAt(hit->page, hit->from, anns).value_or("");
+        emit(std::move(ev));
+    }
+    if (place) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Placed;
+        ev.requestId = place->first;
+        ev.page = engine->pageOfZoteroPosition(place->second);
+        ev.pageCount = pageCount;
+        if (ev.page >= 0) {
+            ev.chapter = engine->chapterAt(ev.page);
+            ev.progress = pageCount > 1 ? static_cast<double>(ev.page) / (pageCount - 1) : 1.0;
+        }
         emit(std::move(ev));
     }
     if (s) {
@@ -335,9 +356,9 @@ template <class F> void request(RenderWorker::Impl& impl, F&& change) {
 
 }  // namespace
 
-void RenderWorker::open(std::string path, DocType type, Layout layout, DocPosition start) {
+void RenderWorker::open(std::string path, DocType type, Layout layout, DocPosition start, std::string zoteroStart) {
     request(*impl_, [&] {
-        impl_->open = Impl::OpenRequest{std::move(path), type, layout, std::move(start)};
+        impl_->open = Impl::OpenRequest{std::move(path), type, layout, std::move(start), std::move(zoteroStart)};
         impl_->layout.reset();
         impl_->target = {};
         ++impl_->generation;
@@ -371,6 +392,15 @@ void RenderWorker::showAnnotation(AnnotationRecord a) {
         impl_->target = {Impl::Target::Kind::Annotation, 0, {}, std::move(a)};
         ++impl_->generation;
     });
+}
+
+uint64_t RenderWorker::placeZotero(std::string json) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextPointId++;
+        impl_->placeRequest = std::make_pair(id, std::move(json));
+    });
+    return id;
 }
 
 uint64_t RenderWorker::search(std::string query) {

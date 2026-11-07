@@ -81,6 +81,16 @@ public:
             }
         return out;
     }
+    // Zotero positions: the page number as text.
+    std::string zoteroPosition(int page) override { return std::to_string(page); }
+    int pageOfZoteroPosition(const std::string& v) override {
+        try {
+            const int p = std::stoi(v);
+            return p >= 0 && p < pageCount() ? p : -1;
+        } catch (...) {
+            return -1;
+        }
+    }
     int pageOfAnnotation(const AnnotationRecord& a) override {
         try {
             return a.pageLabel.empty() ? -1 : std::stoi(a.pageLabel);

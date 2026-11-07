@@ -211,8 +211,15 @@ void ReaderScreen::onShow(Nav& nav) {
     if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
     DocPosition start;
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
+    // Zotero's reading position: where to open a book never read here, or a question if the
+    // computer moved on since this Kindle last agreed with it.
+    std::string zoteroStart;
+    if (auto rp = nav.library().readingPosition(row_.attachmentKey)) {
+        if (start.value.empty()) zoteroStart = rp->remote;
+        else if (rp->remoteNew) placeAfterFirstPage_ = rp->remote;  // compared with the page we open on
+    }
     worker_ = makeWorker_();
-    worker_->open(path_, type_, layout_, start);
+    worker_->open(path_, type_, layout_, start, zoteroStart);
     if (openAt_) {
         turning_ = true;
         worker_->showAnnotation(*openAt_);
@@ -244,6 +251,21 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 break;
             case RenderEvent::Kind::HitAnnotation:
                 break;
+            case RenderEvent::Kind::Placed: {
+                if (e.requestId != placeId_) break;
+                placeId_ = 0;
+                if (e.page < 0 || e.page == page_) {  // nowhere here, or the page we're on: nothing to ask
+                    nav.library().answerRemotePosition(row_.attachmentKey, e.page >= 0);
+                    break;
+                }
+                const int pct = static_cast<int>(std::lround(e.progress * 100));
+                std::string text = type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(e.page + 1) + "."
+                                                         : "Your computer is at " + std::to_string(pct) + "%" +
+                                                               (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".";
+                question_ = PositionQuestion{e.page, text + "\nGo there?"};
+                if (visible) nav.damage(positionBannerRect(), Waveform::Ui);
+                break;
+            }
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
@@ -267,6 +289,11 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 turning_ = false;
                 layoutPending_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
+                if (!e.zoteroPosition.empty()) nav.library().setLocalPosition(row_.attachmentKey, e.zoteroPosition);
+                if (!placeAfterFirstPage_.empty()) {
+                    placeId_ = worker_->placeZotero(std::move(placeAfterFirstPage_));
+                    placeAfterFirstPage_.clear();
+                }
                 if (!visible) break;
                 Waveform w = Waveform::Quality;
                 if (turned && (++turns_ % flashEvery_ == 0 || chapterChanged)) w = Waveform::Full;
@@ -360,6 +387,12 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (menus_) {
         menus_->onGesture(g, nav);
         return;
+    }
+    if (question_) {
+        if (g.type == GestureType::Tap && positionGoRect().contains(g.pos)) return answerPosition(true, nav);
+        if (g.type == GestureType::Tap && positionStayRect().contains(g.pos)) return answerPosition(false, nav);
+        if (g.type == GestureType::Tap && positionBannerRect().contains(g.pos)) return;
+        answerPosition(false, nav);  // reading on is Stay; the gesture goes on below
     }
     if (editor_) {
         if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
@@ -636,7 +669,46 @@ void ReaderScreen::draw(Canvas& canvas) {
         drawText(cr, "Return saves", {kSans, 6, 400, false, kTertiary}, {n.x + 30, n.y + n.h - 56, n.w - 60, 40}, 1,
                  Align::Right);
     }
+    if (question_ && !menus_) {
+        const Rect b = positionBannerRect();
+        roundedRect(cr, b.x + 1.5, b.y + 1.5, b.w - 3, b.h - 3, 14);
+        gray(cr, 255);
+        cairo_fill_preserve(cr);
+        cairo_set_line_width(cr, 3);
+        gray(cr, kInk);
+        cairo_stroke(cr);
+        const Rect go = positionGoRect();
+        drawText(cr, question_->text, {kSans, 8, 500}, {b.x + 36, b.y + 30, go.x - b.x - 60, b.h - 50}, 2);
+        drawButton(cr, go, "Go", true);
+        drawButton(cr, positionStayRect(), "Stay", false);
+    }
     if (menus_) menus_->draw(canvas);
+}
+
+std::optional<std::string> ReaderScreen::positionQuestion() const {
+    if (!question_) return std::nullopt;
+    return question_->text;
+}
+
+Rect ReaderScreen::positionBannerRect() { return {kMargin / 2, 30, W() - kMargin, 190}; }
+Rect ReaderScreen::positionStayRect() {
+    const Rect b = positionBannerRect();
+    return {b.x + b.w - 30 - 180, b.y + (b.h - 96) / 2, 180, 96};
+}
+Rect ReaderScreen::positionGoRect() {
+    const Rect s = positionStayRect();
+    return {s.x - 24 - 180, s.y, 180, s.h};
+}
+
+void ReaderScreen::answerPosition(bool go, Nav& nav) {
+    if (!question_) return;
+    nav.library().answerRemotePosition(row_.attachmentKey, go);
+    if (go && worker_) {
+        turning_ = true;
+        worker_->show(question_->page);
+    }
+    question_.reset();
+    nav.damage(positionBannerRect(), Waveform::Ui);
 }
 
 }  // namespace zk

@@ -47,6 +47,13 @@ public:
     void setTwoColumns(bool on, Nav&);  // the Display panel's choice (kept in the settings)
     bool wantsKeyboard() const override;
 
+    // "Your computer is on page 47. Go there?" when Zotero's position moved elsewhere since this
+    // Kindle last agreed with it; Go jumps there, Stay (or reading on) keeps the Kindle's place.
+    std::optional<std::string> positionQuestion() const;
+    static Rect positionBannerRect();
+    static Rect positionGoRect();
+    static Rect positionStayRect();
+
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
     static Rect footerArea();  // the 60 px below it
 
@@ -127,6 +134,14 @@ private:
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
+    void answerPosition(bool go, Nav&);
+    uint64_t placeId_ = 0;  // where Zotero's newer position falls (a Placed event)
+    std::string placeAfterFirstPage_;  // Zotero's newer position, asked about once the book shows a page
+    struct PositionQuestion {
+        int page = 0;
+        std::string text;
+    };
+    std::optional<PositionQuestion> question_;
     int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
 };
 

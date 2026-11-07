@@ -18,7 +18,7 @@
 namespace zk {
 
 struct RenderEvent {
-    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation };
+    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
     std::shared_ptr<const PageImage> image;
@@ -33,6 +33,8 @@ struct RenderEvent {
     std::string annotationKey;           // HitAnnotation ("" if none)
     UserError error;                 // Error
     DocPosition position;            // of this page
+    std::string zoteroPosition;      // Page: this page in Zotero's terms (lastPageIndex), "" if none
+                                     // Placed: page (-1 if it can't be placed), chapter, progress
 };
 
 class RenderWorker {
@@ -44,7 +46,8 @@ public:
     RenderWorker(const RenderWorker&) = delete;
     RenderWorker& operator=(const RenderWorker&) = delete;
 
-    void open(std::string path, DocType, Layout, DocPosition start);
+    // `zoteroStart`: where to open when `start` is empty (Zotero's position, from another device).
+    void open(std::string path, DocType, Layout, DocPosition start, std::string zoteroStart = "");
     void setLayout(Layout, DocPosition keep);  // re-paginates; Opened again, at `keep`
     void show(int page);
     void showPosition(DocPosition);
@@ -55,6 +58,8 @@ public:
     uint64_t select(int page, Point from, Point to);
     // The annotation drawn under `p` on `page` (of those given to highlightsFor).
     uint64_t annotationAt(int page, Point p);
+    // Where a Zotero position (lastPageIndex) falls: a Placed event with this request id.
+    uint64_t placeZotero(std::string json);
     bool poll(RenderEvent&);  // UI thread, non-blocking
 
     // Waits (up to the timeout) for workers whose readers are gone to finish; before exit.
