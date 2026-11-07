@@ -10,6 +10,7 @@
 #include <string>
 
 #include "app/app.h"
+#include "docs/fonts.h"
 #include "app/paths.h"
 #include "app/lifecycle.h"
 #include "app/settings_store.h"
@@ -131,6 +132,14 @@ int main(int argc, char** argv) {
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
     if (argc > 1 && !std::strcmp(argv[1], "--version")) return 0;
+    if (argc > 1 && !std::strcmp(argv[1], "--list-fonts")) {  // what Display offers, and how long finding it takes
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto fonts = readingFonts(readingFontDirs());
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        for (const auto& f : fonts) std::printf("%s\n", f.c_str());
+        std::printf("%zu families in %.0f ms\n", fonts.size(), ms);
+        return 0;
+    }
     if (argc > 3 && !std::strcmp(argv[1], "--screenshot")) {
         std::string db = paths.dbPath;
         if (argc > 5 && !std::strcmp(argv[4], "--db")) db = argv[5];

@@ -105,3 +105,13 @@ TEST_CASE("display panel matches the reviewed golden") {
     r->draw(c);
     test::checkGolden(c, "tests/golden/display-panel.png");
 }
+
+TEST_CASE("fonts: from the Kindle's system fonts only its reading fonts are offered; added fonts all are") {
+    for (const char* f : {"Bookerly", "Amazon Ember", "Baskerville", "Caecilia Regular", "Futura", "Helvetica Neue LT",
+                          "OpenDyslexic", "Palatino"})
+        CHECK_MESSAGE(offeredFamily(f, true), f);
+    for (const char* f : {"Kindle Symbol", "STSong", "Noto Sans Tamil", "condensed", "Sunroom Mono", "Cadia Single",
+                          "Amazon Ember Bold", "Bookerly Display", "MT Chinese Surrogates"})
+        CHECK_FALSE_MESSAGE(offeredFamily(f, true), f);
+    CHECK(offeredFamily("Charter", false));  // dropped into /mnt/us/zotero/fonts
+}
