@@ -33,6 +33,7 @@ public:
     virtual Keyboard& keyboard() = 0;
     virtual int64_t nowMs() const = 0;
     virtual void quit() = 0;
+    virtual void restart() { quit(); }  // quit with exit code 75: Zotero.sh starts the app again (an update)
     virtual void toast(const std::string& text) = 0;  // a short message above the tab bar, ~3 s
     virtual const Screen* top() const = 0;            // the visible screen
     virtual void orientationChanged() {}               // the landscape setting changed: turn if needed

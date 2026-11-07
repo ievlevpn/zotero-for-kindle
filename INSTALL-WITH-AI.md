@@ -95,6 +95,12 @@ Write `zotero/config.json` on the Kindle (`userId` is a number):
 
 At its next start the app moves this file into protected system storage and deletes it from the USB drive.
 
+## Updating an existing install
+
+If `zotero/bin/zotero` is already on the Kindle, this is an update. From 0.2.0 on, the app updates itself: tell the
+user *Settings → Check for updates* is enough, unless they want you to copy the new release anyway. When copying,
+follow the rules above: keep `zotero.db`, `files/`, `cache/` and `log/`, and remove any `zotero/update/` folder.
+
 ## 6. Finish
 
 Eject the Kindle safely (`diskutil eject`, `gio mount -u`, or "Eject" in Windows), then tell the user:

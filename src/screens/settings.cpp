@@ -33,14 +33,23 @@ std::string mb(int64_t bytes) {
 
 }  // namespace
 
-SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount)
-    : config_(std::move(c)), changeAccount_(std::move(changeAccount)) {}
+SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount, Updater* updater,
+                               std::function<void(Nav&)> openUpdate)
+    : config_(std::move(c)), changeAccount_(std::move(changeAccount)), updater_(updater),
+      openUpdate_(std::move(openUpdate)) {}
 
 Rect SettingsScreen::accountRect() const { return {W() - kMargin - 240, kAccountY + 20, 240, 80}; }
 Rect SettingsScreen::intervalRect(int i) const { return {kMargin + i * 279, kIntervalY + 60, 259, 80}; }
 Rect SettingsScreen::toggleRect() const { return {W() - kMargin - 140, kHighlightsY, 140, 80}; }
 Rect SettingsScreen::flashMinusRect() const { return {W() - kMargin - 460, kFlashY + 10, 120, 80}; }
 Rect SettingsScreen::flashPlusRect() const { return {W() - kMargin - 120, kFlashY + 10, 120, 80}; }
+Rect SettingsScreen::updateRect() const { return {W() - kMargin - 420, kAboutY + 20, 420, 80}; }
+
+std::string SettingsScreen::updateLine() const {
+    if (!updateResult_.empty()) return updateResult_;
+    return "Version " + (updater_ ? updater_->current() : appVersion()).str() + " · open source (AGPL-3.0)";
+}
+
 Rect SettingsScreen::removeRect() const { return {kMargin, kStorageY + 80, W() - 2 * kMargin, 92}; }
 
 void SettingsScreen::load(Library& lib) {
@@ -106,14 +115,40 @@ void SettingsScreen::draw(Canvas& canvas) {
                 {flashMinusRect().x + 120, kFlashY + 10, flashPlusRect().x - flashMinusRect().x - 120, 80});
     hRule(cr, kAboutY - 30, kMargin, W() - kMargin);
 
-    drawText(cr, "About", label, {kMargin, kAboutY, w, 50}, 1);
-    drawText(cr, "Zotero for Kindle 0.3 · open source (AGPL-3.0)", value, {kMargin, kAboutY + 54, w, 50}, 1);
+    drawText(cr, "Zotero for Kindle", label, {kMargin, kAboutY, w - 460, 50}, 1);
+    drawText(cr, updateLine(), value, {kMargin, kAboutY + 54, w - 460, 100}, 2);
+    drawButton(cr, updateRect(), checking_ ? "Checking…" : "Check for updates", false);
+}
+
+void SettingsScreen::onTick(Nav& nav) {
+    if (!checking_ || !updater_) return;
+    using Phase = Updater::Status::Phase;
+    const Updater::Status st = updater_->status();
+    if (st.phase == Phase::Checking) return;
+    checking_ = false;
+    if (st.phase == Phase::UpToDate) {
+        updateResult_ = "You have the latest version.";
+    } else if (st.phase == Phase::Failed && !st.mustRestart) {
+        updateResult_ = st.error.message;
+    } else if (st.phase != Phase::Idle) {  // a newer release, or an update already under way
+        if (openUpdate_) openUpdate_(nav);
+    }
+    nav.damage({0, kAboutY - 10, W(), 200}, Waveform::Ui);
 }
 
 void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     if (headerBackRect().contains(g.pos)) {
         nav.pop();
+        return;
+    }
+    if (updateRect().contains(g.pos)) {
+        if (!updater_ || checking_) return;
+        updateResult_.clear();
+        updater_->reset();
+        updater_->check();
+        checking_ = true;
+        nav.damage({0, kAboutY - 10, W(), 200}, Waveform::Ui);
         return;
     }
     if (accountRect().contains(g.pos)) {

@@ -1,5 +1,5 @@
 project('zotero-kindle', 'c', 'cpp',
-  version : '0.1.0',
+  version : '0.2.0',
   license : 'AGPL-3.0-or-later',
   default_options : ['cpp_std=c++20', 'warning_level=2', 'buildtype=debugoptimized'])
 
@@ -102,6 +102,18 @@ sync_lib = static_library('zk-sync',
   dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep])
 sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep])
 
+# Updates (Plan 7): versions, signatures (Monocypher), checking, downloading, installing.
+monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
+  'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
+update_lib = static_library('zk-update',
+  'src/update/version.cpp', 'src/update/signature.cpp', 'src/update/manifest.cpp', 'src/update/release_check.cpp',
+  'src/update/download.cpp', 'src/update/install.cpp', 'src/update/updater.cpp',
+  include_directories : [inc, include_directories('third_party/monocypher', 'third_party', is_system : true)],
+  dependencies : [net_dep, sqlite_dep, miniz_dep],
+  link_with : monocypher_lib)
+update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], include_directories : inc,
+  dependencies : [net_dep, sqlite_dep, miniz_dep])
+
 
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
@@ -150,6 +162,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/notes.cpp',
   'src/screens/setup.cpp',
   'src/screens/settings.cpp',
+  'src/screens/update_screen.cpp',
   'src/screens/reader.cpp',
   'src/screens/reader_menus.cpp',
   'src/screens/contents.cpp',
@@ -157,9 +170,9 @@ screens_lib = static_library('zk-screens',
   'src/screens/book_search.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
-  dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
+  dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep])
 
-screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep])
 
 app_lib = static_library('zk-app',
   'src/app/stall_watchdog.cpp', 'src/app/app.cpp',
@@ -262,6 +275,10 @@ executable('zk-sync', 'src/app/zk_sync.cpp',
   include_directories : include_directories('third_party', is_system : true),
   dependencies : [sync_dep, docs_dep],
   install : true)
+
+executable('zk-sign', 'tools/zk_sign.cpp',
+  dependencies : [update_dep],
+  build_by_default : false)
 
 # The README's demo library (public-domain books only): tools/screenshots.sh.
 executable('zk-demo-library', 'tools/demo_library.cpp',

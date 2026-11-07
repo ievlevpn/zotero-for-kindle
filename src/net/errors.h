@@ -11,7 +11,7 @@ namespace zk {
 enum class ErrorKind {
     None, NoWifi, TailscaleDown, HostNotFound, HostNotAnswering, Certificate, WebDavLogin,
     NotOnServer, ApiKeyRejected, ApiKeyNoWrite, RateLimited, ServerError, DiskFull, Checksum,
-    Blocked, Other
+    Blocked, Other, Cancelled  // Cancelled: the user stopped it (an update download)
 };
 
 struct NetState {

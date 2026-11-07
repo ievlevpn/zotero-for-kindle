@@ -42,6 +42,7 @@ public:
     Keyboard& keyboard() override { return keyboardFake; }
     int64_t nowMs() const override { return now; }
     void quit() override { quitted = true; }
+    void restart() override { restarted = true; }
     void toast(const std::string& text) override { toasts.push_back(text); }
     const Screen* top() const override { return visible; }
     void orientationChanged() override { ++orientationChanges; }
@@ -60,6 +61,7 @@ public:
     int pops = 0, tab = -1;
     int64_t now = 1'000'000;
     bool quitted = false;
+    bool restarted = false;
 
 private:
     Library& lib_;

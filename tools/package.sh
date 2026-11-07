@@ -25,6 +25,6 @@ cp LICENSE "$Z/"
 chmod +x "$Z"/bin/* "$STAGE/documents/Zotero.sh"
 mkdir -p dist
 OUT="$PWD/dist/zotero-for-kindle.zip"  # one name for every release: a stable latest/ link
-rm -f "$OUT"
+rm -f "$OUT" dist/update.json dist/update.json.sig  # a new zip: any old signature is for another one
 (cd "$STAGE" && zip -qr -X "$OUT" zotero documents)
 echo "$OUT ($(du -h "$OUT" | cut -f1))"

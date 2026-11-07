@@ -344,7 +344,7 @@ void App::flush() {
 
 int App::run() {
     while (!quit_ && !closed_ && visibleTop()) step(50);
-    return 0;
+    return exitCode_;
 }
 
 }  // namespace zk
