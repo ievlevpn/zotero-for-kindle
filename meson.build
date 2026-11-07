@@ -209,6 +209,8 @@ if fs.exists(deps_prefix / 'lib' / 'libcrengine.a')
   shared_module('zk-epub',
     'src/docs/epub/epub_module.cpp',
     'src/docs/epub/epub_engine.cpp',
+    'src/docs/epub/cfi.cpp',
+    'third_party/pugixml/pugixml.cpp',
     'src/docs/shade.cpp',
     name_prefix : 'lib', name_suffix : 'so',
     include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],

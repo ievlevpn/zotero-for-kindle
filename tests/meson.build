@@ -36,8 +36,17 @@ test_sources = files(
   '../src/platform/kindle/x_touch.cpp',
 )
 
+# EPUB internals (CFI) are tested directly on the desktop, where crengine shares Homebrew's
+# freetype/harfbuzz with pango.
+if backend == 'desktop' and is_variable('engine_crengine_dep')
+  test_sources += files('test_cfi.cpp', '../src/docs/epub/cfi.cpp')
+  test_extra_deps = [engine_crengine_dep, declare_dependency(include_directories : include_directories('../third_party/pugixml', is_system : true))]
+else
+  test_extra_deps = []
+endif
+
 zk_tests = executable('zk-tests', test_sources,
-  dependencies : [core_dep, ui_dep, screens_dep, doctest_dep, sqlite_dep, miniz_dep, md5_dep, net_dep, store_dep, zotero_dep, sync_dep, services_dep, app_dep, docs_dep])
+  dependencies : [core_dep, ui_dep, screens_dep, doctest_dep, sqlite_dep, miniz_dep, md5_dep, net_dep, store_dep, zotero_dep, sync_dep, services_dep, app_dep, docs_dep] + test_extra_deps)
 
 test('zk-tests', zk_tests, workdir : meson.project_source_root(),
   env : ['ZK_LIB_DIR=' + meson.project_build_root()])
