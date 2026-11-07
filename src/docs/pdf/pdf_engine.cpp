@@ -6,6 +6,7 @@ extern "C" {
 }
 
 #include <nlohmann/json.hpp>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +29,8 @@ bool PdfEngine::open(const std::string& path, UserError* err) {
         if (err) *err = UserError{ErrorKind::Other, msg, std::move(detail)};
         return false;
     };
+    if (::access(path.c_str(), R_OK) != 0)
+        return fail("This book's file is missing. Open it from the library to download it again.", path);
     if (!ctx_) return fail("This PDF can't be opened.", "no MuPDF context");
     fz_document* doc = nullptr;
     fz_try(ctx_) { doc = fz_open_document(ctx_, path.c_str()); }

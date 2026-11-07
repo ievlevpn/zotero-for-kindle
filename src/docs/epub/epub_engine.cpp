@@ -6,6 +6,7 @@
 #include <sys/stat.h>
 
 #include <nlohmann/json.hpp>
+#include <unistd.h>
 
 #include <fstream>
 #include <mutex>
@@ -111,6 +112,8 @@ bool EpubEngine::open(const std::string& path, UserError* err) {
         if (err) *err = UserError{ErrorKind::Other, msg, detail};
         return false;
     };
+    if (::access(path.c_str(), R_OK) != 0)
+        return fail("This book's file is missing. Open it from the library to download it again.", path.c_str());
     if (!looksLikeZip(path)) return fail("This EPUB is damaged and can't be opened.", "not a zip file");
     if (hasDrm(path)) return fail("This EPUB is protected (DRM) and can't be opened.", "META-INF/encryption.xml");
     view_ = std::make_unique<LVDocView>(8);

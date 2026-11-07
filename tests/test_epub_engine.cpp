@@ -140,3 +140,29 @@ TEST_CASE("epub engine: Russian text hyphenates with the dictionary (golden)") {
     cairo_surface_mark_dirty(c.surface());
     test::checkGolden(c, "tests/golden/epub-ru-p30.png");
 }
+
+TEST_CASE("epub engine: a book with a non-Latin file name opens") {
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / "zk-ru-name";
+    fs::create_directories(dir);
+    const fs::path copy = dir / "Соловьёв и Ларионов.epub";
+    fs::copy_file("tests/data/epub/alice-gutenberg-epub3.epub", copy, fs::copy_options::overwrite_existing);
+    UserError e;
+    auto engine = loadEngine(DocType::Epub, env(), &e);
+    REQUIRE(engine);
+    CHECK_MESSAGE(engine->open(copy.string(), &e), e.message << " / " << e.details);
+    CHECK(engine->pageCount() > 10);
+    fs::remove_all(dir);
+}
+
+TEST_CASE("engines: a missing file says it's missing, not damaged") {
+    UserError e;
+    auto epub = loadEngine(DocType::Epub, env(), &e);
+    REQUIRE(epub);
+    CHECK_FALSE(epub->open("/tmp/zk-no-such-book.epub", &e));
+    CHECK(e.message == "This book's file is missing. Open it from the library to download it again.");
+    auto pdf = loadEngine(DocType::Pdf, EngineEnv{}, &e);
+    REQUIRE(pdf);
+    CHECK_FALSE(pdf->open("/tmp/zk-no-such-paper.pdf", &e));
+    CHECK(e.message == "This book's file is missing. Open it from the library to download it again.");
+}
