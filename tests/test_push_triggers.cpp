@@ -220,6 +220,7 @@ TEST_CASE("push triggers: the reader asks for a push after a highlight and a syn
     };
     REQUIRE(tickUntil([&] { return reader.ready(); }));
     reader.onGesture(Gesture{GestureType::LongPress, {130, 210}, {130, 210}}, nav);
+    reader.onGesture(Gesture{GestureType::LongPressUp, {130, 210}, {130, 210}}, nav);
     REQUIRE(tickUntil([&] { return reader.annotationBar() != nullptr; }));
     CHECK(nav.syncFake.pushes == 0);
     reader.onGesture(tapAt(reader.annotationBar()->buttonRect(0).center()), nav);  // Highlight

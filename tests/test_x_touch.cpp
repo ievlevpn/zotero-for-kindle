@@ -48,6 +48,7 @@ TEST_CASE("x touch: a recorded Kindle hold becomes a long press, not a tap") {
             out.insert(out.end(), more.begin(), more.end());
         }
     }
-    REQUIRE(out.size() == 1);
+    REQUIRE(out.size() == 2);
     CHECK(out[0].type == GestureType::LongPress);
+    CHECK(out[1].type == GestureType::LongPressUp);
 }

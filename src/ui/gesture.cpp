@@ -62,6 +62,8 @@ std::vector<Gesture> GestureRecognizer::feed(const TouchEvent& e) {
                 out.push_back({GestureType::DragEnd, e.pos, start_});
                 break;
             case State::LongPressed:
+                out.push_back({GestureType::LongPressUp, start_, start_});
+                break;
             case State::Idle:
                 break;
         }

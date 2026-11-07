@@ -283,6 +283,48 @@ int main(int argc, char** argv) {
             a->comment = "[zk-test] edited on the Kindle side";
             lib.editAnnotation(*a);
             std::printf("edited %s: blue, comment \"%s\" (run push to send it)\n", a->key.c_str(), a->comment.c_str());
+        } else if (cmd == "select-bench" && (args.size() == 2 || args.size() == 3)) {
+            // How long a selection takes on this device, as a reader drag asks for it.
+            auto a = lib.attachment(args[1]);
+            if (!a || a->state != AttachmentRecord::State::Local) {
+                std::printf("error: %s is not downloaded.\n", args[1].c_str());
+                return 1;
+            }
+            UserError err;
+            auto engine = loadEngine(a->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub, kEngineEnv, &err);
+            if (!engine || !engine->open(a->localPath, &err)) {
+                printError(err);
+                return 1;
+            }
+            const int page = args.size() == 3 ? std::atoi(args[2].c_str()) : 20;
+            auto ms = [](auto t0) {
+                return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            };
+            Point from{0, 0};
+            const auto first = std::chrono::steady_clock::now();
+            for (int y = 150; y < 1300 && !from.x; y += 20)
+                for (int x : {200, 350, 500})
+                    if (auto s = engine->select(page, {x, y}, {x, y}); s && !s->text.empty()) {
+                        from = {x, y};
+                        break;
+                    }
+            if (!from.x) {
+                std::printf("error: no text on page %d\n", page + 1);
+                return 1;
+            }
+            std::printf("first selection on the page (chapter not yet parsed): %.1f ms\n", ms(first));
+            double total = 0, worst = 0;
+            const int steps = 20;
+            for (int i = 1; i <= steps; ++i) {
+                const auto t0 = std::chrono::steady_clock::now();
+                auto s = engine->select(page, from, {from.x + 30 * i, from.y + 25 * i});
+                const double t = ms(t0);
+                total += t;
+                worst = std::max(worst, t);
+                if (i == steps && s) std::printf("last selection: %zu chars, %zu rects\n", s->text.size(), s->rects.size());
+            }
+            std::printf("select on page %d: %d drag steps, mean %.1f ms, worst %.1f ms\n", page + 1, steps, total / steps,
+                        worst);
         } else if (cmd == "annotate-test-cleanup") {
             int n = 0;
             for (const auto& row : lib.recentAnnotations(0, 1'000'000)) {

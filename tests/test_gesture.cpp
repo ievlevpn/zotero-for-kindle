@@ -27,7 +27,7 @@ TEST_CASE("gesture: small jitter is a single tap at the down position") {
     CHECK(out[0].pos == Point{100, 100});
 }
 
-TEST_CASE("gesture: holding still emits one long press and nothing on release") {
+TEST_CASE("gesture: holding still emits one long press, and lifting the finger says so") {
     GestureRecognizer g;
     std::vector<Gesture> out;
     append(out, g.feed(down(300, 300, 0)));
@@ -35,7 +35,10 @@ TEST_CASE("gesture: holding still emits one long press and nothing on release") 
     append(out, g.tick(700));
     REQUIRE(out.size() == 1);
     CHECK(out[0].type == GestureType::LongPress);
-    CHECK(g.feed(up(302, 301, 800)).empty());
+    auto lifted = g.feed(up(302, 301, 800));
+    REQUIRE(lifted.size() == 1);
+    CHECK(lifted[0].type == GestureType::LongPressUp);
+    CHECK(lifted[0].start == Point{300, 300});
 }
 
 TEST_CASE("gesture: long press then move becomes a drag") {

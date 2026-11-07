@@ -1,5 +1,6 @@
 #include "screens/reader.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include <nlohmann/json.hpp>
@@ -289,7 +290,12 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
                 return;
             case GestureType::DragEnd:
                 selDragging_ = false;
+                selReleased_ = true;
                 requestSelection(g.pos);
+                return;
+            case GestureType::LongPressUp:
+                selReleased_ = true;
+                if (selection_ && !bar_) showBar(nav);
                 return;
             case GestureType::Tap:
                 if (bar_ && bar_->rect().contains(g.pos)) onBarTap(g.pos, nav);
@@ -366,7 +372,7 @@ void ReaderScreen::refreshHighlights(Nav& nav) {
 void ReaderScreen::startSelection(Point at, Nav&) {
     if (!worker_ || page_ < 0) return;
     selecting_ = true;
-    selDragging_ = false;
+    selDragging_ = selReleased_ = false;
     selAnchor_ = at;
     requestSelection(at);
 }
@@ -379,7 +385,7 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
     if (!selecting_ || e.requestId != selPending_ || e.page != page_) return;
     if (!e.selection) {
         if (!selection_) selecting_ = false;    // the long-press wasn't on text
-        else if (!selDragging_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
+        else if (!selDragging_ && selReleased_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
         return;
     }
     if (e.selection->text.empty()) {
@@ -388,10 +394,15 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
         nav.toast("This page has no selectable text.");
         return;
     }
-    const Rect before = selection_ ? boundsOf(selection_->rects) : Rect{};
+    // Repaint only the lines that changed: a long selection grows a word at a time.
+    const std::vector<Rect> before = selection_ ? selection_->rects : std::vector<Rect>{};
     selection_ = e.selection;
-    nav.damage(before.united(boundsOf(selection_->rects)), Waveform::Fast);
-    if (!selDragging_) showBar(nav);
+    auto has = [](const std::vector<Rect>& v, const Rect& r) { return std::find(v.begin(), v.end(), r) != v.end(); };
+    for (const Rect& r : before)
+        if (!has(selection_->rects, r)) nav.damage(r, Waveform::Fast);
+    for (const Rect& r : selection_->rects)
+        if (!has(before, r)) nav.damage(r, Waveform::Fast);
+    if (!selDragging_ && selReleased_ && !bar_) showBar(nav);
 }
 
 void ReaderScreen::showBar(Nav& nav) {

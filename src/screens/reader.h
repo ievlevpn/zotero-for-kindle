@@ -112,7 +112,7 @@ private:
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
     // Selection mode.
-    bool selecting_ = false, selDragging_ = false;
+    bool selecting_ = false, selDragging_ = false, selReleased_ = false;  // the bar waits for the finger to lift
     Point selAnchor_;
     uint64_t selPending_ = 0;
     std::optional<Selection> selection_;

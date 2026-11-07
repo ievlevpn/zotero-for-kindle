@@ -51,9 +51,10 @@ struct Rig {
         return false;
     }
     void gesture(GestureType t, Point p, Point start) { reader->onGesture(Gesture{t, p, start}, nav); }
-    // Long-press on a word, and wait for the bar.
+    // Long-press on a word, lift the finger, and wait for the bar.
     void select(Point p) {
         gesture(GestureType::LongPress, p, p);
+        gesture(GestureType::LongPressUp, p, p);
         REQUIRE(waitFor([&] { return reader->annotationBar() != nullptr; }));
     }
     void tap(Point p) { reader->onGesture(tapAt(p), nav); }
@@ -85,11 +86,14 @@ TEST_CASE("annotation bar: a long-press selects the word under the finger with a
     CHECK(rig.reader->annotationBar()->rect().intersected({100, 200, 100, 50}).empty());
 }
 
-TEST_CASE("annotation bar: dragging after the long-press extends the selection; the bar returns on release") {
+TEST_CASE("annotation bar: while the finger is down there is no bar; dragging extends, lifting shows it") {
     Rig rig;
-    rig.select({130, 210});
+    rig.gesture(GestureType::LongPress, {130, 210}, {130, 210});
+    REQUIRE(rig.waitFor([&] { return rig.reader->selection().has_value(); }));
+    for (int i = 0; i < 20; ++i) rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->annotationBar() == nullptr);  // not while the finger is still down
     rig.gesture(GestureType::DragStart, {200, 215}, {130, 210});
-    CHECK(rig.reader->annotationBar() == nullptr);  // out of the way while dragging
+    CHECK(rig.reader->annotationBar() == nullptr);
     rig.gesture(GestureType::DragMove, {450, 270}, {130, 210});
     REQUIRE(rig.waitFor([&] { return rig.reader->selection() && rig.reader->selection()->text.find("p0w13") != std::string::npos; }));
     rig.gesture(GestureType::DragEnd, {450, 270}, {130, 210});
@@ -211,11 +215,27 @@ TEST_CASE("annotation bar: a long-press away from text does nothing") {
     REQUIRE(rig.waitFor([&] { return rig.reader->page() == 1; }));
 }
 
+TEST_CASE("annotation bar: a drag repaints only the lines that changed") {
+    Rig rig;
+    rig.gesture(GestureType::LongPress, {130, 210}, {130, 210});
+    rig.gesture(GestureType::DragStart, {200, 215}, {130, 210});
+    rig.gesture(GestureType::DragMove, {650, 330}, {130, 210});  // three lines
+    REQUIRE(rig.waitFor([&] { return rig.reader->selection() && rig.reader->selection()->rects.size() == 3; }));
+    rig.nav.damages.clear();
+    rig.gesture(GestureType::DragMove, {750, 330}, {130, 210});  // the last line grows by a word
+    REQUIRE(rig.waitFor([&] { return rig.reader->selection()->rects.back().w == 700; }));
+    std::vector<Rect> fast;
+    for (const auto& d : rig.nav.damages)
+        if (d.waveform == Waveform::Fast) fast.push_back(d.rect);
+    REQUIRE_FALSE(fast.empty());
+    for (const Rect& r : fast) CHECK(r.y >= 320);  // the first two lines are not repainted
+}
+
 TEST_CASE("annotation bar matches the reviewed golden") {
     Rig rig;
     rig.reader->turnTo(99);  // the fake's pages are gray (page % 200): a light one
     REQUIRE(rig.waitFor([&] { return rig.reader->page() == 99; }));
-    rig.select({130, 210});
+    rig.gesture(GestureType::LongPress, {130, 210}, {130, 210});
     rig.gesture(GestureType::DragStart, {200, 215}, {130, 210});
     rig.gesture(GestureType::DragMove, {650, 330}, {130, 210});
     rig.gesture(GestureType::DragEnd, {650, 330}, {130, 210});
