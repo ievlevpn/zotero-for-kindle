@@ -65,8 +65,6 @@ private:
     std::optional<int> dragPage_;
     bool lightOpen_ = false;
     bool displayOpen_ = false;
-    std::vector<std::string> fonts_;
-    bool fontsLoaded_ = false;
     size_t fontOffset_ = 0;
     bool onDisplayTap(Point, Nav&);
     void drawDisplay(cairo_t*);

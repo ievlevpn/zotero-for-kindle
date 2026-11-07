@@ -32,7 +32,9 @@ public:
     // Collects worker events; when not visible (a pushed panel is on top) the page state is kept
     // but nothing is repainted — the reader redraws when it is shown again.
     void pumpEvents(Nav&, bool visible);
-    void setSearchListener(std::function<void(const std::vector<SearchHit>&)> f) { searchListener_ = std::move(f); }
+    void setSearchListener(std::function<void(uint64_t requestId, const std::vector<SearchHit>&)> f) {
+        searchListener_ = std::move(f);
+    }
     bool showsTabBar() const override { return false; }
     bool wantsKeyboard() const override;
 
@@ -86,7 +88,8 @@ private:
     int64_t wordsLeft_ = 0;
     double progress_ = 0;
     bool turning_ = false;
-    std::function<void(const std::vector<SearchHit>&)> searchListener_;
+    std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
+    bool layoutPending_ = false;  // re-paginating: page numbers are about to change
 };
 
 }  // namespace zk

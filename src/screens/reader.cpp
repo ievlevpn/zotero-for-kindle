@@ -118,7 +118,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 if (visible) nav.redrawAll(Waveform::Quality);
                 break;
             case RenderEvent::Kind::SearchResults:
-                if (searchListener_) searchListener_(e.hits);
+                if (searchListener_) searchListener_(e.requestId, e.hits);
                 break;
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
@@ -133,6 +133,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 wordsLeft_ = e.wordsLeftInChapter;
                 position_ = e.position;
                 turning_ = false;
+                layoutPending_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
                 if (!visible) break;
                 Waveform w = Waveform::Quality;
@@ -152,7 +153,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
 }
 
 void ReaderScreen::turn(int delta, Nav&) {
-    if (!worker_ || page_ < 0) return;
+    if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
     const int target = page_ + delta;
     if (target < 0 || (pageCount_ > 0 && target >= pageCount_)) return;
     turning_ = true;
@@ -160,7 +161,7 @@ void ReaderScreen::turn(int delta, Nav&) {
 }
 
 void ReaderScreen::turnTo(int page) {
-    if (!worker_) return;
+    if (!worker_ || layoutPending_) return;
     turning_ = true;
     worker_->show(page);
 }
@@ -180,7 +181,8 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
 }
 
 void ReaderScreen::applyLayout(const Layout& l, Nav& nav) {
-    if (l == layout_ || !worker_) return;
+    if (l == layout_ || !worker_ || !ready()) return;
+    layoutPending_ = true;
     layout_ = l;
     saveLayout(nav.library(), row_.key, l);
     worker_->setLayout(l, position_);
@@ -214,7 +216,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     if (g.pos.x > kW * 7 / 10) turn(+1, nav);
     else if (g.pos.x < kW * 3 / 10) turn(-1, nav);
-    else openMenus(nav);
+    else if (ready()) openMenus(nav);  // not before the first page: nothing to act on yet
 }
 
 void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {

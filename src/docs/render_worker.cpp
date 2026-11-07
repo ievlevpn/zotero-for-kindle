@@ -1,243 +1,367 @@
 #include "docs/render_worker.h"
 
 #include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <map>
+#include <mutex>
+#include <optional>
+#include <thread>
+
+#include "core/log.h"
 
 namespace zk {
 
-RenderWorker::RenderWorker(Factory make) : make_(std::move(make)) { thread_ = std::thread([this] { run(); }); }
+namespace {
+
+constexpr int kWordsLookahead = 30;  // pages counted exactly for "time left"; the rest estimated
+
+// Threads still running (their readers may be gone): main waits for them before exiting.
+std::mutex g_liveMutex;
+std::condition_variable g_liveCv;
+int g_live = 0;
+
+}  // namespace
+
+struct RenderWorker::Impl {
+    struct Target {
+        enum class Kind { None, Page, Position, Annotation } kind = Kind::None;
+        int page = 0;
+        DocPosition position;
+        AnnotationRecord annotation;
+    };
+    struct OpenRequest {
+        std::string path;
+        DocType type;
+        Layout layout;
+        DocPosition start;
+    };
+    struct Entry {
+        std::shared_ptr<const PageImage> image;
+        std::vector<HighlightBox> highlights;
+    };
+
+    Factory make;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool stop = false;
+    // Requests (guarded by mutex).
+    std::optional<OpenRequest> open;
+    std::optional<std::pair<Layout, DocPosition>> layout;
+    Target target;
+    uint64_t generation = 0;
+    std::optional<std::pair<uint64_t, std::string>> search;
+    uint64_t nextSearchId = 1;
+    std::optional<std::vector<AnnotationRecord>> annotations;
+    std::deque<RenderEvent> events;
+    // Worker-only state.
+    std::unique_ptr<DocumentEngine> engine;
+    std::vector<AnnotationRecord> anns;
+    std::vector<TocEntry> toc;
+    std::map<int, Entry> cache;
+    std::map<int, int64_t> wordsOnPage;
+    int current = -1;
+    int pageCount = 0;
+    std::atomic<int64_t> wordPagesCounted{0};
+
+    void emit(RenderEvent e) {
+        std::lock_guard<std::mutex> lock(mutex);
+        events.push_back(std::move(e));
+    }
+    bool hasNewWork() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return stop || open || layout || target.kind != Target::Kind::None || search || annotations;
+    }
+    Entry& entry(int page) {
+        auto it = cache.find(page);
+        if (it != cache.end()) return it->second;
+        Entry e;
+        e.image = std::make_shared<const PageImage>(engine->render(page));
+        e.highlights = engine->highlights(page, anns);
+        return cache[page] = std::move(e);
+    }
+    int64_t words(int page) {
+        auto it = wordsOnPage.find(page);
+        if (it != wordsOnPage.end()) return it->second;
+        ++wordPagesCounted;
+        return wordsOnPage[page] = engine->wordsBetween(page, page + 1);
+    }
+    // Words from `page` to the next chapter: exact for the next pages, estimated beyond.
+    int64_t wordsLeft(int page) {
+        int next = pageCount;
+        for (const auto& t : toc)
+            if (t.page > page) {
+                next = t.page;
+                break;
+            }
+        const int exactEnd = std::min(next, page + kWordsLookahead);
+        int64_t sum = 0;
+        for (int p = page; p < exactEnd; ++p) sum += words(p);
+        if (next > exactEnd && exactEnd > page) sum += sum * (next - exactEnd) / (exactEnd - page);
+        return sum;
+    }
+    RenderEvent pageEvent(int page) {
+        Entry& e = entry(page);
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Page;
+        ev.page = page;
+        ev.pageCount = pageCount;
+        ev.image = e.image;
+        ev.highlights = e.highlights;
+        ev.chapter = engine->chapterAt(page);
+        ev.progress = pageCount > 1 ? static_cast<double>(page) / (pageCount - 1) : 1.0;
+        ev.wordsLeftInChapter = wordsLeft(page);
+        ev.position = engine->positionOfPage(page);
+        return ev;
+    }
+    void relaid(int page) {
+        cache.clear();
+        wordsOnPage.clear();
+        toc = engine->toc();
+        std::sort(toc.begin(), toc.end(), [](const TocEntry& a, const TocEntry& b) { return a.page < b.page; });
+        pageCount = engine->pageCount();
+        current = std::clamp(page, 0, std::max(0, pageCount - 1));
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Opened;
+        ev.page = current;
+        ev.pageCount = pageCount;
+        ev.toc = toc;
+        emit(std::move(ev));
+    }
+    void fail(const char* what) {
+        log(LogLevel::Error, "render worker: %s", what);
+        engine.reset();
+        cache.clear();
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Error;
+        ev.error = UserError{ErrorKind::Other, "This book can't be shown (it may be damaged or too large).", what};
+        emit(std::move(ev));
+    }
+    void run();
+    void step(bool& postCurrent);
+};
+
+void RenderWorker::Impl::run() {
+    bool postCurrent = false;
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            const bool prerenderLeft = engine && current >= 0 &&
+                                       ((current + 1 < pageCount && !cache.count(current + 1)) ||
+                                        (current > 0 && !cache.count(current - 1)));
+            if (!postCurrent && !prerenderLeft)
+                cv.wait(lock, [&] {
+                    return stop || open || layout || target.kind != Target::Kind::None || search || annotations;
+                });
+            if (stop) break;
+        }
+        try {
+            step(postCurrent);
+        } catch (const std::exception& e) {
+            postCurrent = false;
+            fail(e.what());
+        } catch (...) {
+            postCurrent = false;
+            fail("unknown error");
+        }
+    }
+    try {
+        engine.reset();  // engine teardown (crengine may write its cache) on this thread, not the UI's
+    } catch (...) {
+    }
+}
+
+void RenderWorker::Impl::step(bool& postCurrent) {
+    std::optional<OpenRequest> o;
+    std::optional<std::pair<Layout, DocPosition>> l;
+    Target t;
+    std::optional<std::pair<uint64_t, std::string>> s;
+    std::optional<std::vector<AnnotationRecord>> a;
+    uint64_t gen = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        o = std::move(open);
+        open.reset();
+        l = std::move(layout);
+        layout.reset();
+        t = std::move(target);
+        target = {};
+        s = std::move(search);
+        search.reset();
+        a = std::move(annotations);
+        annotations.reset();
+        gen = generation;
+    }
+    if (o) {
+        engine = make(o->type);
+        if (!engine) {
+            RenderEvent ev;
+            ev.kind = RenderEvent::Kind::Error;
+            ev.error = UserError{ErrorKind::Other, "This book can't be opened.", "no engine"};
+            emit(std::move(ev));
+            return;
+        }
+        engine->setLayout(o->layout);
+        UserError err;
+        if (!engine->open(o->path, &err)) {
+            engine.reset();
+            RenderEvent ev;
+            ev.kind = RenderEvent::Kind::Error;
+            ev.error = err;
+            emit(std::move(ev));
+            return;
+        }
+        relaid(o->start.value.empty() ? 0 : engine->pageOf(o->start));
+        postCurrent = true;
+    }
+    if (!engine) return;
+    if (a) {
+        anns = std::move(*a);
+        for (auto& [p, e] : cache) e.highlights = engine->highlights(p, anns);
+        postCurrent = true;
+    }
+    if (l) {
+        engine->setLayout(l->first);
+        relaid(l->second.value.empty() ? current : engine->pageOf(l->second));
+        postCurrent = true;
+    }
+    if (t.kind != Target::Kind::None) {
+        int page = current;
+        if (t.kind == Target::Kind::Page) page = t.page;
+        else if (t.kind == Target::Kind::Position) page = engine->pageOf(t.position);
+        else if (const int p = engine->pageOfAnnotation(t.annotation); p >= 0) page = p;
+        current = std::clamp(page, 0, std::max(0, pageCount - 1));
+        postCurrent = true;
+    }
+    if (s) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::SearchResults;
+        ev.requestId = s->first;
+        ev.hits = engine->search(s->second, 100);
+        emit(std::move(ev));
+    }
+    if (postCurrent) {
+        RenderEvent ev = pageEvent(current);
+        postCurrent = false;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (generation != gen) return;  // overtaken while rendering: don't post
+        }
+        emit(std::move(ev));
+        for (auto it = cache.begin(); it != cache.end();)
+            it = std::abs(it->first - current) > 1 ? cache.erase(it) : std::next(it);
+        return;
+    }
+    // Idle: pre-render the next page, then the previous one, unless something new arrives.
+    for (int p : {current + 1, current - 1}) {
+        if (hasNewWork()) break;
+        if (p >= 0 && p < pageCount && !cache.count(p)) entry(p);
+    }
+}
+
+RenderWorker::RenderWorker(Factory make) : impl_(std::make_shared<Impl>()) {
+    impl_->make = std::move(make);
+    {
+        std::lock_guard<std::mutex> lock(g_liveMutex);
+        ++g_live;
+    }
+    std::thread([impl = impl_] {
+        impl->run();
+        {
+            std::lock_guard<std::mutex> lock(g_liveMutex);
+            --g_live;
+        }
+        g_liveCv.notify_all();
+    }).detach();
+}
 
 RenderWorker::~RenderWorker() {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stop_ = true;
+        std::lock_guard<std::mutex> lock(impl_->mutex);
+        impl_->stop = true;
     }
-    cv_.notify_all();
-    thread_.join();
+    impl_->cv.notify_all();
+    // No join: the thread holds the shared state and exits after its current engine call.
 }
 
-void RenderWorker::open(std::string path, DocType type, Layout layout, DocPosition start) {
+void RenderWorker::waitForAll(int timeoutMs) {
+    std::unique_lock<std::mutex> lock(g_liveMutex);
+    g_liveCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [] { return g_live == 0; });
+}
+
+int64_t RenderWorker::wordPagesCounted() const { return impl_->wordPagesCounted; }
+
+namespace {
+
+// Changes a request under the lock, then wakes the worker.
+template <class F> void request(RenderWorker::Impl& impl, F&& change) {
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        open_ = OpenRequest{std::move(path), type, layout, std::move(start)};
-        layout_.reset();
-        target_ = {};
-        ++generation_;
+        std::lock_guard<std::mutex> lock(impl.mutex);
+        change();
     }
-    cv_.notify_all();
+    impl.cv.notify_all();
+}
+
+}  // namespace
+
+void RenderWorker::open(std::string path, DocType type, Layout layout, DocPosition start) {
+    request(*impl_, [&] {
+        impl_->open = Impl::OpenRequest{std::move(path), type, layout, std::move(start)};
+        impl_->layout.reset();
+        impl_->target = {};
+        ++impl_->generation;
+    });
 }
 
 void RenderWorker::setLayout(Layout layout, DocPosition keep) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        layout_ = std::make_pair(layout, std::move(keep));
-        target_ = {};
-        ++generation_;
-    }
-    cv_.notify_all();
+    request(*impl_, [&] {
+        impl_->layout = std::make_pair(layout, std::move(keep));
+        impl_->target = {};
+        ++impl_->generation;
+    });
 }
 
 void RenderWorker::show(int page) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        target_ = {Target::Kind::Page, page, {}, {}};
-        ++generation_;
-    }
-    cv_.notify_all();
+    request(*impl_, [&] {
+        impl_->target = {Impl::Target::Kind::Page, page, {}, {}};
+        ++impl_->generation;
+    });
 }
 
 void RenderWorker::showPosition(DocPosition pos) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        target_ = {Target::Kind::Position, 0, std::move(pos), {}};
-        ++generation_;
-    }
-    cv_.notify_all();
+    request(*impl_, [&] {
+        impl_->target = {Impl::Target::Kind::Position, 0, std::move(pos), {}};
+        ++impl_->generation;
+    });
 }
 
 void RenderWorker::showAnnotation(AnnotationRecord a) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        target_ = {Target::Kind::Annotation, 0, {}, std::move(a)};
-        ++generation_;
-    }
-    cv_.notify_all();
+    request(*impl_, [&] {
+        impl_->target = {Impl::Target::Kind::Annotation, 0, {}, std::move(a)};
+        ++impl_->generation;
+    });
 }
 
-void RenderWorker::search(std::string query) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        search_ = std::move(query);
-    }
-    cv_.notify_all();
+uint64_t RenderWorker::search(std::string query) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextSearchId++;
+        impl_->search = std::make_pair(id, std::move(query));
+    });
+    return id;
 }
 
 void RenderWorker::highlightsFor(std::vector<AnnotationRecord> anns) {
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        annotations_ = std::move(anns);
-    }
-    cv_.notify_all();
+    request(*impl_, [&] { impl_->annotations = std::move(anns); });
 }
 
 bool RenderWorker::poll(RenderEvent& out) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (events_.empty()) return false;
-    out = std::move(events_.front());
-    events_.pop_front();
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (impl_->events.empty()) return false;
+    out = std::move(impl_->events.front());
+    impl_->events.pop_front();
     return true;
-}
-
-void RenderWorker::emit(RenderEvent e) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    events_.push_back(std::move(e));
-}
-
-bool RenderWorker::hasNewWork() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return stop_ || open_ || layout_ || target_.kind != Target::Kind::None || search_ || annotations_;
-}
-
-RenderWorker::Entry& RenderWorker::entry(int page) {
-    auto it = cache_.find(page);
-    if (it != cache_.end()) return it->second;
-    Entry e;
-    e.image = std::make_shared<const PageImage>(engine_->render(page));
-    e.highlights = engine_->highlights(page, anns_);
-    return cache_[page] = std::move(e);
-}
-
-RenderEvent RenderWorker::pageEvent(int page) {
-    Entry& e = entry(page);
-    RenderEvent ev;
-    ev.kind = RenderEvent::Kind::Page;
-    ev.page = page;
-    ev.pageCount = pageCount_;
-    ev.image = e.image;
-    ev.highlights = e.highlights;
-    ev.chapter = engine_->chapterAt(page);
-    ev.progress = pageCount_ > 1 ? static_cast<double>(page) / (pageCount_ - 1) : 1.0;
-    int nextChapter = pageCount_;
-    for (const auto& t : toc_)
-        if (t.page > page) {
-            nextChapter = t.page;
-            break;
-        }
-    ev.wordsLeftInChapter = engine_->wordsBetween(page, nextChapter);
-    ev.position = engine_->positionOfPage(page);
-    return ev;
-}
-
-// After open or re-pagination: tell the reader, and make `page` current.
-void RenderWorker::relaid(int page) {
-    cache_.clear();
-    toc_ = engine_->toc();
-    std::sort(toc_.begin(), toc_.end(), [](const TocEntry& a, const TocEntry& b) { return a.page < b.page; });
-    pageCount_ = engine_->pageCount();
-    current_ = std::clamp(page, 0, std::max(0, pageCount_ - 1));
-    RenderEvent ev;
-    ev.kind = RenderEvent::Kind::Opened;
-    ev.page = current_;
-    ev.pageCount = pageCount_;
-    ev.toc = engine_->toc();
-    emit(std::move(ev));
-}
-
-void RenderWorker::run() {
-    bool postCurrent = false;
-    for (;;) {
-        std::optional<OpenRequest> open;
-        std::optional<std::pair<Layout, DocPosition>> layout;
-        Target target;
-        std::optional<std::string> search;
-        std::optional<std::vector<AnnotationRecord>> anns;
-        uint64_t generation = 0;
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            const bool prerenderLeft =
-                engine_ && current_ >= 0 && ((current_ + 1 < pageCount_ && !cache_.count(current_ + 1)) ||
-                                             (current_ > 0 && !cache_.count(current_ - 1)));
-            if (!postCurrent && !prerenderLeft)
-                cv_.wait(lock, [&] {
-                    return stop_ || open_ || layout_ || target_.kind != Target::Kind::None || search_ || annotations_;
-                });
-            if (stop_) return;
-            open = std::move(open_);
-            open_.reset();
-            layout = std::move(layout_);
-            layout_.reset();
-            target = std::move(target_);
-            target_ = {};
-            search = std::move(search_);
-            search_.reset();
-            anns = std::move(annotations_);
-            annotations_.reset();
-            generation = generation_;
-        }
-
-        if (open) {
-            engine_ = make_(open->type);
-            UserError err;
-            if (!engine_) {
-                emit({RenderEvent::Kind::Error, 0, 0, nullptr, {}, {}, 0, 0, {}, {},
-                      UserError{ErrorKind::Other, "This book can't be opened.", "no engine"}, {}});
-                continue;
-            }
-            engine_->setLayout(open->layout);
-            if (!engine_->open(open->path, &err)) {
-                engine_.reset();
-                RenderEvent ev;
-                ev.kind = RenderEvent::Kind::Error;
-                ev.error = err;
-                emit(std::move(ev));
-                continue;
-            }
-            relaid(open->start.value.empty() ? 0 : engine_->pageOf(open->start));
-            postCurrent = true;
-        }
-        if (!engine_) continue;
-        if (anns) {
-            anns_ = std::move(*anns);
-            for (auto& [p, e] : cache_) e.highlights = engine_->highlights(p, anns_);
-            postCurrent = true;  // repaint with the new highlights
-        }
-        if (layout) {
-            engine_->setLayout(layout->first);
-            relaid(engine_->pageOf(layout->second));
-            postCurrent = true;
-        }
-        if (target.kind != Target::Kind::None) {
-            int page = current_;
-            if (target.kind == Target::Kind::Page) page = target.page;
-            else if (target.kind == Target::Kind::Position) page = engine_->pageOf(target.position);
-            else if (const int p = engine_->pageOfAnnotation(target.annotation); p >= 0) page = p;
-            current_ = std::clamp(page, 0, std::max(0, pageCount_ - 1));
-            postCurrent = true;
-        }
-        if (search) {
-            RenderEvent ev;
-            ev.kind = RenderEvent::Kind::SearchResults;
-            ev.hits = engine_->search(*search, 100);
-            emit(std::move(ev));
-        }
-        if (postCurrent) {
-            RenderEvent ev = pageEvent(current_);
-            postCurrent = false;
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (generation_ != generation) continue;  // overtaken while rendering: don't post
-            }
-            emit(std::move(ev));
-            // Keep only the neighbourhood.
-            for (auto it = cache_.begin(); it != cache_.end();)
-                it = std::abs(it->first - current_) > 1 ? cache_.erase(it) : std::next(it);
-            continue;
-        }
-        // Idle: pre-render the next page, then the previous one, unless something new arrives.
-        for (int p : {current_ + 1, current_ - 1}) {
-            if (hasNewWork()) break;
-            if (p >= 0 && p < pageCount_ && !cache_.count(p)) entry(p);
-        }
-    }
 }
 
 }  // namespace zk

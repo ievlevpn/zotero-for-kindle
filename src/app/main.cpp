@@ -241,5 +241,6 @@ int main(int argc, char** argv) {
     log(LogLevel::Info, "zotero exiting");
     if (service) service->stop();
     keyboard->hide();
+    RenderWorker::waitForAll(3000);  // readers already gone; let their engines finish and close
     return rc;
 }

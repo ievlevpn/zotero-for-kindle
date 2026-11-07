@@ -47,7 +47,8 @@ std::unique_ptr<DocumentEngine> loadEngine(DocType type, const EngineEnv& env, U
     std::string why = std::string(name) + " not found";
     for (const auto& d : dirs) {
         const fs::path p = d / name;
-        if (!fs::exists(p)) continue;
+        std::error_code ec;
+        if (!fs::exists(p, ec)) continue;
         // Loaded once and kept for the process lifetime (engines may be created again).
         void* h = dlopen(p.c_str(), RTLD_NOW | RTLD_LOCAL);
         if (!h) {

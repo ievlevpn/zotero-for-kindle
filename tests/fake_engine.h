@@ -18,9 +18,13 @@ public:
     int chapterEvery = 10;
     int delayMs = 0;
     bool failOpen = false;
+    int openDelayMs = 0;
+    bool throwOnRender = false;
+    std::atomic<int64_t> wordPagesCounted{0};  // pages whose words were counted
     std::atomic<int> renders{0};
 
     bool open(const std::string&, UserError* err) override {
+        if (openDelayMs) std::this_thread::sleep_for(std::chrono::milliseconds(openDelayMs));
         if (failOpen && err) *err = UserError{ErrorKind::Other, "This EPUB is damaged and can't be opened.", "fake"};
         return !failOpen;
     }
@@ -28,6 +32,7 @@ public:
     int pageCount() override { return static_cast<int>(pages * 9 / layout.sizePt); }
     PageImage render(int page) override {
         ++renders;
+        if (throwOnRender) throw std::bad_alloc();
         if (delayMs) std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
         PageImage img;
         img.width = layout.width;
@@ -69,7 +74,10 @@ public:
             return -1;
         }
     }
-    int64_t wordsBetween(int from, int to) override { return static_cast<int64_t>(to - from) * 300; }
+    int64_t wordsBetween(int from, int to) override {
+        wordPagesCounted += to - from;
+        return static_cast<int64_t>(to - from) * 300;
+    }
 
     Layout layout;
 };

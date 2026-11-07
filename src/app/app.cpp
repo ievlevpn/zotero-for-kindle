@@ -23,6 +23,14 @@ App::App(Display& display, Library& lib, SyncControl& sync, Keyboard& keyboard, 
     : display_(display), lib_(lib), sync_(&sync), keyboard_(keyboard), clock_(clock ? std::move(clock) : steadyMs),
       canvas_(display.width(), display.height()) {}
 
+App::~App() {
+    while (!graveyard_.empty()) graveyard_.pop_back();
+    for (int t = 0; t < kTabs; ++t) {
+        const int tab = (tab_ + t) % kTabs;  // the visible tab first
+        while (!stacks_[tab].empty()) stacks_[tab].pop_back();
+    }
+}
+
 void App::setRoot(int tab, std::unique_ptr<Screen> s) {
     stacks_[tab].clear();
     stacks_[tab].push_back(std::move(s));
@@ -214,7 +222,7 @@ void App::step(int timeout_ms) {
     deferred_.clear();
     for (auto& f : deferred) guard(f);
     flush();
-    graveyard_.clear();
+    while (!graveyard_.empty()) graveyard_.pop_back();  // newest (topmost) first
 }
 
 void App::flush() {

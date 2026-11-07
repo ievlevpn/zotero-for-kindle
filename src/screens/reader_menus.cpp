@@ -65,11 +65,9 @@ Rect ReaderMenus::spacingRect(int i) {
 bool ReaderMenus::showsTextOptions() const { return reader_.type() != DocType::Pdf; }
 
 const std::vector<std::string>& ReaderMenus::fonts() {
-    if (!fontsLoaded_) {
-        fonts_ = readingFonts(readingFontDirs());
-        fontsLoaded_ = true;
-    }
-    return fonts_;
+    // Scanning fonts reads every file with FreeType: once per process, not per menu.
+    static const std::vector<std::string> all = readingFonts(readingFontDirs());
+    return all;
 }
 
 bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {

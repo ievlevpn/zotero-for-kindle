@@ -16,7 +16,8 @@ const Rect kField{kMargin + 70, 30, kW - 2 * kMargin - 70, 92};
 }  // namespace
 
 BookSearchScreen::BookSearchScreen(ReaderScreen& r) : reader_(r) {
-    reader_.setSearchListener([this](const std::vector<SearchHit>& hits) {
+    reader_.setSearchListener([this](uint64_t id, const std::vector<SearchHit>& hits) {
+        if (id != requestId_) return;
         hits_ = hits;
         searching_ = false;
         gotResults_ = true;
@@ -95,7 +96,7 @@ void BookSearchScreen::onKey(const KeyEvent& k, Nav& nav) {
         searching_ = true;
         searched_ = true;
         hits_.clear();
-        reader_.worker()->search(field_.text());
+        requestId_ = reader_.worker()->search(field_.text());
         nav.damage({0, kHeaderH, kW, areaBottom_ - kHeaderH}, Waveform::Quality);
         return;
     }

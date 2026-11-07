@@ -10,8 +10,11 @@ D=build-kindle/dist  # stripped by tools/build-kindle.sh
 [ -d "$D" ] || D=build-kindle
 scp -q "$D/zotero" "$D/zk-sync" "$@" "$KINDLE:/mnt/us/zotero/bin/"
 ls "$D"/libzk-*.so >/dev/null 2>&1 && scp -q "$D"/libzk-*.so "$KINDLE:/mnt/us/zotero/lib/"
-ssh "$KINDLE" 'mkdir -p /mnt/us/zotero/cache /mnt/us/zotero/fonts; [ -d /mnt/us/zotero/share/crengine/hyph ] || echo "warning: crengine data missing in /mnt/us/zotero/share/crengine"'
-rsync -a third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gui/data/epub.css third_party/crengine/cr3gui/data/html5.css "$KINDLE:/mnt/us/zotero/share/crengine/" 2>/dev/null || true
+ssh "$KINDLE" 'mkdir -p /mnt/us/zotero/cache /mnt/us/zotero/fonts /mnt/us/zotero/share/crengine'
+# crengine's hyphenation dictionaries and CSS (scp: the Kindle has no rsync).
+scp -q -r third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gui/data/epub.css \
+    third_party/crengine/cr3gui/data/html5.css "$KINDLE:/mnt/us/zotero/share/crengine/"
+ssh "$KINDLE" '[ -f /mnt/us/zotero/share/crengine/hyph/English_US.pattern ] || { echo "error: crengine data not installed" >&2; exit 1; }'
 scp -q assets/launcher/icon.png "$KINDLE:/mnt/us/zotero/share/icon.png"
 scp -q assets/launcher/Zotero.sh "$KINDLE:/mnt/us/documents/Zotero.sh"
 ssh "$KINDLE" 'chmod +x /mnt/us/zotero/bin/* /mnt/us/documents/Zotero.sh; [ -f /mnt/us/zotero/share/cacert.pem ] || echo "warning: /mnt/us/zotero/share/cacert.pem missing (HTTPS will fail)"'

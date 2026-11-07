@@ -35,7 +35,10 @@ bool PdfEngine::open(const std::string& path, UserError* err) {
     fz_document* doc = nullptr;
     fz_try(ctx_) { doc = fz_open_document(ctx_, path.c_str()); }
     fz_catch(ctx_) { return fail("This PDF is damaged and can't be opened.", fz_caught_message(ctx_)); }
-    if (fz_needs_password(ctx_, doc)) {
+    int needsPassword = 0;
+    fz_try(ctx_) { needsPassword = fz_needs_password(ctx_, doc); }
+    fz_catch(ctx_) { needsPassword = 0; }
+    if (needsPassword) {
         fz_drop_document(ctx_, doc);
         return fail("This PDF is password-protected and can't be opened.", "needs password");
     }
@@ -65,6 +68,7 @@ bool PdfEngine::fit(int page, double& scale, double& dx, double& dy) {
     fz_rect r = fz_empty_rect;
     bool ok = true;
     fz_page* p = nullptr;
+    fz_var(p);
     fz_try(ctx_) {
         p = fz_load_page(ctx_, doc_, page);
         r = fz_bound_page(ctx_, p);
@@ -150,21 +154,25 @@ std::string PdfEngine::chapterAt(int page) {
 }
 
 std::string PdfEngine::pageText(int page) {
-    std::string text;
     fz_stext_page* st = nullptr;
     fz_buffer* buf = nullptr;
+    fz_var(st);
+    fz_var(buf);
     fz_try(ctx_) {
         st = fz_new_stext_page_from_page_number(ctx_, doc_, page, nullptr);
         buf = fz_new_buffer_from_stext_page(ctx_, st);
-        unsigned char* data = nullptr;
-        const size_t n = fz_buffer_storage(ctx_, buf, &data);
-        text.assign(reinterpret_cast<char*>(data), n);
     }
-    fz_always(ctx_) {
+    fz_catch(ctx_) {
         fz_drop_buffer(ctx_, buf);
         fz_drop_stext_page(ctx_, st);
+        return {};
     }
-    fz_catch(ctx_) { text.clear(); }
+    // Copy out after fz_try: a C++ allocation must not throw inside MuPDF's setjmp scope.
+    unsigned char* data = nullptr;
+    const size_t n = fz_buffer_storage(ctx_, buf, &data);
+    std::string text(reinterpret_cast<char*>(data), n);
+    fz_drop_buffer(ctx_, buf);
+    fz_drop_stext_page(ctx_, st);
     return text;
 }
 
@@ -233,6 +241,7 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
     // PDF user space (origin bottom-left) -> MuPDF page space (origin top-left), per the page.
     fz_matrix userToPage = fz_identity;
     fz_page* p = nullptr;
+    fz_var(p);
     fz_try(ctx_) {
         p = fz_load_page(ctx_, doc_, page);
         if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) {

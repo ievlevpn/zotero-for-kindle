@@ -38,6 +38,7 @@ private:
     TextField field_;
     std::vector<SearchHit> hits_;
     bool searching_ = false, searched_ = false, gotResults_ = false;
+    uint64_t requestId_ = 0;  // results for any other request (an earlier query, another screen) are ignored
     int areaBottom_ = 1547;
 };
 
