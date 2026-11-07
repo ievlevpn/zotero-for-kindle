@@ -3,11 +3,15 @@
 // (i % 200) so tests can tell pages apart; chapters every `chapterEvery` pages; optional delay.
 // Positions are "pos:<k>" where k = page × layout.sizePt × 10 — changing the size moves a
 // position to another page, like re-pagination.
+// Text: lines of 10 words, each word a 100×50 box from x = 100, lines every 60 px from y = 200
+// (8 lines); word n of a page is "p<page>w<n>".
 
 #include "docs/document.h"
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <stdexcept>
 #include <thread>
 
 namespace zk::test {
@@ -20,6 +24,8 @@ public:
     bool failOpen = false;
     int openDelayMs = 0;
     bool throwOnRender = false;
+    bool throwOnSelect = false;
+    bool selectRoundTrips = true;
     std::atomic<int64_t> wordPagesCounted{0};  // pages whose words were counted
     std::atomic<int> renders{0};
 
@@ -77,6 +83,34 @@ public:
     int64_t wordsBetween(int from, int to) override {
         wordPagesCounted += to - from;
         return static_cast<int64_t>(to - from) * 300;
+    }
+
+    std::optional<Selection> select(int page, Point from, Point to) override {
+        if (throwOnSelect) throw std::runtime_error("select");
+        auto word = [](Point p) -> int {
+            const int col = (p.x - 100) / 100, line = (p.y - 200) / 60;
+            if (p.x < 100 || p.y < 200 || col > 9 || line > 7 || (p.y - 200) % 60 >= 50) return -1;
+            return line * 10 + col;
+        };
+        int a = word(from), b = word(to);
+        if (a < 0) return std::nullopt;
+        if (b < 0) b = a;
+        if (b < a) std::swap(a, b);
+        Selection s;
+        for (int w = a; w <= b; ++w) {
+            s.text += (w == a ? "" : " ") + std::string("p") + std::to_string(page) + "w" + std::to_string(w);
+            const Rect box{100 + (w % 10) * 100, 200 + (w / 10) * 60, 100, 50};
+            if (!s.rects.empty() && s.rects.back().y == box.y) s.rects.back() = s.rects.back().united(box);
+            else s.rects.push_back(box);
+        }
+        s.position = R"({"fake":)" + std::to_string(page) + R"(,"from":)" + std::to_string(a) + R"(,"to":)" +
+                     std::to_string(b) + "}";
+        char sort[32];
+        std::snprintf(sort, sizeof sort, "%05d|%08d", page, a);
+        s.sortIndex = sort;
+        s.pageLabel = std::to_string(page);
+        s.roundTrips = selectRoundTrips;
+        return s;
     }
 
     Layout layout;

@@ -271,4 +271,8 @@ int64_t EpubEngine::wordsBetween(int fromPage, int toPage) {
     return words;
 }
 
+std::optional<Selection> EpubEngine::select(int, Point, Point) {
+    return std::nullopt;  // Plan 5 Task 5
+}
+
 }  // namespace zk

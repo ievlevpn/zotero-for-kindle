@@ -280,4 +280,8 @@ int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
     return words;
 }
 
+std::optional<Selection> PdfEngine::select(int, Point, Point) {
+    return std::nullopt;  // Plan 5 Task 6
+}
+
 }  // namespace zk
