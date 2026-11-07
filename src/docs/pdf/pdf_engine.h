@@ -41,17 +41,29 @@ public:
 
 private:
     // Column view (design 2026-11-08): the engine's pages are views of the PDF's pages.
+    // The document's: its text area (sample pages' median width; their highest top and lowest
+    // bottom) and columns.
     struct Columns {
         bool analysed = false, text = false;
         int columns = 1;
         float x[3] = {0, 0, 0};  // column edges, page space: x[0]..x[1] (and x[1]..x[2])
         float top = 0, bottom = 0;
     };
+    // Per layout: how many slices a column takes (the same on every page).
     struct Slices {
         int count = 1;
-        float height[2] = {0, 0}, step[2] = {0, 0};  // per column, page space
-        int width = 0, screenHeight = 0;               // the layout they are for
+        int width = 0, screenHeight = 0;  // the layout they are for
     };
+    // Per page: the document's columns moved to where this page's text is (mirrored margins) and
+    // grown to hold all of it; each column's slices (a page too tall for them is shown a little
+    // smaller, never cut).
+    struct PageViews {
+        float x[3] = {0, 0, 0};
+        float top = 0;
+        float width[2] = {0, 0}, height[2] = {0, 0}, step[2] = {0, 0};  // a slice's, per column
+    };
+    const PageViews& pageViews(int pdfPage);
+    bool textBox(int pdfPage, float box[4]);  // the page's text lines' extent
     int pdfPages();
     bool columnsOn();
     int src(int page) { return page / viewsPerPage(); }
@@ -81,6 +93,8 @@ private:
     bool tocLoaded_ = false;
     std::map<int, std::array<float, 4>> contentBoxes_;
     Columns columns_;
+    std::map<int, PageViews> pageViews_;              // per layout
+    std::map<int, std::array<float, 4>> textBoxes_;  // per document
     std::map<int, int64_t> pageWords_;  // per PDF page
     Slices slices_;
 };

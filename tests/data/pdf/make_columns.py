@@ -45,3 +45,19 @@ for page in range(1, 4):
             c.drawString(72, H - 72 - line * 13, label + filler(78 - len(label)))
     c.showPage()
 c.save()
+
+# mirrored.pdf: a book with mirrored margins, 6 pages of 432 x 648 pt: odd pages' text at
+# x 51-328, even pages' at x 95-372 (the inner margin is wider). Each line starts "M<page>-<line>"
+# and ends "E<page>-<line>" so a cut at either edge shows. Pages 1-5 have 34 lines; page 6 runs
+# lower, 40 lines, as a page with a long footnote does.
+PW, PH = 432, 648
+c = canvas.Canvas("tests/data/pdf/mirrored.pdf", pagesize=(PW, PH))
+for page in range(1, 7):
+    x = 51 if page % 2 else 95
+    c.setFont(FONT, 9)
+    lines = 40 if page == 6 else 34
+    for line in range(1, lines + 1):
+        head, tail = f"M{page}-{line:02d} ", f" E{page}-{line:02d}"
+        c.drawString(x, PH - 50 - line * 13.5, head + filler(51 - len(head) - len(tail)) + tail)
+    c.showPage()
+c.save()

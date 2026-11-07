@@ -162,3 +162,19 @@ TEST_CASE("pdf columns: the words of a page are shared among its views") {
     CHECK(e->wordsBetween(views, 2 * views) == doctest::Approx(page).epsilon(0.02));
     CHECK(e->wordsBetween(views, views + 1) == doctest::Approx(static_cast<double>(page) / views).epsilon(0.05));
 }
+
+TEST_CASE("pdf columns: every line is whole on some view of its page, mirrored margins and a page that runs lower") {
+    auto e = openPdf("mirrored.pdf", true);
+    const int views = e->viewsPerPage();
+    for (int page = 1; page <= 6; ++page) {
+        std::string all;
+        for (int v = 0; v < views; ++v) all += textOf(*e, (page - 1) * views + v) + "\n";
+        for (int line = 1; line <= (page == 6 ? 40 : 34); ++line) {
+            char head[16], tail[16];
+            std::snprintf(head, sizeof head, "M%d-%02d", page, line);
+            std::snprintf(tail, sizeof tail, "E%d-%02d", page, line);
+            CHECK_MESSAGE(has(all, head), head);
+            CHECK_MESSAGE(has(all, tail), tail);
+        }
+    }
+}

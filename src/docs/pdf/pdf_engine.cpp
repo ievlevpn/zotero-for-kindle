@@ -153,7 +153,8 @@ void PdfEngine::analyseColumns() {
     } else {
         columns_.text = true;
     }
-    const float x0 = median(bx0), y0 = median(by0), x1 = median(bx1), y1 = median(by1);
+    const float x0 = median(bx0), x1 = median(bx1);
+    const float y0 = *std::min_element(by0.begin(), by0.end()), y1 = *std::max_element(by1.begin(), by1.end());
     const float w = x1 - x0, mid = (x0 + x1) / 2;
     if (w <= 0 || y1 <= y0) return;
     const float pad = 0.015f * w;  // a little white beside the text
@@ -178,8 +179,12 @@ void PdfEngine::analyseColumns() {
     }
 }
 
-// Per layout: each column fitted to the width, cut into as many screen-high slices as it needs,
-// evenly spaced so the last ends at the bottom, overlapping by at least ~2 lines (24 pt).
+namespace {
+constexpr float kOverlap = 24;  // page space: about two lines, whole in both slices where they meet
+}  // namespace
+
+// Per layout: each column fitted to the width, cut into as many screen-high slices as the
+// document's text needs, overlapping by about two lines.
 void PdfEngine::sliceColumns() {
     analyseColumns();
     if (!columnsOn()) return;
@@ -187,34 +192,100 @@ void PdfEngine::sliceColumns() {
     slices_ = {};
     slices_.width = layout_.width;
     slices_.screenHeight = layout_.height;
+    pageViews_.clear();
     const float columnH = columns_.bottom - columns_.top;
-    constexpr float kOverlap = 24;
     int count = 1;
     for (int c = 0; c < columns_.columns; ++c) {
         const float sliceH = (columns_.x[c + 1] - columns_.x[c]) * layout_.height / layout_.width;
-        slices_.height[c] = sliceH;
-        if (columnH > sliceH && sliceH > kOverlap)
+        if (columnH > sliceH && sliceH > 2 * kOverlap)
             count = std::max(count, static_cast<int>(std::ceil((columnH - kOverlap) / (sliceH - kOverlap))));
     }
-    slices_.count = count;
-    for (int c = 0; c < columns_.columns; ++c)
-        slices_.step[c] = count > 1 ? std::max(0.0f, columnH - slices_.height[c]) / (count - 1) : 0;
+    slices_.count = std::min(count, 12);
+}
+
+bool PdfEngine::textBox(int page, float box[4]) {
+    if (auto it = textBoxes_.find(page); it != textBoxes_.end()) {
+        std::copy(it->second.begin(), it->second.end(), box);
+        return it->second[2] > it->second[0];
+    }
+    float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+    fz_stext_page* st = nullptr;
+    fz_var(st);
+    fz_try(ctx_) {
+        st = fz_new_stext_page_from_page_number(ctx_, doc_, page, nullptr);
+        for (fz_stext_block* b = st->first_block; b; b = b->next) {
+            if (b->type != FZ_STEXT_BLOCK_TEXT) continue;
+            for (fz_stext_line* l = b->u.t.first_line; l; l = l->next)
+                if (std::abs(l->dir.y) <= 0.1f && l->bbox.x1 - l->bbox.x0 >= 5) {
+                    x0 = std::min(x0, l->bbox.x0), y0 = std::min(y0, l->bbox.y0);
+                    x1 = std::max(x1, l->bbox.x1), y1 = std::max(y1, l->bbox.y1);
+                }
+        }
+    }
+    fz_always(ctx_) { fz_drop_stext_page(ctx_, st); }
+    fz_catch(ctx_) { x1 = x0 - 1; }
+    const bool found = x1 > x0 && y1 > y0;
+    textBoxes_[page] = found ? std::array<float, 4>{x0, y0, x1, y1} : std::array<float, 4>{0, 0, 0, 0};
+    std::copy(textBoxes_[page].begin(), textBoxes_[page].end(), box);
+    return found;
+}
+
+const PdfEngine::PageViews& PdfEngine::pageViews(int pdfPage) {
+    if (auto it = pageViews_.find(pdfPage); it != pageViews_.end()) return it->second;
+    PageViews v;
+    const float docX0 = columns_.x[0], docX1 = columns_.x[columns_.columns];
+    const float docW = docX1 - docX0;
+    float x0 = docX0, x1 = docX1, top = columns_.top, bottom = columns_.bottom, shift = 0;
+    float b[4];
+    if ((columns_.text && textBox(pdfPage, b)) || (!columns_.text && contentBox(pdfPage, b))) {
+        const float pad = 0.015f * docW;
+        b[0] -= pad, b[1] -= pad, b[2] += pad, b[3] += pad;
+        // A page as wide as the document's text but elsewhere: mirrored margins, the columns move
+        // with it. Otherwise (a short page, a centred title) the document's place.
+        if (std::abs((b[2] - b[0]) - docW) < 0.1f * docW) shift = b[0] - docX0;
+        x0 = std::min(docX0 + shift, b[0]);
+        x1 = std::max(docX1 + shift, b[2]);
+        top = std::min(top, b[1]);
+        bottom = std::max(bottom, b[3]);
+    }
+    v.x[0] = x0;
+    v.x[columns_.columns] = x1;
+    if (columns_.columns == 2) v.x[1] = columns_.x[1] + shift;
+    v.top = top;
+    const float pageH = bottom - top;
+    const int n = slices_.count;
+    for (int c = 0; c < columns_.columns; ++c) {
+        float w = v.x[c + 1] - v.x[c];
+        float h = w * layout_.height / layout_.width;
+        // Too tall for n slices with their overlap: wider (smaller) slices, never a gap.
+        const float need = n > 1 ? (pageH + (n - 1) * kOverlap) / n : pageH;
+        if (h < need) {
+            h = need;
+            w = h * layout_.width / layout_.height;
+        }
+        v.width[c] = w;
+        v.height[c] = h;
+        v.step[c] = n > 1 ? std::max(0.0f, pageH - h) / (n - 1) : 0;
+    }
+    return pageViews_[pdfPage] = v;
 }
 
 PdfEngine::Area PdfEngine::viewRect(int page) {
-    const int v = page % viewsPerPage();
-    const int c = v / slices_.count, s = v % slices_.count;
-    const float y = columns_.top + s * slices_.step[c];
-    return {columns_.x[c], y, columns_.x[c + 1], y + slices_.height[c]};
+    const PageViews& pv = pageViews(src(page));
+    const int view = page % viewsPerPage();
+    const int c = view / slices_.count, s = view % slices_.count;
+    const float cx = (pv.x[c] + pv.x[c + 1]) / 2, y = pv.top + s * pv.step[c];
+    return {cx - pv.width[c] / 2, y, cx + pv.width[c] / 2, y + pv.height[c]};
 }
 
 int PdfEngine::viewAt(int pdfPage, float x, float y) {
     const int views = viewsPerPage();
     if (views == 1) return pdfPage;
-    const int c = columns_.columns == 2 && x >= columns_.x[1] ? 1 : 0;
+    const PageViews& pv = pageViews(pdfPage);
+    const int c = columns_.columns == 2 && x >= pv.x[1] ? 1 : 0;
     // The first slice that shows the point with a line's room below it.
     int s = 0;
-    while (s + 1 < slices_.count && y > columns_.top + s * slices_.step[c] + slices_.height[c] - 12) ++s;
+    while (s + 1 < slices_.count && y > pv.top + s * pv.step[c] + pv.height[c] - 12) ++s;
     return pdfPage * views + c * slices_.count + s;
 }
 
@@ -290,13 +361,34 @@ PageImage PdfEngine::render(int page) {
     img.gray.assign(static_cast<size_t>(img.width) * img.height, 255);
     double scale, dx, dy;
     if (!fit(page, scale, dx, dy)) return img;
+    // Drawn into a pixmap the page area's size: a view (column view) draws only what it shows,
+    // not its whole page at the view's zoom.
     fz_pixmap* pix = nullptr;
+    fz_page* pg = nullptr;
+    fz_device* dev = nullptr;
+    fz_var(pix);
+    fz_var(pg);
+    fz_var(dev);
+    bool ok = true;
     fz_try(ctx_) {
         const fz_matrix ctm = fz_concat(fz_scale(static_cast<float>(scale), static_cast<float>(scale)),
                                         fz_translate(static_cast<float>(dx), static_cast<float>(dy)));
-        pix = fz_new_pixmap_from_page_number(ctx_, doc_, src(page), ctm, fz_device_gray(ctx_), 0);
+        pg = fz_load_page(ctx_, doc_, src(page));
+        pix = fz_new_pixmap_with_bbox(ctx_, fz_device_gray(ctx_), fz_make_irect(0, 0, img.width, img.height), nullptr, 0);
+        fz_clear_pixmap_with_value(ctx_, pix, 255);
+        dev = fz_new_draw_device(ctx_, fz_identity, pix);
+        fz_run_page(ctx_, pg, dev, ctm, nullptr);
+        fz_close_device(ctx_, dev);
     }
-    fz_catch(ctx_) { return img; }
+    fz_always(ctx_) {
+        fz_drop_device(ctx_, dev);
+        fz_drop_page(ctx_, pg);
+    }
+    fz_catch(ctx_) { ok = false; }
+    if (!ok) {
+        fz_drop_pixmap(ctx_, pix);
+        return img;
+    }
     // The pixmap's origin may be offset; copy it into place.
     const int px = fz_pixmap_x(ctx_, pix), py = fz_pixmap_y(ctx_, pix);
     const int pw = fz_pixmap_width(ctx_, pix), ph = fz_pixmap_height(ctx_, pix);
