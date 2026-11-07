@@ -155,3 +155,72 @@ TEST_CASE("reader position: the question matches the reviewed golden") {
     r->draw(c);
     checkGolden(c, "tests/golden/reader-position-question.png");
 }
+
+TEST_CASE("reader position fix: a book read here before positions synced asks about the computer's place") {
+    // Review C2: a reading state but no compared position -> ask, don't overwrite.
+    Rig rig;
+    FakeEngine probe;
+    rig.lib.saveReading(rig.row.key, probe.positionOfPage(12).value, 0.1);
+    rig.lib.applyRemotePosition("EP000003", "70", 9);
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 12));
+    CHECK_FALSE(rig.lib.readingPosition("EP000003")->dirty);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    CHECK_FALSE(rig.lib.readingPosition("EP000003")->dirty);
+}
+
+TEST_CASE("reader position fix: a computer position that can't be placed sends nothing until you read on") {
+    // Review I1.
+    Rig rig;
+    rig.readHereTo(12);
+    rig.lib.applyRemotePosition("EP000003", "999", 9);
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 12));
+    for (int i = 0; i < 40; ++i) r->onTick(rig.nav);
+    CHECK_FALSE(r->positionQuestion());
+    CHECK_FALSE(rig.lib.readingPosition("EP000003")->dirty);
+    r->onGesture(tapAt({1100, 700}), rig.nav);
+    REQUIRE(rig.waitPage(*r, 13));
+    CHECK(rig.lib.readingPosition("EP000003")->dirty);
+}
+
+TEST_CASE("reader position fix: a never-opened book whose computer position can't be placed sends nothing until you read on") {
+    Rig rig;
+    rig.lib.applyRemotePosition("EP000003", "999", 9);
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 0));
+    for (int i = 0; i < 40; ++i) r->onTick(rig.nav);
+    CHECK_FALSE(rig.lib.readingPosition("EP000003")->dirty);
+    r->onGesture(tapAt({1100, 700}), rig.nav);
+    REQUIRE(rig.waitPage(*r, 1));
+    CHECK(rig.lib.readingPosition("EP000003")->dirty);
+}
+
+TEST_CASE("reader position fix: on the computer's page the computer's exact place is kept") {
+    // Review M3: opening there must not send back the page's start instead.
+    Rig rig;
+    rig.lib.applyRemotePosition("EP000003", "40#exact", 9);
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(*r, 40));
+    CHECK(rig.until(*r, [&] { return rig.lib.readingPosition("EP000003")->local == "40#exact"; }));
+    auto p = rig.lib.readingPosition("EP000003");
+    CHECK(p->local == "40#exact");
+    CHECK_FALSE(p->dirty);
+}
+
+TEST_CASE("reader position fix: opening the menus with the question up doesn't answer it") {
+    // Review M2: only reading on (a page turn) is Stay.
+    Rig rig;
+    rig.readHereTo(12);
+    rig.lib.applyRemotePosition("EP000003", "70", 9);
+    auto r = rig.reader();
+    r->onShow(rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    r->onGesture(tapAt({600, 900}), rig.nav);  // the middle: menus
+    CHECK(r->positionQuestion());
+    CHECK(rig.lib.readingPosition("EP000003")->remoteNew);
+}

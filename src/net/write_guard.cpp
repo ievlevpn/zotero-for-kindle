@@ -60,8 +60,15 @@ std::string settingsRefusal(const HttpRequest& req, const IsAnnotation& isAttach
         if (!setting.is_object()) return "setting " + key + " is not an object";
         for (const auto& [field, v] : setting.items())
             if (field != "value" && field != "version") return "setting " + key + " has field " + field;
-        if (!setting.contains("value") || !(setting["value"].is_number() || setting["value"].is_string()))
-            return "setting " + key + " has no position value";
+        // Always against the version it is based on (never a blind overwrite).
+        if (!setting.contains("version") || !setting["version"].is_number_unsigned())
+            return "setting " + key + " has no version";
+        // A page index, or a CFI.
+        const auto& value = setting.contains("value") ? setting["value"] : nlohmann::json();
+        const bool page = value.is_number_unsigned();
+        const bool cfi = value.is_string() && value.get<std::string>().rfind("/", 0) == 0 &&
+                         value.get<std::string>().size() <= 2048;
+        if (!page && !cfi) return "setting " + key + " has no position value";
     }
     return {};
 }

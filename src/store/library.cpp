@@ -63,7 +63,7 @@ CREATE TABLE tracked_attachments (key TEXT PRIMARY KEY);
 CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE TABLE reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL DEFAULT '',
   remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL DEFAULT 0,
-  remoteNew INTEGER NOT NULL DEFAULT 0);
+  remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');
 CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags, notes,
   tokenize='unicode61 remove_diacritics 2');
 )sql";
@@ -253,7 +253,7 @@ void Library::migrate() {
             db_.exec(  // version 4: reading positions
                 "CREATE TABLE IF NOT EXISTS reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL "
                 "DEFAULT '', remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER "
-                "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0);");
+                "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');");
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -838,9 +838,10 @@ ReadingPosition readPosition(const Stmt& st) {
     p.local = st.text(3);
     p.dirty = st.integer(4) != 0;
     p.remoteNew = st.integer(5) != 0;
+    p.lastSent = st.text(6);
     return p;
 }
-constexpr const char* kPositionColumns = "attachmentKey, remote, remoteVersion, local, dirty, remoteNew";
+constexpr const char* kPositionColumns = "attachmentKey, remote, remoteVersion, local, dirty, remoteNew, lastSent";
 }  // namespace
 
 std::optional<ReadingPosition> Library::readingPosition(const std::string& key) {
@@ -872,10 +873,29 @@ void Library::applyRemotePosition(const std::string& key, const std::string& val
         Stmt st = db_.prepare(
             "INSERT INTO reading_positions (attachmentKey, remote, remoteVersion) VALUES (?1, ?2, ?3) "
             "ON CONFLICT(attachmentKey) DO UPDATE SET remote = ?2, remoteVersion = ?3, "
-            "remoteNew = (local != '' AND local != ?2), dirty = 0 WHERE remoteVersion < ?3");
+            "remoteNew = (local != '' AND local != ?2 AND lastSent != ?2), "
+            "dirty = CASE WHEN local != '' AND local != ?2 AND lastSent != ?2 THEN 0 ELSE dirty AND local != ?2 END "
+            "WHERE remoteVersion < ?3");
         st.bind(1, key);
         st.bind(2, value);
         st.bind(3, version);
+        st.step();
+    });
+}
+
+void Library::markPositionSending(const std::string& key, const std::string& value) {
+    guarded([&] {
+        Stmt st = db_.prepare("UPDATE reading_positions SET lastSent = ?2 WHERE attachmentKey = ?1");
+        st.bind(1, key);
+        st.bind(2, value);
+        st.step();
+    });
+}
+
+void Library::holdRemotePosition(const std::string& key) {
+    guarded([&] {
+        Stmt st = db_.prepare("UPDATE reading_positions SET remoteNew = 1, dirty = 0 WHERE attachmentKey = ? AND remote != ''");
+        st.bind(1, key);
         st.step();
     });
 }
@@ -883,8 +903,8 @@ void Library::applyRemotePosition(const std::string& key, const std::string& val
 void Library::markPositionSent(const std::string& key, const std::string& value, int64_t version) {
     guarded([&] {
         Stmt st = db_.prepare(
-            "UPDATE reading_positions SET remote = ?2, remoteVersion = ?3, remoteNew = 0, dirty = (local != ?2) "
-            "WHERE attachmentKey = ?1");
+            "UPDATE reading_positions SET remote = ?2, remoteVersion = ?3, remoteNew = 0, dirty = (local != ?2), "
+            "lastSent = ?2 WHERE attachmentKey = ?1");
         st.bind(1, key);
         st.bind(2, value);
         st.bind(3, version);
@@ -892,11 +912,14 @@ void Library::markPositionSent(const std::string& key, const std::string& value,
     });
 }
 
-void Library::answerRemotePosition(const std::string& key, bool go) {
+void Library::answerRemotePosition(const std::string& key, bool go, int64_t version) {
     guarded([&] {
-        Stmt st = db_.prepare(go ? "UPDATE reading_positions SET local = remote, dirty = 0, remoteNew = 0 WHERE attachmentKey = ?"
-                                 : "UPDATE reading_positions SET dirty = (local != remote), remoteNew = 0 WHERE attachmentKey = ?");
+        Stmt st = db_.prepare(go ? "UPDATE reading_positions SET local = remote, dirty = 0, remoteNew = 0 "
+                                   "WHERE attachmentKey = ?1 AND remoteVersion = ?2"
+                                 : "UPDATE reading_positions SET dirty = (local != remote), remoteNew = 0 "
+                                   "WHERE attachmentKey = ?1 AND remoteVersion = ?2");
         st.bind(1, key);
+        st.bind(2, version);
         st.step();
     });
 }

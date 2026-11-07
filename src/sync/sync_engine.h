@@ -51,6 +51,7 @@ private:
     bool pushOnce(SyncReport&, bool& preconditionFailed);
     bool pushDeletions(SyncReport&, bool& preconditionFailed);
     void pullPositions(SyncReport&);
+    std::vector<ReadingPosition> sendablePositions();
     bool pushPositions(SyncReport&, bool& preconditionFailed);
 
     ZoteroApi& api_;

@@ -420,7 +420,7 @@ TEST_CASE("positions sync: when the computer moved meanwhile, the Kindle asks in
     CHECK(p->remoteNew);
     CHECK(p->remote == R"("/6/20!/4/2/1:0")");
     CHECK_FALSE(p->dirty);
-    rig.lib->answerRemotePosition("EPUB0001", false);  // Stay: the Kindle's place goes up
+    rig.lib->answerRemotePosition("EPUB0001", false, rig.lib->readingPosition("EPUB0001")->remoteVersion);  // Stay: the Kindle's place goes up
     CHECK_FALSE(rig.push().error);
     CHECK(rig.server.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/8!/4/2/1:0");
 }
@@ -430,4 +430,14 @@ TEST_CASE("positions sync: a PDF page is a number in Zotero") {
     rig.lib->setLocalPosition("EPUB0001", "12");
     CHECK_FALSE(rig.push().error);
     CHECK(rig.server.settings["lastPageIndex_u_EPUB0001"]["value"] == 12);
+}
+
+TEST_CASE("positions sync fix: settings that can't be fetched don't fail the sync") {
+    // Review M4.
+    Rig rig;
+    rig.server.put(FakeZotero::item("BOOK0002", "Another book"));
+    rig.server.failWhen = [](const HttpRequest& r) { return r.url.find("/settings") != std::string::npos; };
+    SyncReport rep = rig.pull();
+    CHECK_FALSE(rep.error);
+    CHECK(rig.lib->rowFor("BOOK0002"));
 }

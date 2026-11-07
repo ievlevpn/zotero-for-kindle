@@ -213,10 +213,14 @@ void ReaderScreen::onShow(Nav& nav) {
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
     // Zotero's reading position: where to open a book never read here, or a question if the
     // computer moved on since this Kindle last agreed with it.
+    // Held (nothing sent) until it has been compared with the page the book opens on.
     std::string zoteroStart;
-    if (auto rp = nav.library().readingPosition(row_.attachmentKey)) {
+    if (auto rp = nav.library().readingPosition(row_.attachmentKey);
+        rp && !rp->remote.empty() && (start.value.empty() || rp->local.empty() || rp->remoteNew)) {
+        nav.library().holdRemotePosition(row_.attachmentKey);
         if (start.value.empty()) zoteroStart = rp->remote;
-        else if (rp->remoteNew) placeAfterFirstPage_ = rp->remote;  // compared with the page we open on
+        placeAfterFirstPage_ = remoteValue_ = rp->remote;
+        remoteVersion_ = rp->remoteVersion;
     }
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start, zoteroStart);
@@ -254,8 +258,13 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::Placed: {
                 if (e.requestId != placeId_) break;
                 placeId_ = 0;
-                if (e.page < 0 || e.page == page_) {  // nowhere here, or the page we're on: nothing to ask
-                    nav.library().answerRemotePosition(row_.attachmentKey, e.page >= 0);
+                if (e.page < 0) {  // can't be placed here: nothing is sent until the reader reads on
+                    unplaced_ = true;
+                    break;
+                }
+                remotePage_ = e.page;
+                if (e.page == page_) {  // the page we're on: agreed, nothing to ask
+                    nav.library().answerRemotePosition(row_.attachmentKey, true, remoteVersion_);
                     break;
                 }
                 const int pct = static_cast<int>(std::lround(e.progress * 100));
@@ -289,7 +298,10 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 turning_ = false;
                 layoutPending_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
-                if (!e.zoteroPosition.empty()) nav.library().setLocalPosition(row_.attachmentKey, e.zoteroPosition);
+                // On Zotero's page, Zotero's exact place (not this page's start) stays the Kindle's.
+                if (!e.zoteroPosition.empty())
+                    nav.library().setLocalPosition(row_.attachmentKey,
+                                                   page_ == remotePage_ ? remoteValue_ : e.zoteroPosition);
                 if (!placeAfterFirstPage_.empty()) {
                     placeId_ = worker_->placeZotero(std::move(placeAfterFirstPage_));
                     placeAfterFirstPage_.clear();
@@ -311,10 +323,20 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
     if (menus_ && visible) menus_->onTick(nav);
 }
 
-void ReaderScreen::turn(int delta, Nav&) {
+void ReaderScreen::turn(int delta, Nav& nav) {
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
     const int target = page_ + delta;
     if (target < 0 || (pageCount_ > 0 && target >= pageCount_)) return;
+    // Reading on answers Zotero's position: the Kindle's place it is.
+    // (Also while Zotero's position is still being placed, or can't be.)
+    if (question_) {
+        answerPosition(false, nav);
+    } else if (unplaced_ || placeId_ || !placeAfterFirstPage_.empty()) {
+        unplaced_ = false;
+        placeId_ = 0;
+        placeAfterFirstPage_.clear();
+        nav.library().answerRemotePosition(row_.attachmentKey, false, remoteVersion_);
+    }
     turning_ = true;
     worker_->show(target);
 }
@@ -388,11 +410,10 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         menus_->onGesture(g, nav);
         return;
     }
-    if (question_) {
-        if (g.type == GestureType::Tap && positionGoRect().contains(g.pos)) return answerPosition(true, nav);
-        if (g.type == GestureType::Tap && positionStayRect().contains(g.pos)) return answerPosition(false, nav);
-        if (g.type == GestureType::Tap && positionBannerRect().contains(g.pos)) return;
-        answerPosition(false, nav);  // reading on is Stay; the gesture goes on below
+    if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()
+        if (positionGoRect().contains(g.pos)) return answerPosition(true, nav);
+        if (positionStayRect().contains(g.pos)) return answerPosition(false, nav);
+        if (positionBannerRect().contains(g.pos)) return;
     }
     if (editor_) {
         if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
@@ -702,7 +723,7 @@ Rect ReaderScreen::positionGoRect() {
 
 void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (!question_) return;
-    nav.library().answerRemotePosition(row_.attachmentKey, go);
+    nav.library().answerRemotePosition(row_.attachmentKey, go, remoteVersion_);
     if (go && worker_) {
         turning_ = true;
         worker_->show(question_->page);

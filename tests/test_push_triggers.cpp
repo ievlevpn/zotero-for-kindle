@@ -233,3 +233,17 @@ TEST_CASE("push triggers: the reader asks for a push after a highlight and a syn
     CHECK(nav.pops == 1);
     CHECK(nav.syncFake.syncs == syncs + 1);
 }
+
+TEST_CASE("push triggers: a sync sends the reading position even with no highlight to send") {
+    // Review C1: the service skipped the push when no annotation was waiting.
+    Rig rig;
+    rig.start(60'000);
+    rig.pullFirst();
+    rig.ui->setLocalPosition("EPUB0001", R"("/6/4!/4/2/1:0")");
+    rig.service->syncNow();
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    CHECK_FALSE(events.back().error);
+    std::lock_guard<std::mutex> lock(rig.serverMutex);
+    REQUIRE(rig.zotero.settings.count("lastPageIndex_u_EPUB0001"));
+    CHECK(rig.zotero.settings["lastPageIndex_u_EPUB0001"]["value"] == "/6/4!/4/2/1:0");
+}

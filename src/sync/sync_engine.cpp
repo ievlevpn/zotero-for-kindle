@@ -120,8 +120,8 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
 void SyncEngine::pullPositions(SyncReport& rep) {
     UserError err;
     auto listing = api_.settings(lib_.settingsVersion(), &err);
-    if (!listing) {
-        if (!rep.error) rep.error = err;
+    if (!listing) {  // positions only: the rest of the sync stands; next time
+        log(LogLevel::Warn, "sync: reading positions not fetched: %s", err.details.c_str());
         return;
     }
     static const std::string prefix = "lastPageIndex_u_";
@@ -140,18 +140,19 @@ void SyncEngine::pullPositions(SyncReport& rep) {
 // follows turns it into a question for the reader instead of an overwrite.
 bool SyncEngine::pushPositions(SyncReport& rep, bool& preconditionFailed) {
     preconditionFailed = false;
-    std::vector<ReadingPosition> dirty;
-    for (auto& p : lib_.dirtyPositions())
-        if (lib_.attachment(p.attachmentKey)) dirty.push_back(std::move(p));
+    std::vector<ReadingPosition> dirty = sendablePositions();
     for (size_t i = 0; i < dirty.size(); i += kBatch) {
         json body = json::object();
         const size_t end = std::min(dirty.size(), i + kBatch);
-        for (size_t j = i; j < end; ++j) {
-            json value = json::parse(dirty[j].local, nullptr, false);
-            if (value.is_discarded()) continue;
-            body["lastPageIndex_u_" + dirty[j].attachmentKey] = {{"value", value}, {"version", dirty[j].remoteVersion}};
+        {
+            auto tx = lib_.begin();
+            for (size_t j = i; j < end; ++j) {
+                body["lastPageIndex_u_" + dirty[j].attachmentKey] = {{"value", json::parse(dirty[j].local)},
+                                                                     {"version", dirty[j].remoteVersion}};
+                lib_.markPositionSending(dirty[j].attachmentKey, dirty[j].local);  // its echo isn't news
+            }
+            tx.commit();
         }
-        if (body.empty()) continue;
         UserError err;
         auto res = api_.writeSettings(body, &err);
         if (!res) {
@@ -425,7 +426,16 @@ SyncReport SyncEngine::push() {
 int SyncEngine::pendingChanges() {
     int n = static_cast<int>(lib_.pendingDeletions().size());
     for (const auto& a : lib_.dirtyAnnotations()) n += !a.conflict && !a.localOnly;
-    return n;
+    return n + static_cast<int>(sendablePositions().size());
+}
+
+// Reading positions to send: of the library's files, and well-formed.
+std::vector<ReadingPosition> SyncEngine::sendablePositions() {
+    std::vector<ReadingPosition> out;
+    for (auto& p : lib_.dirtyPositions())
+        if (lib_.attachment(p.attachmentKey) && !json::parse(p.local, nullptr, false).is_discarded())
+            out.push_back(std::move(p));
+    return out;
 }
 
 // Sends the Kindle's deletions, then every unsent creation and edit (conflict copies and

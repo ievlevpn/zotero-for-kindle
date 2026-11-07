@@ -137,6 +137,11 @@ private:
     void answerPosition(bool go, Nav&);
     uint64_t placeId_ = 0;  // where Zotero's newer position falls (a Placed event)
     std::string placeAfterFirstPage_;  // Zotero's newer position, asked about once the book shows a page
+    // Zotero's position the reader holds (not yet compared): its value, version and page.
+    std::string remoteValue_;
+    int64_t remoteVersion_ = 0;
+    int remotePage_ = -1;
+    bool unplaced_ = false;  // Zotero's position can't be placed here: reading on decides
     struct PositionQuestion {
         int page = 0;
         std::string text;

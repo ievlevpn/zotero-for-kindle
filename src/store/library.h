@@ -61,6 +61,7 @@ struct ReadingPosition {
     std::string local;          // where the Kindle is ("" if never read here)
     bool dirty = false;         // local still to be sent
     bool remoteNew = false;     // Zotero moved elsewhere since the Kindle last agreed: ask on open
+    std::string lastSent;       // the Kindle's last upload (its echo is not news, even if its answer was lost)
 };
 
 struct CollectionEntry {
@@ -185,8 +186,13 @@ public:
     std::optional<ReadingPosition> readingPosition(const std::string& attachmentKey);
     void setLocalPosition(const std::string& attachmentKey, const std::string& value);  // the Kindle moved
     void applyRemotePosition(const std::string& attachmentKey, const std::string& value, int64_t version);  // a pull
+    void markPositionSending(const std::string& attachmentKey, const std::string& value);  // before the upload
     void markPositionSent(const std::string& attachmentKey, const std::string& value, int64_t version);
-    void answerRemotePosition(const std::string& attachmentKey, bool go);  // the reader's Go / Stay
+    // The reader has Zotero's position but hasn't compared it with the page it opens on yet:
+    // nothing is sent until it answers (or reads on).
+    void holdRemotePosition(const std::string& attachmentKey);
+    // The reader's Go / Stay about the position at `version` (a newer one pulled meanwhile stays news).
+    void answerRemotePosition(const std::string& attachmentKey, bool go, int64_t version);
     std::vector<ReadingPosition> dirtyPositions();
     int64_t settingsVersion();  // library version the settings pull reached
     void setSettingsVersion(int64_t);

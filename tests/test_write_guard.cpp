@@ -171,3 +171,23 @@ TEST_CASE("write guard without a file check refuses every setting") {
     CHECK(blocked(rig.send("POST", "https://api.zotero.org/users/1/settings",
                            R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":3}})")));
 }
+
+TEST_CASE("write guard: a reading position needs a version and a page or a CFI") {
+    // Review M1.
+    FakeHttp inner;
+    WriteGuard guard{inner, [](const std::string&) { return false; }, [](const std::string& k) { return k == "ATTKEY01"; }};
+    auto post = [&](const std::string& body) {
+        HttpRequest r;
+        r.method = "POST";
+        r.url = "https://api.zotero.org/users/1/settings";
+        r.body = body;
+        return blocked(guard.send(r));
+    };
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":5}})"));                     // no version: an overwrite
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":-1}})"));
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":"3"}})"));
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":2.5,"version":3}})"));
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":-1,"version":3}})"));
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":"chapter 3","version":3}})"));  // not a CFI
+    CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":"/)" + std::string(3000, '4') + R"(","version":3}})"));
+}

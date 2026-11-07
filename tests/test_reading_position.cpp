@@ -149,13 +149,13 @@ TEST_CASE("positions: Go takes Zotero's place; Stay keeps the Kindle's and sends
     lib.setLocalPosition("ATT00001", "7");
     lib.markPositionSent("ATT00001", "7", 11);
     lib.applyRemotePosition("ATT00001", "20", 12);
-    lib.answerRemotePosition("ATT00001", true);  // Go
+    lib.answerRemotePosition("ATT00001", true, 12);  // Go
     auto go = lib.readingPosition("ATT00001");
     CHECK_FALSE(go->remoteNew);
     CHECK(go->local == "20");
     CHECK_FALSE(go->dirty);
     lib.applyRemotePosition("ATT00001", "30", 13);
-    lib.answerRemotePosition("ATT00001", false);  // Stay
+    lib.answerRemotePosition("ATT00001", false, 13);  // Stay
     auto stay = lib.readingPosition("ATT00001");
     CHECK_FALSE(stay->remoteNew);
     CHECK(stay->local == "20");
@@ -180,4 +180,44 @@ TEST_CASE("positions: a schema 3 database gains the positions table and keeps it
     CHECK(lib.settingsVersion() == 0);
     lib.setSettingsVersion(42);
     CHECK(lib.settingsVersion() == 42);
+}
+
+TEST_CASE("positions fix: Go or Stay applies only to the position that was shown") {
+    // Review I3: a newer one pulled meanwhile must not be overwritten by Stay.
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    lib.setLocalPosition("ATT00001", "7");
+    lib.markPositionSent("ATT00001", "7", 11);
+    lib.applyRemotePosition("ATT00001", "20", 12);  // shown
+    lib.applyRemotePosition("ATT00001", "30", 13);  // pulled while the question was up
+    lib.answerRemotePosition("ATT00001", false, 12);  // Stay, about version 12
+    auto p = lib.readingPosition("ATT00001");
+    CHECK(p->remoteNew);  // still to ask about 30
+    CHECK_FALSE(p->dirty);
+}
+
+TEST_CASE("positions fix: the Kindle's own write whose answer was lost is not news") {
+    // Review I4.
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    lib.setLocalPosition("ATT00001", "7");
+    lib.markPositionSending("ATT00001", "7");  // the POST went out; its answer never came
+    lib.setLocalPosition("ATT00001", "8");     // read on
+    lib.applyRemotePosition("ATT00001", "7", 11);  // the pull after a 412 brings our own 7
+    auto p = lib.readingPosition("ATT00001");
+    CHECK_FALSE(p->remoteNew);
+    CHECK(p->dirty);  // 8 still goes up
+    CHECK(p->local == "8");
+}
+
+TEST_CASE("positions fix: holding a never-compared position stops sending until it is placed") {
+    // Review C2/I1: the reader holds Zotero's position it hasn't compared with yet.
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    lib.applyRemotePosition("ATT00001", "70", 9);
+    lib.holdRemotePosition("ATT00001");
+    lib.setLocalPosition("ATT00001", "12");
+    CHECK_FALSE(lib.readingPosition("ATT00001")->dirty);
+    lib.answerRemotePosition("ATT00001", false, 9);
+    CHECK(lib.readingPosition("ATT00001")->dirty);
 }
