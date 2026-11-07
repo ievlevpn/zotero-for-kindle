@@ -244,6 +244,16 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
     worker_->showAnnotation(a);
 }
 
+void ReaderScreen::onResize(Nav& nav) {
+    layout_.width = pageArea().w;
+    layout_.height = pageArea().h;
+    bar_.reset();  // anchored to the old page
+    if (editor_) closeEditor(nav);
+    if (!worker_) return;
+    layoutPending_ = true;
+    worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
+}
+
 void ReaderScreen::applyLayout(const Layout& l, Nav& nav) {
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;

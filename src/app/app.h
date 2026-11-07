@@ -45,6 +45,9 @@ public:
     void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }
     // Told what each part of a step is doing (the stall watchdog's beat).
     void setHeartbeat(std::function<void(const char* doing)> f) { heartbeat_ = std::move(f); }
+    // Whether reading screens turn to landscape (the user's setting; read whenever it matters).
+    void setReadingLandscape(std::function<bool()> f) { readingLandscape_ = std::move(f); }
+    void orientationChanged() override { applyOrientation(); }
     // A part of a step that took longer than 0.7 s (default: a warning in the log).
     void setSlowStepLog(std::function<void(int64_t ms, const char* doing)> f) { slowLog_ = std::move(f); }
     // Checked every `periodMs`; returning false quits the app.
@@ -86,6 +89,10 @@ private:
     std::function<void(const SyncEvent&, Nav&)> hook_;
     std::vector<std::function<void()>> deferred_;
     std::function<void(const char*)> heartbeat_;
+    std::function<bool()> readingLandscape_;
+    Orientation orientation_ = Orientation::Portrait;
+    void applyOrientation();  // the visible screen and the setting decide
+    void resized();           // the display turned: new metrics, canvas, layout
     // Events that make a screen reload (a finished sync, …) wait while it is hidden: reloading
     // every tab's lists at once froze the UI for 1.3 s on the Kindle after each sync.
     std::map<const Screen*, std::vector<SyncEvent>> held_;

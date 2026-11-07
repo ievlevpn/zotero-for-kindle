@@ -44,6 +44,8 @@ public:
     void quit() override { quitted = true; }
     void toast(const std::string& text) override { toasts.push_back(text); }
     const Screen* top() const override { return visible; }
+    void orientationChanged() override { ++orientationChanges; }
+    int orientationChanges = 0;
 
     struct Damage {
         Rect rect;

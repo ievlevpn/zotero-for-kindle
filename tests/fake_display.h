@@ -18,6 +18,16 @@ public:
     int width() const override { return w; }
     int height() const override { return h; }
     int w = 1236, h = 1547;  // set before the App is made (its canvas takes this size)
+    Orientation orientation = Orientation::Portrait;
+    // Turning swaps the window's sides, then reports it like the Kindle does.
+    void setOrientation(Orientation o) override {
+        if (o == orientation) return;
+        orientation = o;
+        std::swap(w, h);
+        InputEvent e;
+        e.kind = InputEvent::Kind::Resize;
+        input.push_back(e);
+    }
     void present(const Canvas&, Rect r, Waveform w) override { presents.push_back({r, w}); }
     bool pollEvents(std::vector<InputEvent>& out, int) override {
         if (closed && input.empty()) return false;

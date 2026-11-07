@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "app/settings_store.h"
 #include "docs/fonts.h"
 #include "platform/lipc.h"
 #include "screens/book_notes.h"
@@ -26,7 +27,7 @@ int H() { return metrics().height; }
 constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
 const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
-constexpr int kDisplayH = 470;
+constexpr int kDisplayH = 580;
 const int kMargins[] = {40, 60, 100};
 const char* kMarginNames[] = {"Narrow", "Normal", "Wide"};
 const int kSpacings[] = {100, 120, 140};
@@ -59,6 +60,10 @@ Rect ReaderMenus::marginRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
 }
+Rect ReaderMenus::orientationRect(int i) {
+    const int w = (W() - 2 * kMargin - 240) / 2;
+    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 464, w - 12, 90};
+}
 Rect ReaderMenus::spacingRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 354, w - 12, 90};
@@ -88,6 +93,15 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
         for (int i = 0; i < 3; ++i)
             if (spacingRect(i).contains(p)) l.lineSpacingPct = kSpacings[i];
     }
+    for (int i = 0; i < 2; ++i)
+        if (orientationRect(i).contains(p)) {
+            AppSettings s = loadSettings(nav.library());
+            s.landscapeReading = landscape_ = i == 1;
+            saveSettings(nav.library(), s);
+            nav.damage(displayPanelRect(), Waveform::Ui);
+            nav.orientationChanged();  // the app turns the screen (a Resize follows)
+            return true;
+        }
     for (int i = 0; i < 3; ++i)
         if (marginRect(i).contains(p)) l.marginPx = kMargins[i];
     reader_.applyLayout(l, nav);
@@ -125,9 +139,12 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
     }
     centredText(cr, "Margins", label, {kMargin, marginRect(0).y, 220, 90}, Align::Left);
     for (int i = 0; i < 3; ++i) drawButton(cr, marginRect(i), kMarginNames[i], l.marginPx == kMargins[i]);
+    centredText(cr, "Orientation", label, {kMargin, orientationRect(0).y, 220, 90}, Align::Left);
+    for (int i = 0; i < 2; ++i) drawButton(cr, orientationRect(i), i ? "Landscape" : "Portrait", landscape_ == (i == 1));
 }
 
 void ReaderMenus::open(Nav& nav) {
+    landscape_ = loadSettings(nav.library()).landscapeReading;
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
     nav.damage(topBarRect(), Waveform::Ui);
     nav.damage(panelRect(), Waveform::Ui);

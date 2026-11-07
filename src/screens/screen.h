@@ -35,6 +35,7 @@ public:
     virtual void quit() = 0;
     virtual void toast(const std::string& text) = 0;  // a short message above the tab bar, ~3 s
     virtual const Screen* top() const = 0;            // the visible screen
+    virtual void orientationChanged() {}               // the landscape setting changed: turn if needed
 };
 
 // What a list row shows instead of its byline (download progress or an error), by attachment key.
@@ -49,6 +50,10 @@ public:
     virtual void onSyncEvent(const SyncEvent&, Nav&) {}
     virtual void onShow(Nav&) {}
     virtual void onTick(Nav&) {}  // every loop iteration while visible (timers)
+    // Part of reading (the reader and its panels): turns to landscape when the user chose it.
+    virtual bool isReading() const { return false; }
+    // The window changed size (turned): lay out again. Most screens just do what showing does.
+    virtual void onResize(Nav& nav) { onShow(nav); }
     virtual bool wantsKeyboard() const { return false; }
     virtual bool showsTabBar() const { return true; }
 };

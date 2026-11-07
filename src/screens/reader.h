@@ -40,6 +40,8 @@ public:
         searchListener_ = std::move(f);
     }
     bool showsTabBar() const override { return false; }
+    bool isReading() const override { return true; }
+    void onResize(Nav&) override;  // turned: the book is laid out for the new page area
     bool wantsKeyboard() const override;
 
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)

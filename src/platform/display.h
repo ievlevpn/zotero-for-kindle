@@ -19,6 +19,9 @@ namespace zk {
 // Full: GC16 with a flash, to clear ghosting.
 enum class Waveform { Fast, Ui, Quality, Full };
 
+// Landscape is for reading only, when the user asks for it (see App::setReadingLandscape).
+enum class Orientation { Portrait, Landscape };
+
 class Display {
 public:
     virtual ~Display() = default;
@@ -27,6 +30,9 @@ public:
     virtual Point origin() const { return {0, 0}; }             // of the window on the screen
     virtual std::string deviceName() const { return "desktop"; }  // FBInk's name on a Kindle
     virtual int ppi() const { return 300; }                       // 0 if unknown
+    // Asks for the window to turn; a Resize input event follows once it has (Kindle: the window
+    // manager rotates the screen when our window title's orientation field changes).
+    virtual void setOrientation(Orientation) {}
     // Shows region `r` of `canvas` (canvas and display share coordinates).
     virtual void present(const Canvas& canvas, Rect r, Waveform w) = 0;
     // Waits up to timeout_ms for input; appends touches, keys and background/foreground

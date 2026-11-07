@@ -11,12 +11,15 @@ AppSettings loadSettings(Library& lib) {
     if (j.contains("syncIntervalMinutes") && j["syncIntervalMinutes"].is_number_integer())
         s.syncIntervalMinutes = j["syncIntervalMinutes"].get<int>();
     if (j.contains("flashEvery") && j["flashEvery"].is_number_integer()) s.flashEvery = j["flashEvery"].get<int>();
+    if (j.contains("landscapeReading") && j["landscapeReading"].is_boolean()) s.landscapeReading = j["landscapeReading"].get<bool>();
     return s;
 }
 
 void saveSettings(Library& lib, const AppSettings& s) {
     lib.setMetaValue("settings",
-                     nlohmann::json{{"syncIntervalMinutes", s.syncIntervalMinutes}, {"flashEvery", s.flashEvery}}.dump());
+                     nlohmann::json{{"syncIntervalMinutes", s.syncIntervalMinutes}, {"flashEvery", s.flashEvery},
+                                    {"landscapeReading", s.landscapeReading}}
+                         .dump());
 }
 
 }  // namespace zk

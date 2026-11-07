@@ -21,6 +21,7 @@ public:
     cairo_surface_t* surface() const { return surface_; }
     int width() const { return w_; }
     int height() const { return h_; }
+    void resize(int w, int h);  // a new, white surface of that size
 
     // Writes luma (r*77 + g*150 + b*29) >> 8 for `r` into an 8-bit buffer whose
     // pixel (0,0) corresponds to the canvas origin.

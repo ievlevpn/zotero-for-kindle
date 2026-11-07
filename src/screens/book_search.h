@@ -25,6 +25,7 @@ public:
     void onTick(Nav&) override;
     bool wantsKeyboard() const override { return true; }
     bool showsTabBar() const override { return false; }
+    bool isReading() const override { return true; }  // turns with the reader
 
     bool searching() const { return searching_; }
     const std::vector<SearchHit>& hits() const { return hits_; }

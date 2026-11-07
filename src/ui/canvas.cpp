@@ -5,6 +5,17 @@ namespace zk {
 Canvas::Canvas(int w, int h)
     : w_(w), h_(h), surface_(cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h)), cr_(cairo_create(surface_)) {}
 
+void Canvas::resize(int w, int h) {
+    cairo_destroy(cr_);
+    cairo_surface_destroy(surface_);
+    w_ = w;
+    h_ = h;
+    surface_ = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+    cr_ = cairo_create(surface_);
+    cairo_set_source_rgb(cr_, 1, 1, 1);
+    cairo_paint(cr_);
+}
+
 Canvas::~Canvas() {
     cairo_destroy(cr_);
     cairo_surface_destroy(surface_);
