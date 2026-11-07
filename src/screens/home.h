@@ -6,6 +6,7 @@
 #include <optional>
 #include <vector>
 
+#include "screens/item_sheet.h"
 #include "screens/screen.h"
 #include "screens/sync_status.h"
 
@@ -34,6 +35,7 @@ public:
     static Rect cardRect();
     std::vector<Rect> recentRowRects() const;
     const std::vector<ItemRow>& recent() const { return recent_; }
+    const ItemSheet* sheet() const { return sheet_ ? &*sheet_ : nullptr; }
 
 private:
     void reload(Library&);
@@ -49,6 +51,8 @@ private:
     int64_t cardOpenedMs_ = 0;
     size_t cardHighlights_ = 0;
     std::vector<ItemRow> recent_;
+    std::optional<ItemSheet> sheet_;  // long-press on the card or a Recent row
+    Rect sheetArea() const;
     int64_t total_ = 0;
 };
 

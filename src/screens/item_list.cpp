@@ -1,5 +1,7 @@
 #include "screens/item_list.h"
 
+#include "screens/item_details.h"
+
 #include "ui/paint.h"
 #include "ui/widgets.h"
 
@@ -67,9 +69,50 @@ void ItemList::draw(cairo_t* cr, Rect area) const {
     for (size_t i = 0; i < rows_.size(); ++i) drawItemRow(cr, rects[i], rows_[i], statusFor(rows_[i].attachmentKey));
     drawPageIndicator(cr, {area.x, area.y + area.h - kPageIndicatorH, area.w, kPageIndicatorH}, pager_.page(),
                       pager_.pages());
+    if (sheet_) sheet_->draw(cr, area);
 }
 
 bool ItemList::onGesture(const Gesture& g, Rect area, Nav& nav, const std::function<void(const ItemRow&)>& open) {
+    if (sheet_) {
+        switch (sheet_->onGesture(g, area, nav)) {
+            case ItemSheet::Action::Close:
+                sheet_.reset();
+                nav.damage(area, Waveform::Ui);
+                break;
+            case ItemSheet::Action::Open: {
+                const ItemRow row = sheet_->row();
+                sheet_.reset();
+                nav.damage(area, Waveform::Ui);
+                if (open) open(row);
+                break;
+            }
+            case ItemSheet::Action::Removed:
+                load(nav.library());  // the row now says it's in Zotero
+                nav.damage(area, Waveform::Ui);
+                break;
+            case ItemSheet::Action::More: {
+                const ItemRow row = sheet_->row();
+                sheet_.reset();
+                nav.damage(area, Waveform::Ui);
+                nav.push(std::make_unique<ItemDetailsScreen>(row, open));
+                break;
+            }
+            case ItemSheet::Action::None: break;
+        }
+        return true;  // while the sheet is up, the list underneath takes nothing
+    }
+    if (g.type == GestureType::LongPress) {
+        auto rects = rowRects(area);
+        for (size_t i = 0; i < rects.size(); ++i)
+            if (rects[i].contains(g.pos)) {
+                if (auto d = nav.library().details(rows_[i].key)) {
+                    sheet_.emplace(rows_[i], std::move(*d));
+                    nav.damage(area, Waveform::Ui);
+                }
+                return true;
+            }
+        return false;
+    }
     if (g.type == GestureType::Swipe && (g.dir == Direction::Up || g.dir == Direction::Down)) {
         if (g.dir == Direction::Up ? pager_.next() : pager_.prev()) {
             load(nav.library());

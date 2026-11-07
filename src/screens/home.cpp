@@ -1,5 +1,7 @@
 #include "screens/home.h"
 
+#include "screens/item_details.h"
+
 #include <algorithm>
 
 #include <ctime>
@@ -187,9 +189,54 @@ void HomeScreen::draw(Canvas& canvas) {
             drawItemRow(cr, rects[i], recent_[i], actions_.status ? actions_.status(recent_[i].attachmentKey) : "");
     }
     if (status_.hasError()) drawBanner(cr, bannerRect(), status_.error());
+    if (sheet_) sheet_->draw(cr, sheetArea());
 }
 
+Rect HomeScreen::sheetArea() const { return {0, 0, metrics().width, metrics().height - kTabBarH}; }
+
 void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (sheet_) {
+        const Rect area = sheetArea();
+        switch (sheet_->onGesture(g, area, nav)) {
+            case ItemSheet::Action::Close:
+                sheet_.reset();
+                nav.damage(area, Waveform::Ui);
+                break;
+            case ItemSheet::Action::Open: {
+                const ItemRow row = sheet_->row();
+                sheet_.reset();
+                nav.damage(area, Waveform::Ui);
+                if (actions_.openItem) actions_.openItem(row);
+                break;
+            }
+            case ItemSheet::Action::Removed:
+                reload(nav.library());
+                nav.damage(area, Waveform::Ui);
+                break;
+            case ItemSheet::Action::More: {
+                const ItemRow row = sheet_->row();
+                sheet_.reset();
+                nav.damage(area, Waveform::Ui);
+                nav.push(std::make_unique<ItemDetailsScreen>(row, actions_.openItem));
+                break;
+            }
+            case ItemSheet::Action::None: break;
+        }
+        return;
+    }
+    if (g.type == GestureType::LongPress) {
+        std::optional<ItemRow> hit;
+        if (card_ && total_ > 0 && cardRect().contains(g.pos)) hit = card_;
+        auto rects = recentRowRects();
+        for (size_t i = 0; i < rects.size() && !hit; ++i)
+            if (rects[i].contains(g.pos)) hit = recent_[i];
+        if (hit)
+            if (auto d = nav.library().details(hit->key)) {
+                sheet_.emplace(*hit, std::move(*d));
+                nav.damage(sheetArea(), Waveform::Ui);
+            }
+        return;
+    }
     if (g.type != GestureType::Tap) return;
     if (closeRect().contains(g.pos)) {
         nav.quit();  // the launcher returns to the Kindle home

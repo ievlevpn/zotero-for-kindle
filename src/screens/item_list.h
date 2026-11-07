@@ -4,9 +4,11 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "screens/item_sheet.h"
 #include "screens/screen.h"
 #include "ui/pager.h"
 
@@ -25,7 +27,8 @@ public:
     void setRowsPerPage(int n) { perPage_ = n; }
 
     void draw(cairo_t*, Rect area) const;
-    // Swipes turn pages (damaging `area`); taps on a row call `open`. True if handled.
+    // Swipes turn pages (damaging `area`); taps on a row call `open`; a long-press opens the item
+    // sheet over `area` (Open / Remove from Kindle / More…), which then takes the gestures. True if handled.
     bool onGesture(const Gesture&, Rect area, Nav&, const std::function<void(const ItemRow&)>& open);
 
     void setStatusFn(StatusFn f) { statusFn_ = std::move(f); }
@@ -35,6 +38,7 @@ public:
     int indexOfAttachment(const std::string& attachmentKey) const;  // on this page; -1 if not shown
 
     const std::vector<ItemRow>& rows() const { return rows_; }
+    const ItemSheet* sheet() const { return sheet_ ? &*sheet_ : nullptr; }
     std::vector<Rect> rowRects(Rect area) const;
     const Pager& pager() const { return pager_; }
 
@@ -50,6 +54,7 @@ private:
     int perPage_ = kRowsPerPageDefault;
     std::vector<ItemRow> rows_;
     StatusFn statusFn_;
+    std::optional<ItemSheet> sheet_;
 };
 
 }  // namespace zk

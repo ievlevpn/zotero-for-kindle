@@ -2,6 +2,9 @@
 
 #include "core/log.h"
 
+#include <algorithm>
+#include <filesystem>
+#include <map>
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
@@ -769,6 +772,64 @@ std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
         if (rows.empty()) return std::nullopt;
         return rows[0];
     });
+}
+
+std::optional<ItemDetails> Library::details(const std::string& itemKey) {
+    std::optional<ItemRecord> item = guarded([&]() -> std::optional<ItemRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns + " FROM items WHERE key = ?");
+        st.bind(1, itemKey);
+        if (!st.step()) return std::nullopt;
+        return readItem(st);
+    });
+    if (!item) return std::nullopt;
+    ItemDetails d;
+    d.item = std::move(*item);
+    if (auto j = json::parse(d.item.json, nullptr, false); j.is_object() && j.contains("abstractNote") &&
+                                                            j["abstractNote"].is_string())
+        d.abstract = j["abstractNote"].get<std::string>();
+    // Collection paths, parent first.
+    std::map<std::string, CollectionRecord> all;
+    for (auto& c : collections()) all[c.key] = c;
+    for (const auto& key : d.item.collections) {
+        std::string path;
+        for (auto it = all.find(key); it != all.end(); it = all.find(it->second.parentKey)) {
+            path = path.empty() ? it->second.name : it->second.name + " › " + path;
+            if (it->second.parentKey.empty()) break;
+        }
+        if (!path.empty()) d.collectionPaths.push_back(path);
+    }
+    std::sort(d.collectionPaths.begin(), d.collectionPaths.end());
+    // A lone file is its own attachment.
+    std::vector<AttachmentRecord> atts = attachmentsOf(itemKey);
+    if (auto self = attachment(itemKey)) atts.insert(atts.begin(), *self);
+    auto rank = [](const AttachmentRecord& a) {
+        if (a.linkMode == "linked_file") return 3;
+        return a.contentType == "application/epub+zip" ? 0 : a.contentType == "application/pdf" ? 1 : 2;
+    };
+    std::stable_sort(atts.begin(), atts.end(), [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
+    for (auto& a : atts) {
+        ItemDetails::File f;
+        std::error_code ec;
+        f.onKindle = a.state == AttachmentRecord::State::Local && !a.localPath.empty() &&
+                     std::filesystem::exists(a.localPath, ec);
+        if (f.onKindle) f.bytes = static_cast<int64_t>(std::filesystem::file_size(a.localPath, ec));
+        f.highlights = static_cast<int>(annotationsFor(a.key).size());
+        f.attachment = std::move(a);
+        d.files.push_back(std::move(f));
+    }
+    if (auto rs = readingState(itemKey); rs && rs->openedMs > 0) d.progress = rs->progress;
+    return d;
+}
+
+void Library::removeDownload(const std::string& attachmentKey) {
+    auto a = attachment(attachmentKey);
+    if (!a || a->localPath.empty()) return;
+    const std::filesystem::path file(a->localPath);
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+    // Downloads live in <files>/<attachmentKey>/<name>: that folder goes too.
+    if (file.parent_path().filename() == attachmentKey) std::filesystem::remove_all(file.parent_path(), ec);
+    setFileState(attachmentKey, AttachmentRecord::State::Remote, "");
 }
 
 std::vector<std::pair<std::string, int64_t>> Library::topTags(int n) {

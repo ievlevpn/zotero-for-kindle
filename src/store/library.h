@@ -37,6 +37,21 @@ struct ItemRow {
     std::string itemType;  // Zotero's: "book", "journalArticle", "preprint", … ("attachment": a lone file)
 };
 
+// Everything the item details sheet and page show (long-press on an item).
+struct ItemDetails {
+    ItemRecord item;
+    std::string abstract;                      // the abstractNote field, or ""
+    std::vector<std::string> collectionPaths;  // "Classics › Novels"
+    struct File {
+        AttachmentRecord attachment;
+        bool onKindle = false;  // downloaded, and the file is there
+        int64_t bytes = 0;      // on the Kindle; 0 if not downloaded
+        int highlights = 0;     // annotations shown in the reader (not deleted here)
+    };
+    std::vector<File> files;  // readable files first (EPUB, then PDF), as rows pick them
+    double progress = -1;     // how far the item was read; -1 if never opened
+};
+
 struct CollectionEntry {
     CollectionRecord collection;
     int64_t items = 0;
@@ -150,6 +165,10 @@ public:
     int64_t countRows(const ListQuery&);
     std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit);
     std::optional<ItemRow> rowFor(const std::string& itemKey);
+    std::optional<ItemDetails> details(const std::string& itemKey);
+    // Deletes the downloaded copy of an attachment (the file and its folder) and marks it as not
+    // on the Kindle. Highlights, the reading position and the item itself stay.
+    void removeDownload(const std::string& attachmentKey);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
     std::vector<CollectionEntry> allCollections();  // every level, by name
