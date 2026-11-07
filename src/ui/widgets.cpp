@@ -4,6 +4,9 @@
 #include "ui/metrics.h"
 
 #include <algorithm>
+#include <cmath>
+
+#include <nlohmann/json.hpp>
 
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -171,6 +174,47 @@ Rect noteRowButtonRect(Rect row, int i) {
     return {row.x + row.w - 2 * w - gap + i * (w + gap), row.y + row.h - h - 14, w, h};
 }
 
+namespace {
+
+// An ink annotation's strokes, fitted into `box` (Zotero's PDF points, y up). Height used, or 0.
+int drawInkPreview(cairo_t* cr, Rect box, const std::string& position) {
+    std::vector<std::vector<std::pair<double, double>>> paths;
+    double x0 = 1e18, y0 = 1e18, x1 = -1e18, y1 = -1e18;
+    try {
+        const auto pos = nlohmann::json::parse(position);
+        for (const auto& xy : pos.value("paths", nlohmann::json::array())) {
+            std::vector<std::pair<double, double>> path;
+            for (size_t i = 0; i + 1 < xy.size(); i += 2) {
+                const double x = xy[i].get<double>(), y = xy[i + 1].get<double>();
+                path.push_back({x, y});
+                x0 = std::min(x0, x), x1 = std::max(x1, x), y0 = std::min(y0, y), y1 = std::max(y1, y);
+            }
+            if (!path.empty()) paths.push_back(std::move(path));
+        }
+    } catch (...) {
+        return 0;
+    }
+    if (paths.empty()) return 0;
+    const double w = std::max(1.0, x1 - x0), h = std::max(1.0, y1 - y0);
+    const double s = std::min(box.w / w, box.h / h);
+    const int usedH = static_cast<int>(std::ceil(h * s));
+    gray(cr, theme::kInk);
+    cairo_set_line_width(cr, 3);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    for (const auto& path : paths) {
+        for (size_t i = 0; i < path.size(); ++i) {
+            const double x = box.x + (path[i].first - x0) * s, y = box.y + (y1 - path[i].second) * s;  // y up -> down
+            i ? cairo_line_to(cr, x, y) : cairo_move_to(cr, x, y);
+        }
+        if (path.size() == 1) cairo_rel_line_to(cr, 0.1, 0);
+    }
+    cairo_stroke(cr);
+    return usedH;
+}
+
+}  // namespace
+
 void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons) {
     fillRect(cr, r, 255);
     fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
@@ -182,6 +226,14 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
         const int lines = mark.empty() ? 3 : a.comment.empty() ? 2 : 1;  // a marked row keeps room for its comment
         TextResult t = drawText(cr, a.text, {kSerif, 8.5, 400}, {tx, y, tw, std::min(132, bottom - y)}, lines);
         y += t.height + 8;
+    } else if (a.type == "ink") {  // handwriting: the strokes themselves, small
+        const int boxH = std::min(mark.empty() ? 150 : 90, bottom - y - (a.comment.empty() ? 0 : 44));
+        if (const int used = boxH > 20 ? drawInkPreview(cr, {tx, y, std::min(tw, 900), boxH}, a.position) : 0)
+            y += used + 8;
+        else
+            y += drawText(cr, "Handwriting", {kSans, 8, 400, true, kSecondary}, {tx, y, tw, 50}, 1).height + 8;
+    } else if (a.type == "image") {
+        y += drawText(cr, "Image area", {kSans, 8, 400, true, kSecondary}, {tx, y, tw, 50}, 1).height + 8;
     }
     if (!a.comment.empty() && bottom - y >= 36)
         drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, bottom - y}, mark.empty() ? 2 : 1);
