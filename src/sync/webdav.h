@@ -1,0 +1,48 @@
+#pragma once
+// Zotero's WebDAV file storage: each attachment is <key>.zip (the file) plus <key>.prop (XML
+// with mtime and hash) in the configured zotero/ folder. Downloads only, GET only.
+
+#include "net/errors.h"
+#include "net/http.h"
+#include "store/records.h"
+
+#include <cstdint>
+#include <functional>
+#include <optional>
+#include <string>
+
+namespace zk {
+
+struct PropInfo {
+    int64_t mtime = 0;  // milliseconds since the epoch
+    std::string hash;   // MD5 of the file, hex
+};
+
+class WebDav {
+public:
+    WebDav(Http&, std::string baseUrl /* ends with /zotero/ */, std::string user, std::string password);
+
+    std::optional<PropInfo> prop(const std::string& key, UserError*);
+    // .prop -> .zip into a temp file -> extract `filename` -> MD5 must equal the attachment's md5
+    // -> move to destDir/<key>/<filename> with the file's mtime. On failure nothing is left behind.
+    bool download(const AttachmentRecord&, const std::string& destDir, UserError*);
+    // Free bytes at a path (statvfs by default); tests inject their own.
+    void setFreeSpaceProbe(std::function<uint64_t(const std::string& path)>);
+
+private:
+    HttpRequest get(const std::string& name) const;
+    UserError fail(const HttpResponse&) const;
+
+    Http& http_;
+    std::string base_, user_, password_, host_;
+    std::function<uint64_t(const std::string&)> freeSpace_;
+};
+
+// The name the downloaded file gets inside <destDir>/<key>/: the server's filename reduced to
+// its last component; KEY.<ext> when that is empty, "." or "..".
+std::string localFileName(const AttachmentRecord&);
+
+// Hex MD5 of a file's contents; empty if it can't be read.
+std::string md5OfFile(const std::string& path);
+
+}  // namespace zk

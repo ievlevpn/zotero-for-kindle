@@ -1,0 +1,5 @@
+{"key":"ARTC2345","version":1300,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"ARTC2345","version":1300,"itemType":"journalArticle","title":"Physics-informed neural networks for 𝛽-economies",
+  "creators":[{"creatorType":"author","firstName":"M.","lastName":"Raissi"}],"publicationTitle":"Journal of Computational Physics",
+  "volume":"378","pages":"686-707","date":"2019-02","DOI":"10.0000/example","tags":[],"collections":[],"relations":{},
+  "dateAdded":"2024-01-15T08:30:00Z","dateModified":"2024-01-15T08:30:00Z"}}

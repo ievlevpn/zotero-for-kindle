@@ -1,0 +1,4 @@
+{"key":"LINK2345","version":1203,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"LINK2345","version":1203,"itemType":"attachment","parentItem":"BOOK2345","linkMode":"linked_file",
+  "title":"Local copy","contentType":"application/epub+zip","charset":"","path":"/Users/someone/Books/notes.epub",
+  "tags":[],"relations":{},"dateAdded":"2023-04-01T10:01:00Z","dateModified":"2023-04-01T10:01:00Z"}}

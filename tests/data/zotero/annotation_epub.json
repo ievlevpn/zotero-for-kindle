@@ -1,0 +1,6 @@
+{"key":"ANNE2345","version":1210,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"ANNE2345","version":1210,"itemType":"annotation","parentItem":"EPUB2345","annotationType":"highlight",
+  "annotationText":"the engine might compose elaborate pieces of music","annotationComment":"music!","annotationColor":"#ffd400",
+  "annotationPageLabel":"12","annotationSortIndex":"00002|00001331",
+  "annotationPosition":"{\"type\":\"FragmentSelector\",\"conformsTo\":\"http://www.idpf.org/epub/linking/cfi/epub-cfi.html\",\"value\":\"epubcfi(/6/6!/4/2/14,/1:20,/1:71)\"}",
+  "tags":[{"tag":"idea"}],"relations":{},"dateAdded":"2023-05-01T09:00:00Z","dateModified":"2023-05-01T09:05:00Z"}}

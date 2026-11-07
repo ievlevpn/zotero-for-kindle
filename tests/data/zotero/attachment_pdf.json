@@ -1,0 +1,5 @@
+{"key":"PDFF2345","version":1301,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"PDFF2345","version":1301,"itemType":"attachment","parentItem":"ARTC2345","linkMode":"imported_url",
+  "title":"Full Text PDF","url":"https://example.org/pinn.pdf","contentType":"application/pdf","charset":"",
+  "filename":"Raissi - 2019.pdf","md5":"fedcba9876543210fedcba9876543210","mtime":1705307400000,
+  "tags":[],"relations":{},"dateAdded":"2024-01-15T08:30:10Z","dateModified":"2024-01-15T08:30:10Z"}}
