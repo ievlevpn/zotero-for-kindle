@@ -192,7 +192,7 @@ void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& pain
 }
 
 void App::setSystemInk(bool on) {
-    if (on && caller_ && caller_ != visibleTop()) return;
+    if (on && (background_ || (caller_ && caller_ != visibleTop()))) return;
     if (on == systemInkOn_) return;
     systemInkOn_ = on;
     display_.setSystemInk(on);
@@ -310,22 +310,24 @@ void App::step(int timeout_ms) {
                 break;
             case InputEvent::Kind::Background:
                 log(LogLevel::Info, "background");
+                setSystemInk(false);  // a system dialog over us: no ink, and the pen is not ours
+                background_ = true;
                 if (lifecycle_) lifecycle_(false);
                 break;
             case InputEvent::Kind::Resize:
                 resized();
                 break;
             case InputEvent::Kind::Pen:
-                handlePen(e.pen);
+                if (!background_) handlePen(e.pen);
                 break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");
+                background_ = false;
                 redrawAll(Waveform::Full);
                 if (lifecycle_) lifecycle_(true);
                 break;
         }
     }
-    presentInk(false);
     auto ticked = gestures_.tick(clock_());
     gestures.insert(gestures.end(), ticked.begin(), ticked.end());
     for (const Gesture& g : gestures) {
@@ -405,9 +407,12 @@ void App::flush() {
         toastShown_ = true;
     }
     if (!full.empty()) {
-        display_.present(canvas_, full.united(quality).united(ui).united(fast), Waveform::Full);
+        const Rect shown = full.united(quality).united(ui).united(fast);
+        display_.present(canvas_, shown, Waveform::Full);
+        if (shown.united(inkDirty_) == shown) inkDirty_ = {};  // already on screen, in full quality
         return;
     }
+    if (!quality.empty() && quality.united(inkDirty_) == quality) inkDirty_ = {};
     if (!fast.empty()) display_.present(canvas_, fast, Waveform::Fast);
     if (!ui.empty()) display_.present(canvas_, ui, Waveform::Ui);
     if (!quality.empty()) display_.present(canvas_, quality, Waveform::Quality);

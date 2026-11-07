@@ -143,6 +143,7 @@ private:
     // Handwriting.
     bool inkDown_ = false, erasing_ = false, inkToastShown_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
+    std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
     std::vector<std::vector<Point>> inkPending_;          // drawn, not yet sent
     std::map<uint64_t, std::vector<std::vector<Point>>> inkSent_;  // sent, being placed

@@ -373,6 +373,7 @@ int main(int argc, char** argv) {
     // Kindle home). Stays on through shutdown, which must not hang either.
     StallWatchdog watchdog(15'000, [](int64_t ms, const std::string& doing) {
         log(LogLevel::Error, "UI stuck for %lld ms (%s): exiting", static_cast<long long>(ms), doing.c_str());
+        displayEmergencyExit();
         std::_Exit(3);
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
