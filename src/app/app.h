@@ -18,6 +18,7 @@ public:
 
     App(Display&, Library&, SyncControl&, Keyboard&, std::function<int64_t()> clock = {});
     ~App();  // screens are destroyed top first (a pushed screen may refer to the one under it)
+    void closeAll();  // the same, now: main closes the readers before waiting for their workers
 
     void setRoot(int tab, std::unique_ptr<Screen>);
     void start();               // shows tab 0 with a Full refresh

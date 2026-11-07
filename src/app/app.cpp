@@ -23,7 +23,9 @@ App::App(Display& display, Library& lib, SyncControl& sync, Keyboard& keyboard, 
     : display_(display), lib_(lib), sync_(&sync), keyboard_(keyboard), clock_(clock ? std::move(clock) : steadyMs),
       canvas_(display.width(), display.height()) {}
 
-App::~App() {
+App::~App() { closeAll(); }
+
+void App::closeAll() {
     while (!graveyard_.empty()) graveyard_.pop_back();
     for (int t = 0; t < kTabs; ++t) {
         const int tab = (tab_ + t) % kTabs;  // the visible tab first
@@ -253,7 +255,7 @@ void App::flush() {
 }
 
 int App::run() {
-    while (!quit_ && !closed_) step(50);
+    while (!quit_ && !closed_ && visibleTop()) step(50);
     return 0;
 }
 

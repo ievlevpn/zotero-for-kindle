@@ -158,3 +158,10 @@ TEST_CASE("app shell: a screen that pops itself can still use its members afterw
     rig.run(3);
     CHECK(seen == "still here");
 }
+
+TEST_CASE("app shell: closeAll destroys every screen (before the process waits for render workers)") {
+    Rig rig;
+    rig.app.closeAll();
+    rig.display.closed = true;
+    CHECK(rig.app.run() == 0);  // nothing left to show, no crash
+}
