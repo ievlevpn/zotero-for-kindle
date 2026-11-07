@@ -40,8 +40,9 @@ public:
 
 private:
     std::string pageText(int page);
-    // The text at a link's target: the line at or below `y` and the lines that continue it.
-    std::string textAt(int page, float y);
+    // The text at a link's target (x, y in page space; NaN: the page's top): the entry that
+    // starts there, in its column, as far as it goes.
+    std::string textAt(int page, float x, float y);
     // Page space -> device: scale and offset for fitting page `page` into the layout area.
     bool fit(int page, double& scale, double& dx, double& dy);
     // The page's inked area (page space), for trimmed margins; measured once per page.

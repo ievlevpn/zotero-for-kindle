@@ -286,6 +286,14 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         for (auto& [p, e] : cache) e.highlights = engine->highlights(p, anns);
         postCurrent = true;
     }
+    if (linkAsk) {  // before a new layout: the link's index is counted on the page it was tapped on
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Link;
+        ev.requestId = std::get<0>(*linkAsk);
+        ev.page = std::get<1>(*linkAsk);
+        ev.link = engine->link(ev.page, std::get<2>(*linkAsk));
+        emit(std::move(ev));
+    }
     if (l) {
         engine->setLayout(l->first);
         relaid(l->second.value.empty() ? current : engine->pageOf(l->second));
@@ -314,14 +322,6 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.requestId = hit->id;
         ev.page = hit->page;
         ev.annotationKey = engine->annotationAt(hit->page, hit->from, anns).value_or("");
-        emit(std::move(ev));
-    }
-    if (linkAsk) {
-        RenderEvent ev;
-        ev.kind = RenderEvent::Kind::Link;
-        ev.requestId = std::get<0>(*linkAsk);
-        ev.page = std::get<1>(*linkAsk);
-        ev.link = engine->link(ev.page, std::get<2>(*linkAsk));
         emit(std::move(ev));
     }
     if (place) {

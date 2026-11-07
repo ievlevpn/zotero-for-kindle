@@ -40,53 +40,135 @@ std::optional<std::pair<int, LinkInfo>> firstLink(DocumentEngine& e, LinkInfo::K
     return std::nullopt;
 }
 
+// All links of the first `pages` pages, described.
+std::vector<LinkInfo> allLinks(DocumentEngine& e, int pages) {
+    std::vector<LinkInfo> out;
+    for (int p = 0; p < std::min(pages, e.pageCount()); ++p) {
+        std::vector<int> seen;
+        for (const LinkBox& box : e.links(p)) {
+            if (std::find(seen.begin(), seen.end(), box.index) != seen.end()) continue;
+            seen.push_back(box.index);
+            if (auto info = e.link(p, box.index)) out.push_back(*info);
+        }
+    }
+    return out;
+}
+
+const LinkInfo* withMark(const std::vector<LinkInfo>& links, const std::string& mark) {
+    for (const auto& l : links)
+        if (l.mark == mark) return &l;
+    return nullptr;
+}
+
 }  // namespace
 
-TEST_CASE("links: a PDF citation shows the text at its target, with the page to go to") {
+TEST_CASE("links: PDF references show the cited entry and only it") {
     auto pdf = open(DocType::Pdf, "tests/data/pdf/links.pdf");
-    const auto boxes = pdf->links(0);
-    REQUIRE(boxes.size() == 2);
     const Layout l;
-    for (const auto& b : boxes) {
+    for (const auto& b : pdf->links(0)) {
         CHECK(b.rect.w > 10);
         CHECK(b.rect.x >= 0);
         CHECK(b.rect.x + b.rect.w <= l.width);
     }
-    std::optional<LinkInfo> cite, web;
-    for (const auto& b : boxes) {
-        auto info = pdf->link(0, b.index);
-        REQUIRE(info);
-        (info->kind == LinkInfo::Kind::Reference ? cite : web) = info;
-    }
-    REQUIRE(cite);
-    CHECK(cite->targetPage == 1);
-    CHECK(cite->label == "Page 2");
-    CHECK(cite->text.find("[1] M. Raissi") != std::string::npos);
-    CHECK(cite->text.find("686-707") != std::string::npos);  // the whole entry ...
-    CHECK(cite->text.find("[2]") == std::string::npos);       // ... and not the next one
-    REQUIRE(web);
-    CHECK(web->kind == LinkInfo::Kind::Web);
-    CHECK(web->url == "https://example.org/pinns");
+    const auto links = allLinks(*pdf, 1);
+    REQUIRE(links.size() == 5);
+    auto ref = [&](const std::string& start) -> const LinkInfo* {
+        for (const auto& l : links)
+            if (l.kind == LinkInfo::Kind::Reference && l.text.rfind(start, 0) == 0) return &l;
+        return nullptr;
+    };
+    // A destination exactly at the entry.
+    const LinkInfo* one = ref("[1] M. Raissi");
+    REQUIRE(one);
+    CHECK(one->targetPage == 1);
+    CHECK(one->label == "Page 2");
+    CHECK(one->text.find("686-707") != std::string::npos);
+    CHECK(one->text.find("[2]") == std::string::npos);
+    // A line above the entry (hyperref), alphabetic labels, hanging indent, no gap between entries.
+    const LinkInfo* fv = ref("[FV07] P. Friz");
+    REQUIRE(fv);
+    CHECK(fv->text.find("Cambridge University Press, 2010.") != std::string::npos);
+    CHECK(fv->text.find("Wadsworth") == std::string::npos);  // the previous entry's last line
+    CHECK(fv->text.find("Hai14") == std::string::npos);      // the next entry
+    // Author-year.
+    const LinkInfo* smith = ref("Smith, J. (2020)");
+    REQUIRE(smith);
+    CHECK(smith->text.find("Taylor") == std::string::npos);
+    CHECK(smith->text.find("269-504") == std::string::npos);
+    // The right column of a two-column list; a vertical stamp in the margin.
+    const LinkInfo* b2 = ref("[B2] The right column entry we");
+    REQUIRE(b2);
+    CHECK(b2->text.find("cite, continued here.") != std::string::npos);
+    CHECK(b2->text.find("left") == std::string::npos);
+    CHECK(b2->text.find("[B3]") == std::string::npos);
+    CHECK(b2->text.find("arXiv") == std::string::npos);
+    bool web = false;
+    for (const auto& l : links) web |= l.kind == LinkInfo::Kind::Web && l.url == "https://example.org/pinns";
+    CHECK(web);
     CHECK(pdf->links(1).empty());
 }
 
-TEST_CASE("links: an EPUB footnote shows its text") {
+TEST_CASE("links: EPUB footnotes as Gutenberg, Pandoc and Standard Ebooks make them") {
+    auto epub = open(DocType::Epub, "tests/data/epub/links-patterns.epub");
+    const auto links = allLinks(*epub, epub->pageCount());
+    const LinkInfo* gutenberg = withMark(links, "26");
+    REQUIRE(gutenberg);
+    CHECK(gutenberg->kind == LinkInfo::Kind::Note);
+    CHECK(gutenberg->label == "Footnote 26");
+    CHECK(gutenberg->text == "The senators were obliged to hold a third of their land in Italy.");
+    const LinkInfo* pandoc = withMark(links, "1");
+    REQUIRE(pandoc);
+    CHECK(pandoc->kind == LinkInfo::Kind::Note);
+    bool pandocText = false, endnote = false;
+    for (const auto& l : links) {
+        pandocText |= l.kind == LinkInfo::Kind::Note && l.text == "Pandoc's note text.";
+        endnote |= l.kind == LinkInfo::Kind::Note && l.text == "An endnote at the back.";
+    }
+    CHECK(pandocText);
+    CHECK(endnote);
+    // Not notes: a chapter link, a printed-page anchor, the links back from notes.
+    REQUIRE(withMark(links, "II"));
+    CHECK(withMark(links, "II")->kind == LinkInfo::Kind::Jump);
+    REQUIRE(withMark(links, "23"));
+    CHECK(withMark(links, "23")->kind == LinkInfo::Kind::Jump);
+    REQUIRE(withMark(links, "return"));
+    CHECK(withMark(links, "return")->kind == LinkInfo::Kind::Jump);
+    for (const auto& l : links)
+        if (l.mark.find("\xE2\x86\xA9") != std::string::npos) CHECK(l.kind == LinkInfo::Kind::Jump);
+}
+
+TEST_CASE("links: Gibbon's Gutenberg footnotes open as notes, with their own text") {
     auto epub = open(DocType::Epub, "tests/data/epub/gibbon-footnotes.epub");
-    auto note = firstLink(*epub, LinkInfo::Kind::Note, 120);
-    REQUIRE(note);
-    CHECK(note->second.text.size() > 10);
-    CHECK(note->second.text.size() < 4000);
-    CHECK(note->second.label.rfind("Footnote", 0) == 0);
-    CHECK(note->second.targetPage >= 0);  // "Go to note"
+    // The main text (the first ~110 pages are the contents: rightly jumps).
+    int notes = 0, jumps = 0;
+    for (int p = 120; p < 400; ++p) {
+        std::vector<int> seen;
+        for (const LinkBox& box : epub->links(p)) {
+            if (std::find(seen.begin(), seen.end(), box.index) != seen.end()) continue;
+            seen.push_back(box.index);
+            if (auto l = epub->link(p, box.index); l && l->mark != "return")  // each note's way back: a jump
+                (l->kind == LinkInfo::Kind::Note ? notes : jumps)++;
+        }
+    }
+    MESSAGE("pages 121-400: " << notes << " notes, " << jumps << " jumps");
+    CHECK(notes > 100);
+    CHECK(notes > 4 * jumps);
+    bool senators = false;
+    for (const auto& l : allLinks(*epub, 600))
+        if (l.kind == LinkInfo::Kind::Note && l.text.rfind("The senators were obliged to have one third", 0) == 0) {
+            senators = true;
+            CHECK(l.text.find("provinces.") != std::string::npos);
+            CHECK(l.text.find("return") == std::string::npos);
+            break;
+        }
+    CHECK(senators);
 }
 
 TEST_CASE("links: Standard Ebooks endnotes (epub:type noteref) are notes") {
     auto epub = open(DocType::Epub, "tests/data/epub/moby-dick-se.epub");
     auto note = firstLink(*epub, LinkInfo::Kind::Note, epub->pageCount());
     REQUIRE(note);
-    CHECK_FALSE(note->second.text.empty());
-    CHECK(note->second.text.find("\xE2\x86\xA9") == std::string::npos);  // without the link back
-    MESSAGE("endnote on page " << note->first + 1 << ": " << note->second.label << ": " << note->second.text.substr(0, 120));
+    CHECK(note->second.text == "See subsequent chapters for something more on this head.");
 }
 
 TEST_CASE("links: an EPUB link to another chapter is a jump") {
@@ -95,6 +177,25 @@ TEST_CASE("links: an EPUB link to another chapter is a jump") {
     REQUIRE(jump);
     CHECK(jump->second.targetPage >= 0);
     CHECK_FALSE(jump->second.target.value.empty());
+}
+
+TEST_CASE("links: two columns list each link once") {
+    UserError e;
+    auto epub = loadEngine(DocType::Epub, env(), &e);
+    REQUIRE(epub->open("tests/data/epub/links-patterns.epub", &e));
+    Layout wide;
+    wide.width = 2400;
+    wide.height = 1600;
+    wide.columns = 2;
+    epub->setLayout(wide);
+    std::vector<int> indexes;
+    for (const auto& b : epub->links(0)) indexes.push_back(b.index);
+    std::sort(indexes.begin(), indexes.end());
+    indexes.erase(std::unique(indexes.begin(), indexes.end()), indexes.end());
+    for (size_t i = 0; i < indexes.size(); ++i)
+        if (auto a = epub->link(0, indexes[i]))
+            for (size_t k = i + 1; k < indexes.size(); ++k)
+                if (auto b = epub->link(0, indexes[k])) CHECK_FALSE((a->mark == b->mark && a->target.value == b->target.value));
 }
 
 TEST_CASE("links: pages without links have none, and bad indexes are nothing") {
@@ -117,10 +218,10 @@ struct ReaderRig {
     FakeNav nav{lib};
     ItemRow row;
     std::unique_ptr<ReaderScreen> r;
-    ReaderRig() {
+    explicit ReaderRig(DocType type = DocType::Epub) {
         fillFixtureLibrary(lib, 10);
         row = *lib.rowFor("IT000003");
-        r = std::make_unique<ReaderScreen>(row, "book.epub", DocType::Epub, [] {
+        r = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [] {
             return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
         }, 6);
         nav.visible = r.get();
@@ -204,4 +305,62 @@ TEST_CASE("reader links: the pop-ups match the reviewed goldens") {
     Canvas c2(kPw5.width, kPw5.height);
     rig.r->draw(c2);
     checkGolden(c2, "tests/golden/link-web.png");
+}
+
+TEST_CASE("reader links: the pen doesn't write under an open pop-up") {
+    ReaderRig rig(DocType::Pdf);
+    CHECK(static_cast<Screen&>(*rig.r).wantsSystemInk());
+    rig.r->onGesture(tapAt({230, 420}), rig.nav);
+    REQUIRE(rig.until([&] { return rig.r->linkPopup().has_value(); }));
+    CHECK_FALSE(static_cast<Screen&>(*rig.r).wantsSystemInk());
+}
+
+TEST_CASE("reader links: a late answer after a page turn is dropped") {
+    ReaderRig rig;
+    rig.r->onGesture(tapAt({560, 420}), rig.nav);   // the jump
+    rig.r->onGesture(tapAt({1100, 700}), rig.nav);  // and at once a page turn
+    REQUIRE(rig.waitPage(4));
+    for (int i = 0; i < 30; ++i) {
+        rig.r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(rig.r->page() == 4);
+    CHECK(rig.r->backLabel().value_or("").rfind("‹ Back to page 1", 0) == 0);  // the rig's own jump, not the link's
+    CHECK_FALSE(rig.r->linkPopup());
+}
+
+TEST_CASE("reader links: a late answer doesn't open behind the menus") {
+    ReaderRig rig;
+    rig.r->onGesture(tapAt({230, 420}), rig.nav);  // the note
+    rig.r->onGesture(tapAt({618, 700}), rig.nav);  // the centre: the menus
+    REQUIRE(rig.r->menusOpen());
+    for (int i = 0; i < 30; ++i) {
+        rig.r->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK_FALSE(rig.r->linkPopup());
+}
+
+TEST_CASE("reader links: a tiny note mark has a fingertip-sized target") {
+    ReaderRig rig;
+    rig.r->onGesture(tapAt({302 + 28, 905 + 20}), rig.nav);  // ~2.5 mm off a 4 px dagger
+    REQUIRE(rig.until([&] { return rig.r->linkPopup().has_value(); }));
+    CHECK(rig.r->linkPopup()->kind == LinkInfo::Kind::Note);
+}
+
+TEST_CASE("reader links: the outer strip of the page still turns it, link or not") {
+    ReaderRig rig;
+    rig.r->onGesture(tapAt({1200, 1220}), rig.nav);  // on the link, at the very edge
+    REQUIRE(rig.waitPage(4));
+    CHECK_FALSE(rig.r->linkPopup());
+}
+
+TEST_CASE("reader links: closing the pop-up repaints with the clean waveform") {
+    ReaderRig rig;
+    rig.r->onGesture(tapAt({230, 420}), rig.nav);
+    REQUIRE(rig.until([&] { return rig.r->linkPopup().has_value(); }));
+    rig.nav.damages.clear();
+    rig.r->onGesture(tapAt({600, 200}), rig.nav);
+    REQUIRE_FALSE(rig.nav.damages.empty());
+    CHECK(rig.nav.damages.back().waveform == Waveform::Quality);
 }

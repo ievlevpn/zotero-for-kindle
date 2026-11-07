@@ -48,6 +48,7 @@ struct LinkInfo {
     std::string label;  // "Footnote 3", "Page 14", "Web link"
     std::string text;   // the note or the text at the target ("" for a jump)
     std::string url;    // Web
+    std::string mark;   // the link's own text ("26", "II", "[12]")
     DocPosition target;
     int targetPage = -1;
 };

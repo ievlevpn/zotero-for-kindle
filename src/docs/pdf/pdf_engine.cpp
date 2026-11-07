@@ -12,6 +12,8 @@ extern "C" {
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
+#include <regex>
 #include <cstdio>
 #include <cmath>
 #include <functional>
@@ -297,7 +299,7 @@ std::vector<LinkBox> PdfEngine::links(int page) {
         for (fz_link* l = links; l; l = l->next, ++i) {
             const Rect r{static_cast<int>(l->rect.x0 * scale + dx), static_cast<int>(l->rect.y0 * scale + dy),
                          static_cast<int>((l->rect.x1 - l->rect.x0) * scale), static_cast<int>((l->rect.y1 - l->rect.y0) * scale)};
-            if (!r.empty()) out.push_back({r, i});
+            if (!r.empty() && l->uri && *l->uri) out.push_back({r, i});
         }
     }
     fz_always(ctx_) {
@@ -344,59 +346,76 @@ std::optional<LinkInfo> PdfEngine::link(int page, int index) {
     info.targetPage = target;
     info.target = positionOfPage(target);
     info.label = "Page " + std::to_string(target + 1);
-    info.text = textAt(target, y);
+    info.text = textAt(target, x, y);
     return info;
 }
 
-std::string PdfEngine::textAt(int page, float y) {
+std::string PdfEngine::textAt(int page, float x, float y) {
     struct Line {
-        float x0, y0, y1;
+        float x0, y0, x1, y1;
         std::string text;
+        float mid() const { return (y0 + y1) / 2; }
+        float height() const { return y1 - y0; }
     };
     std::vector<Line> lines;
+    float pageHeight = 0;
     fz_stext_page* st = nullptr;
     fz_var(st);
     fz_try(ctx_) {
         st = fz_new_stext_page_from_page_number(ctx_, doc_, page, nullptr);
+        pageHeight = st->mediabox.y1 - st->mediabox.y0;
         for (fz_stext_block* b = st->first_block; b; b = b->next) {
             if (b->type != FZ_STEXT_BLOCK_TEXT) continue;
             for (fz_stext_line* l = b->u.t.first_line; l; l = l->next) {
-                Line line{l->bbox.x0, l->bbox.y0, l->bbox.y1, {}};
+                if (std::abs(l->dir.y) > 0.1f || l->dir.x < 0.9f) continue;  // margin stamps run sideways
+                Line line{l->bbox.x0, l->bbox.y0, l->bbox.x1, l->bbox.y1, {}};
                 for (fz_stext_char* c = l->first_char; c; c = c->next) {
                     char buf[8];
-                    const int n = fz_runetochar(buf, c->c);
-                    line.text.append(buf, static_cast<size_t>(n));
+                    line.text.append(buf, static_cast<size_t>(fz_runetochar(buf, c->c)));
                 }
+                const size_t lead = line.text.find_first_not_of(' ');
+                if (lead == std::string::npos) continue;
+                line.text = line.text.substr(lead);
                 lines.push_back(std::move(line));
             }
         }
     }
     fz_always(ctx_) { fz_drop_stext_page(ctx_, st); }
     fz_catch(ctx_) { return ""; }
+    const bool noX = std::isnan(x), noY = std::isnan(y);
+    if (noY) y = pageHeight * 0.06f;  // the page's top, below a running header
+    // The first line whose middle is below the target (hyperref puts it at the previous line's
+    // baseline), in the target's column.
     std::sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.y0 < b.y0 || (a.y0 == b.y0 && a.x0 < b.x0); });
-    // The first line at or below the target, then the lines that continue it: no wider gap than
-    // a line, and not a new numbered entry ("[2] …", "2. …").
-    auto newEntry = [](const std::string& t) {
-        size_t i = t.find_first_not_of(' ');
-        if (i == std::string::npos) return false;
-        if (t[i] == '[') return i + 1 < t.size() && std::isdigit(static_cast<unsigned char>(t[i + 1]));
-        size_t j = i;
-        while (j < t.size() && std::isdigit(static_cast<unsigned char>(t[j]))) ++j;
-        return j > i && j < t.size() && t[j] == '.';
-    };
+    const Line* first = nullptr;
+    for (const Line& l : lines)
+        if (l.mid() > y && (noX || (l.x1 > x - 4 && l.x0 < x + 60))) {
+            first = &l;
+            break;
+        }
+    if (!first) return "";
+    // The column: lines starting near the first line's left edge or indented from it.
+    const float colX0 = first->x0, colX1 = std::max(first->x1, colX0 + 40);
+    std::vector<const Line*> column;
+    for (const Line& l : lines)
+        if (l.y0 >= first->y0 && l.x0 >= colX0 - 6 && l.x0 < colX1) column.push_back(&l);
+    // Hanging indents: some continuation in the column (anywhere on the page) is indented, so a
+    // line back at the edge starts an entry.
+    bool hanging = false;
+    for (const Line& l : lines) hanging |= l.x0 > colX0 + 5 && l.x0 < colX1;
+    static const std::regex entryStart(R"(^(\[[^\]]{1,12}\]|[0-9]{1,3}\.\s))");
     std::string out;
     const Line* prev = nullptr;
-    int taken = 0;
-    for (const Line& l : lines) {
-        if (l.y1 < y - 2) continue;
+    for (const Line* l : column) {
         if (prev) {
-            const float height = prev->y1 - prev->y0;
-            if (l.y0 - prev->y1 > height * 0.8f || newEntry(l.text) || ++taken >= 8 || out.size() > 700) break;
-            out += (out.empty() || out.back() == '-') ? "" : " ";
+            const bool gap = l->y0 - prev->y1 > prev->height() * 0.8f;
+            const bool atEdge = hanging && l->x0 <= colX0 + 1.5f;
+            if (gap || atEdge || std::regex_search(l->text, entryStart) || out.size() > 700) break;
+            if (!out.empty() && out.back() == '-') out.pop_back();  // a word broken across lines
+            else out += ' ';
         }
-        if (!out.empty() && out.back() == '-') out.pop_back();  // a word broken across lines
-        out += l.text;
-        prev = &l;
+        out += l->text;
+        prev = l;
     }
     return out;
 }

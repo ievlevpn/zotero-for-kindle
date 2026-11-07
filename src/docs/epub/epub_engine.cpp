@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <regex>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -167,31 +168,38 @@ const std::vector<EpubEngine::PageLink>& EpubEngine::pageLinks(int page) {
     links_.clear();
     linksPage_ = page;
     if (!view_ || page < 0 || page >= pageCount()) return links_;
-    for (int col = 0; col < cols() && crPage(page) + col < view_->getPageCount(); ++col) {
-        view_->goToPage(crPage(page) + col);
-        ldomXRangeList list;
-        view_->getCurrentPageLinks(list);
-        for (int i = 0; i < list.length(); ++i) {
-            ldomXRange* r = list[i];
-            ldomXPointer a;
-            const lString32 href = r->getHRef(a);
-            if (href.empty()) continue;
-            PageLink link;
-            link.anchor = a.getNode();
-            link.href = utf8(href);
-            link.text = utf8(r->getRangeText());
-            LVArray<lvRect> rects;
-            r->getSegmentRects(rects);
-            for (int k = 0; k < rects.length(); ++k) {
-                lvPoint tl = rects[k].topLeft(), br = rects[k].bottomRight();
-                if (!view_->docToWindowPoint(tl) || !view_->docToWindowPoint(br, true)) continue;
-                const Rect box{tl.x, tl.y, br.x - tl.x, br.y - tl.y};
-                if (!box.empty() && box.y >= 0 && box.y + box.h <= layout_.height) link.rects.push_back(box);
-            }
-            if (!link.rects.empty()) links_.push_back(std::move(link));
-        }
-    }
+    // One call covers the spread: with two columns crengine's current page is both of them.
     view_->goToPage(crPage(page));
+    ldomXRangeList list;
+    view_->getCurrentPageLinks(list);
+    ldomDocument* doc = view_->getDocument();
+    for (int i = 0; i < list.length(); ++i) {
+        ldomXRange* r = list[i];
+        ldomXPointer a;
+        const lString32 href = r->getHRef(a);
+        if (href.empty()) continue;
+        PageLink link;
+        link.anchor = a.getNode();
+        link.href = utf8(href);
+        link.text = utf8(r->getRangeText());
+        if (link.href[0] == '#') {  // only links we can follow
+            if (link.href.size() < 2 || !doc->getNodeById(doc->getAttrValueIndex(href.substr(1).c_str()))) continue;
+        } else if (link.href.find(':') == std::string::npos) {
+            continue;
+        }
+        bool seen = false;
+        for (const auto& l : links_) seen |= l.anchor == link.anchor;
+        if (seen) continue;
+        LVArray<lvRect> rects;
+        r->getSegmentRects(rects);
+        for (int k = 0; k < rects.length(); ++k) {
+            lvPoint tl = rects[k].topLeft(), br = rects[k].bottomRight();
+            if (!view_->docToWindowPoint(tl) || !view_->docToWindowPoint(br, true)) continue;
+            const Rect box{tl.x, tl.y, br.x - tl.x, br.y - tl.y};
+            if (!box.empty() && box.y >= 0 && box.y + box.h <= layout_.height) link.rects.push_back(box);
+        }
+        if (!link.rects.empty()) links_.push_back(std::move(link));
+    }
     return links_;
 }
 
@@ -207,20 +215,100 @@ namespace {
 
 bool hasWord(const lString32& value, const char* word) { return utf8(value).find(word) != std::string::npos; }
 
+std::string nameOf(ldomNode* n) { return n && n->isElement() ? utf8(n->getNodeName()) : ""; }
+
+const lString32& attr(ldomNode* n, const char* name) { return n->getAttributeValue((const lChar8*)nullptr, name); }
+
 // epub:type / role marking a note: <a epub:type="noteref">, <aside epub:type="footnote">, …
 bool markedNote(ldomNode* n, bool ref) {
     if (!n || !n->isElement()) return false;
-    const lString32& type = n->getAttributeValue((const lChar8*)nullptr, "type");
-    const lString32& role = n->getAttributeValue((const lChar8*)nullptr, "role");
-    if (ref) return hasWord(type, "noteref") || hasWord(role, "doc-noteref");
+    const lString32 &type = attr(n, "type"), &role = attr(n, "role"), &cls = attr(n, "class");
+    if (ref) return hasWord(type, "noteref") || hasWord(role, "doc-noteref") || hasWord(cls, "footnote-ref");
     return hasWord(type, "footnote") || hasWord(type, "endnote") || hasWord(type, "rearnote") ||
-           hasWord(role, "doc-footnote") || hasWord(role, "doc-endnote");
+           hasWord(role, "doc-footnote") || hasWord(role, "doc-endnote") || hasWord(cls, "footnotes");
 }
 
-std::string trimmed(std::string s) {
-    const size_t b = s.find_first_not_of(" \t\n\r");
-    if (b == std::string::npos) return "";
-    return s.substr(b, s.find_last_not_of(" \t\n\r") - b + 1);
+// A link back from a note to the text (never a note itself).
+bool backLink(ldomNode* a) {
+    if (!a || !a->isElement()) return false;
+    const lString32 &type = attr(a, "type"), &role = attr(a, "role"), &cls = attr(a, "class");
+    return hasWord(type, "backlink") || hasWord(role, "doc-backlink") || hasWord(cls, "footnote-back");
+}
+
+bool structural(const std::string& name) {
+    return (name.size() == 2 && name[0] == 'h' && name[1] >= '1' && name[1] <= '6') || name == "section" ||
+           name == "body" || name == "DocFragment" || name == "html" || name == "nav";
+}
+
+std::string collapsed(const std::string& s) {
+    std::string out;
+    bool space = false;
+    for (char c : s) {
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            space = !out.empty();
+            continue;
+        }
+        if (space) out += ' ';
+        space = false;
+        out += c;
+    }
+    return out;
+}
+
+bool endsWith(const std::string& s, const std::string& end) {
+    return s.size() >= end.size() && s.compare(s.size() - end.size(), end.size(), end) == 0;
+}
+
+// A note's text as shown: without the way back ("(return)", "↩"), the repeated mark, brackets.
+std::string cleanNote(std::string t, const std::string& mark) {
+    t = collapsed(t);
+    for (const std::string back : {"( return )", "(return)", "( return)", "(return )"})
+        for (size_t at; (at = t.find(back)) != std::string::npos;) t.erase(at, back.size());
+    t = collapsed(t);
+    if (!mark.empty() && t.rfind(mark + " ", 0) == 0) t = t.substr(mark.size() + 1);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (const std::string back : {"\xE2\x86\xA9\xEF\xB8\x8E", "\xE2\x86\xA9", "\xE2\x86\x91", "^", "[Return]", "Back",
+                                       "return to text"})
+            if (endsWith(t, back)) {
+                t = collapsed(t.substr(0, t.size() - back.size()));
+                changed = true;
+            }
+    }
+    if (t.size() >= 2 && t.front() == '[' && t.back() == ']') t = collapsed(t.substr(1, t.size() - 2));
+    return t;
+}
+
+ldomNode* blockOf(ldomNode* n) {
+    while (n && n->getParentNode() && n->getRendMethod() == erm_inline) n = n->getParentNode();
+    return n;
+}
+
+// The next block after `b` in document order (its next sibling, or its parent's), or null.
+ldomNode* nextBlock(ldomNode* b) {
+    for (ldomNode* n = b; n && n->getParentNode(); n = n->getParentNode()) {
+        ldomNode* parent = n->getParentNode();
+        for (int i = n->getNodeIndex() + 1; i < (int)parent->getChildCount(); ++i) {
+            ldomNode* c = parent->getChildNode(i);
+            if (c && c->isElement()) return c;
+        }
+        if (nameOf(parent) == "DocFragment") return nullptr;  // not into the next chapter
+    }
+    return nullptr;
+}
+
+// Another note starts here: an empty anchor with an id first in the block (Gutenberg).
+bool startsNote(ldomNode* b) {
+    for (ldomNode* n = b; n && n->isElement() && n->getChildCount() > 0;) {
+        ldomNode* first = nullptr;
+        for (int i = 0; i < (int)n->getChildCount() && !first; ++i)
+            if (n->getChildNode(i)->isElement()) first = n->getChildNode(i);
+        if (!first) return false;
+        if (nameOf(first) == "a" && !attr(first, "id").empty() && collapsed(utf8(first->getText())).empty()) return true;
+        n = first;
+    }
+    return false;
 }
 
 }  // namespace
@@ -230,40 +318,55 @@ std::optional<LinkInfo> EpubEngine::link(int page, int index) {
     if (!view_ || index < 0 || index >= static_cast<int>(links.size())) return std::nullopt;
     const PageLink& l = links[static_cast<size_t>(index)];
     LinkInfo info;
-    if (l.href.find(':') != std::string::npos && l.href[0] != '#') {
+    info.mark = collapsed(l.text);
+    if (l.href[0] != '#') {
         info.kind = LinkInfo::Kind::Web;
         info.label = "Web link";
         info.url = l.href;
         return info;
     }
-    if (l.href.size() < 2 || l.href[0] != '#') return std::nullopt;
     ldomDocument* doc = view_->getDocument();
-    ldomNode* dest = doc->getNodeById(doc->getAttrValueIndex(Utf8ToUnicode(lString8(l.href.c_str() + 1)).c_str()));
+    const lString32 id = Utf8ToUnicode(lString8(l.href.c_str() + 1));
+    ldomNode* dest = doc->getNodeById(doc->getAttrValueIndex(id.c_str()));
     if (!dest) return std::nullopt;
     ldomXPointer target(dest, 0);
     info.target = {utf8(target.toString())};
     info.targetPage = spreadOf(view_->getBookmarkPage(target));
-    // The note's block: the target itself if it is one, else the block that holds it.
-    ldomNode* block = dest;
-    while (block && block->getParentNode() && block->getRendMethod() == erm_inline) block = block->getParentNode();
-    bool note = markedNote(l.anchor, true);
-    for (ldomNode* n = dest; n && !note && n != block->getParentNode(); n = n->getParentNode()) note = markedNote(n, false);
-    if (!note && block && block->getParentNode()) note = markedNote(block->getParentNode(), false);
-    std::string text = block ? trimmed(utf8(block->getText(' '))) : "";
-    const std::string mark = trimmed(l.text);
-    // Unmarked: a short mark ("3", "*", "†") pointing at a short passage is a footnote too.
-    if (!note && mark.size() <= 4 && !text.empty() && text.size() < 3000) note = true;
-    if (!note) {
-        info.kind = LinkInfo::Kind::Jump;
+    info.kind = LinkInfo::Kind::Jump;
+    // Never a note: a link back from a note, a printed-page anchor, a heading or a whole section.
+    // (crengine prefixes ids with their file: a printed-page anchor ends in "page_23", "Page23", …)
+    std::string lowered = l.href.substr(1);
+    for (char& c : lowered) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    static const std::regex pageAnchor(R"((^|[^a-z])page[_\-.]?[0-9ivxlc]+$)");
+    ldomNode* block = blockOf(dest);
+    if (backLink(l.anchor) || std::regex_search(lowered, pageAnchor) || structural(nameOf(dest)) || structural(nameOf(block)))
         return info;
+    bool note = markedNote(l.anchor, true);
+    for (ldomNode* n = dest; n && !note; n = n->getParentNode()) {
+        note = markedNote(n, false);
+        if (nameOf(n) == "DocFragment") break;
     }
-    // Endnotes end with a link back ("↩"): not part of the note.
-    for (const char* back : {"\xE2\x86\xA9\xEF\xB8\x8E", "\xE2\x86\xA9", "^"})
-        if (text.size() >= std::strlen(back) && text.compare(text.size() - std::strlen(back), std::strlen(back), back) == 0)
-            text = trimmed(text.substr(0, text.size() - std::strlen(back)));
+    // The note's text: from the target on, to the end of its block; if nothing is left there
+    // (Gutenberg's empty anchor paragraph), the next block, unless another note starts there.
+    std::string text;
+    {
+        ldomXRange whole(block, true);
+        const ldomXPointer start(dest, 0), end = whole.getEnd();
+        const std::string from = collapsed(utf8(ldomXRange(start, end).getRangeText(' ')));
+        text = from;
+        ldomNode* b = block;
+        for (int hops = 0; text.empty() && hops < 2; ++hops) {
+            b = nextBlock(b);
+            if (!b || structural(nameOf(b)) || startsNote(b)) break;
+            text = collapsed(utf8(b->getText(' ')));
+        }
+    }
+    // Unmarked: a short mark ("3", "*", "†") pointing at a short passage is a footnote too.
+    if (!note && info.mark.size() <= 4 && !text.empty() && text.size() < 3000) note = true;
+    if (!note) return info;
     info.kind = LinkInfo::Kind::Note;
-    info.label = mark.empty() || mark.size() > 8 ? "Footnote" : "Footnote " + mark;
-    info.text = text;
+    info.label = info.mark.empty() || info.mark.size() > 8 ? "Footnote" : "Footnote " + info.mark;
+    info.text = cleanNote(text, info.mark);
     return info;
 }
 

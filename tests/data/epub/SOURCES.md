@@ -30,3 +30,7 @@ Zotero library was involved; the books are public domain.
 `no-toc.epub` (two spine items, no NCX/nav), `drm.epub` (META-INF/encryption.xml with AES on a
 content file) and `broken.epub` (the first third of waste-land-poetry.epub) are made by the
 project for error-handling tests.
+
+`links-patterns.epub` (made by `make_links_epub.py`): the link patterns real EPUBs use —
+Gutenberg notes (an empty anchor paragraph before `<p class="foot">N (return) [ … ]`), Pandoc
+notes with a back-link, a Standard Ebooks endnote, a chapter link and a printed-page anchor.

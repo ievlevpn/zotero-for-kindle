@@ -102,15 +102,17 @@ public:
         const int page = pageOf(p);
         return page >= 0 && page < pageCount() ? page : -1;
     }
-    // Links on every page ending in 3: a note, a jump (20 pages on) and a web address.
+    // Links on every page ending in 3: a note, a jump (20 pages on), a web address, a note on a
+    // dagger 4 px wide, and a web address running into the right edge.
     std::vector<LinkBox> links(int page) override {
         if (page % 10 != 3) return {};
-        return {{{200, 400, 60, 40}, 0}, {{500, 400, 120, 40}, 1}, {{800, 400, 120, 40}, 2}};
+        return {{{200, 400, 60, 40}, 0}, {{500, 400, 120, 40}, 1}, {{800, 400, 120, 40}, 2},
+                {{300, 900, 4, 10}, 3},  {{900, 1200, 330, 40}, 4}};
     }
     std::optional<LinkInfo> link(int page, int index) override {
-        if (page % 10 != 3 || index < 0 || index > 2) return std::nullopt;
+        if (page % 10 != 3 || index < 0 || index > 4) return std::nullopt;
         LinkInfo l;
-        if (index == 0) {
+        if (index == 0 || index == 3) {
             l.kind = LinkInfo::Kind::Note;
             l.label = "Footnote 3";
             l.text = "See Zosimus, l. ii. p. 104, who allows the prudence of the measure.";

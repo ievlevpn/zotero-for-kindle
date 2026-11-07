@@ -327,7 +327,8 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::Link: {
                 if (e.requestId != linkId_) break;
                 linkId_ = 0;
-                if (!e.link || e.page != page_) break;
+                // The reader moved on since the tap: the answer is about a page that's gone.
+                if (!e.link || e.page != page_ || turning_ || layoutPending_ || menus_ || editor_ || selecting_) break;
                 if (e.link->kind == LinkInfo::Kind::Jump) {
                     followLink(*e.link);
                     break;
@@ -425,6 +426,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
 
 void ReaderScreen::turn(int delta, Nav& nav) {
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
+    linkId_ = 0;
     commitInk();
     const int target = page_ + delta;
     if (target < 0 || (pageCount_ > 0 && target >= pageCount_)) return;
@@ -445,6 +447,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
 
 void ReaderScreen::turnTo(int page) {
     if (!worker_ || layoutPending_) return;
+    linkId_ = 0;
     markJumpOrigin();
     commitInk();
     turning_ = true;
@@ -454,6 +457,7 @@ void ReaderScreen::turnTo(int page) {
 void ReaderScreen::jumpTo(const DocPosition& pos) {
     menus_.reset();  // we're not visible (a pushed screen called us); the next Page repaints all
     if (!worker_) return;
+    linkId_ = 0;
     markJumpOrigin();
     commitInk();
     turning_ = true;
@@ -503,6 +507,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
 }
 
 void ReaderScreen::openMenus(Nav& nav) {
+    linkId_ = 0;
     commitInk();  // leaving the book goes through the menus
     menus_ = std::make_unique<ReaderMenus>(*this, lipc_);
     menus_->open(nav);
@@ -526,7 +531,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (linkPopup_) {  // any gesture closes it; its button follows the link
         const LinkInfo info = *linkPopup_;
         const bool go = g.type == GestureType::Tap && linkButtonRect().contains(g.pos);
-        nav.damage(linkPopupRect(), Waveform::Ui);
+        nav.damage(linkPopupRect(), Waveform::Quality);  // the page under it, without ghosts
         linkPopup_.reset();
         if (go) followLink(info);
         return;
@@ -648,6 +653,7 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
     Rect anchor;
     for (const auto& h : highlights_)
         if (h.annotationKey == key) anchor = anchor.united(h.rect);
+    linkId_ = 0;
     editor_ = std::make_unique<AnnotationEditor>(*a, anchor);
     nav.damage(editor_->rect(), Waveform::Ui);
     return true;
@@ -680,6 +686,7 @@ void ReaderScreen::sendAnnotations(Nav& nav, bool onlyIfChanged) {
 
 void ReaderScreen::startSelection(Point at, Nav&) {
     if (!worker_ || page_ < 0) return;
+    linkId_ = 0;
     selecting_ = true;
     selDragging_ = selReleased_ = false;
     selAnchor_ = at;
@@ -978,13 +985,18 @@ void ReaderScreen::goToPage(int page) {
 
 bool ReaderScreen::tapLink(Point p, Nav&) {
     if (turning_ || layoutPending_ || links_.empty() || !worker_) return false;
-    constexpr int kSlack = 14;  // fingers are wider than a note mark
+    const Rect page = pageArea();
+    const int strip = page.w * 8 / 100;  // the outer strips always turn the page
+    if (p.x < page.x + strip || p.x >= page.x + page.w - strip) return false;
+    constexpr int kSlack = 14;   // fingers are wider than a note mark
+    constexpr int kTarget = 96;  // ~8 mm: a dagger a few pixels wide is still hit by a fingertip
     const LinkBox* best = nullptr;
     int bestDistance = 0;
     for (const LinkBox& b : links_) {
-        const Rect r{b.rect.x - kSlack, b.rect.y - kSlack, b.rect.w + 2 * kSlack, b.rect.h + 2 * kSlack};
-        if (!r.contains(p)) continue;
+        const int w = std::max(b.rect.w + 2 * kSlack, kTarget), h = std::max(b.rect.h + 2 * kSlack, kTarget);
         const Point c = b.rect.center();
+        const Rect r{c.x - w / 2, c.y - h / 2, w, h};
+        if (!r.contains(p)) continue;
         const int d = std::abs(c.x - p.x) + std::abs(c.y - p.y);
         if (!best || d < bestDistance) {
             best = &b;
@@ -1053,7 +1065,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
 
 bool ReaderScreen::penAllowed() const {
     return worker_ && image_ && !error_ && !menus_ && !selecting_ && !selection_ && !editor_ && !note_ &&
-           !layoutPending_ && !turning_;
+           !layoutPending_ && !turning_ && !linkPopup_;
 }
 
 bool ReaderScreen::wantsSystemInk() const {
