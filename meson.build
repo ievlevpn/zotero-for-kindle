@@ -123,6 +123,13 @@ ui_lib = static_library('zk-ui',
 
 ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps])
 
+fs = import('fs')
+cxx = meson.get_compiler('cpp')
+deps_prefix = meson.project_source_root() / 'build-deps' / backend / 'prefix'
+docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp', 'src/docs/render_worker.cpp',
+  include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
+docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, cxx.find_library('dl', required : false)])
+
 screens_lib = static_library('zk-screens',
   'src/screens/home.cpp',
   'src/screens/sync_status.cpp',
@@ -135,11 +142,13 @@ screens_lib = static_library('zk-screens',
   'src/screens/notes.cpp',
   'src/screens/setup.cpp',
   'src/screens/settings.cpp',
+  'src/screens/reader.cpp',
+  'src/screens/reader_menus.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
-  dependencies : [ui_dep, store_dep, sync_dep])
+  dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
 
-screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep])
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep])
 
 app_lib = static_library('zk-app',
   'src/app/app.cpp',
@@ -168,13 +177,6 @@ endif
 # crengine and MuPDF bring their own static freetype/harfbuzz; inside a module linked
 # -Bsymbolic with a version script exporting only the factory, they never meet the firmware's
 # copies that pango uses (spike README). The app links neither engine.
-fs = import('fs')
-cxx = meson.get_compiler('cpp')
-deps_prefix = meson.project_source_root() / 'build-deps' / backend / 'prefix'
-docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp', 'src/docs/render_worker.cpp',
-  include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
-docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, cxx.find_library('dl', required : false)])
-
 module_link_args = []
 if host_machine.system() == 'darwin'
   module_link_args += ['-Wl,-exported_symbol,_zk_*_engine_create']

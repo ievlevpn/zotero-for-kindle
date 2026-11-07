@@ -133,6 +133,9 @@ public:
     int64_t countAnnotations();
     void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);
     std::optional<ReadingState> lastOpened();
+    std::optional<ReadingState> readingState(const std::string& itemKey);
+    // The reader's place in a book (engine position) and how far through it is (0..1).
+    void saveReading(const std::string& itemKey, const std::string& location, double progress);
     void setFileState(const std::string& attachmentKey, AttachmentRecord::State, const std::string& localPath);
     std::vector<AttachmentRecord> downloadedAttachments();
 

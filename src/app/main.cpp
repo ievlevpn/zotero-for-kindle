@@ -26,6 +26,8 @@
 #include "screens/library.h"
 #include "screens/notes.h"
 #include "screens/open_flow.h"
+#include "screens/reader.h"
+#include "docs/engine_factory.h"
 #include "screens/search.h"
 #include "screens/settings.h"
 #include "screens/setup.h"
@@ -51,8 +53,11 @@ int64_t wallMs() {
 
 #ifdef ZK_KINDLE
 const char* kCaBundle = "/mnt/us/zotero/share/cacert.pem";
+const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", {"/usr/java/lib/fonts", "/mnt/us/zotero/fonts"},
+                           "/mnt/us/zotero/cache/cre"};
 #else
 const char* kCaBundle = "";
+const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device", "local/fonts"}, "local/cache/cre"};
 #endif
 
 // The lifecycle talks to whichever sync is current (none before Setup, the service after).
@@ -176,6 +181,20 @@ int main(int argc, char** argv) {
     };
 
     app.setEventHook([&flow](const SyncEvent& e, Nav& nav) { flow.onSyncEvent(e, nav); });
+    flow.setReaderFactory([&lib](const ItemRow& row, Nav& nav) -> std::unique_ptr<Screen> {
+        auto att = nav.library().attachment(row.attachmentKey);
+        if (!att || att->localPath.empty()) return nullptr;
+        const DocType type = att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub;
+        return std::make_unique<ReaderScreen>(
+            row, att->localPath, type,
+            [] {
+                return std::make_unique<RenderWorker>([](DocType t) {
+                    UserError err;
+                    return loadEngine(t, kEngineEnv, &err);
+                });
+            },
+            loadSettings(lib).flashEvery);
+    });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
     auto makeHome = [&]() {
