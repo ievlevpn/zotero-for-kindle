@@ -42,7 +42,6 @@ Rect SettingsScreen::toggleRect() const { return {W() - kMargin - 140, kHighligh
 Rect SettingsScreen::flashMinusRect() const { return {W() - kMargin - 460, kFlashY + 10, 120, 80}; }
 Rect SettingsScreen::flashPlusRect() const { return {W() - kMargin - 120, kFlashY + 10, 120, 80}; }
 Rect SettingsScreen::removeRect() const { return {kMargin, kStorageY + 80, W() - 2 * kMargin, 92}; }
-Rect SettingsScreen::closeRect() const { return {kMargin, kAboutY + 140, W() - 2 * kMargin, 92}; }
 
 void SettingsScreen::load(Library& lib) {
     interval_ = loadSettings(lib).syncIntervalMinutes;
@@ -109,7 +108,6 @@ void SettingsScreen::draw(Canvas& canvas) {
 
     drawText(cr, "About", label, {kMargin, kAboutY, w, 50}, 1);
     drawText(cr, "Zotero for Kindle 0.3 · open source (AGPL-3.0)", value, {kMargin, kAboutY + 54, w, 50}, 1);
-    drawButton(cr, closeRect(), "Close Zotero", true);
 }
 
 void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
@@ -120,10 +118,6 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (accountRect().contains(g.pos)) {
         if (changeAccount_) changeAccount_(nav);
-        return;
-    }
-    if (closeRect().contains(g.pos)) {
-        nav.quit();  // the launcher returns to the Kindle home
         return;
     }
     for (int i = 0; i < 4; ++i)

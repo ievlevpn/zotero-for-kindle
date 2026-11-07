@@ -29,6 +29,7 @@ public:
 
     static Rect syncIndicatorRect();
     static Rect settingsRect();
+    static Rect closeRect();  // "×": close Zotero, back to the Kindle
     static Rect searchFieldRect();
     static Rect cardRect();
     std::vector<Rect> recentRowRects() const;

@@ -192,3 +192,14 @@ TEST_CASE("home: an upload repaints the header, fast when it starts and quality 
     REQUIRE(rig.nav.damages.size() == 1);
     CHECK(rig.nav.damages[0].waveform == Waveform::Quality);
 }
+
+TEST_CASE("home: a close button right of the sync button quits the app") {
+    Rig rig;
+    const Rect close = HomeScreen::closeRect(), sync = HomeScreen::syncIndicatorRect(), gear = HomeScreen::settingsRect();
+    CHECK(close.x >= sync.x + sync.w);    // to the right of sync
+    CHECK(sync.x >= gear.x + gear.w);     // settings, sync, close
+    CHECK(close.x + close.w <= 1236 - kMargin + 1);
+    CHECK_FALSE(rig.nav.quitted);
+    rig.home.onGesture(tapAt(close.center()), rig.nav);
+    CHECK(rig.nav.quitted);
+}

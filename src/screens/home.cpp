@@ -47,8 +47,10 @@ std::string openedAgo(int64_t openedMs, int64_t nowMs) {
 HomeScreen::HomeScreen(SyncStatus& status, HomeActions actions, std::function<int64_t()> wallMs)
     : status_(status), actions_(std::move(actions)), wallMs_(std::move(wallMs)) {}
 
-Rect HomeScreen::syncIndicatorRect() { return {W() - kMargin - 80, 34, 80, 96}; }
-Rect HomeScreen::settingsRect() { return {W() - kMargin - 180, 34, 80, 96}; }
+// Top right: settings, sync, close.
+Rect HomeScreen::closeRect() { return {W() - kMargin - 80, 34, 80, 96}; }
+Rect HomeScreen::syncIndicatorRect() { return {W() - kMargin - 180, 34, 80, 96}; }
+Rect HomeScreen::settingsRect() { return {W() - kMargin - 280, 34, 80, 96}; }
 Rect HomeScreen::searchFieldRect() { return {kMargin, 150, W() - 2 * kMargin, 92}; }
 Rect HomeScreen::cardRect() { return {kMargin, kCardY, W() - 2 * kMargin, kCoverH}; }
 
@@ -123,13 +125,25 @@ void HomeScreen::draw(Canvas& canvas) {
     const int contentW = W() - 2 * kMargin;
     fillRect(cr, {0, 0, W(), H()}, 255);
 
-    // Header: title, status line, settings, sync.
-    drawText(cr, "Zotero", {kSans, 17, 700}, {kMargin, 18, contentW - 200, 100}, 1);
+    // Header: title, status line, settings, sync, close.
+    drawText(cr, "Zotero", {kSans, 17, 700}, {kMargin, 18, contentW - 300, 100}, 1);
     const std::string line = status_.line(nowMs_);
-    if (!line.empty()) drawText(cr, line, {kSans, 6.5, 400, false, kTertiary}, {kMargin + 4, 108, contentW - 200, 34}, 1);
+    if (!line.empty()) drawText(cr, line, {kSans, 6.5, 400, false, kTertiary}, {kMargin + 4, 108, contentW - 300, 34}, 1);
     const Rect gear = settingsRect();
     gearIcon(cr, gear.x + gear.w / 2.0, gear.y + gear.h / 2.0, 22, kSecondary);
     status_.drawIndicator(cr, syncIndicatorRect());
+    {
+        const Rect x = closeRect();
+        const double cx = x.x + x.w / 2.0, cy = x.y + x.h / 2.0, r = 17;
+        gray(cr, kSecondary);
+        cairo_set_line_width(cr, 5);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_move_to(cr, cx - r, cy - r);
+        cairo_line_to(cr, cx + r, cy + r);
+        cairo_move_to(cr, cx + r, cy - r);
+        cairo_line_to(cr, cx - r, cy + r);
+        cairo_stroke(cr);
+    }
 
     // Search field.
     const Rect search = searchFieldRect();
@@ -177,6 +191,10 @@ void HomeScreen::draw(Canvas& canvas) {
 
 void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
+    if (closeRect().contains(g.pos)) {
+        nav.quit();  // the launcher returns to the Kindle home
+        return;
+    }
     if (syncIndicatorRect().contains(g.pos)) {
         nav.sync().syncNow();
         return;

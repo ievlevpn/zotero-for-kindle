@@ -83,13 +83,10 @@ TEST_CASE("scribe layout: Home's card and Recent span the width") {
     CHECK(home.recent().size() == home.recentRowRects().size());
 }
 
-TEST_CASE("scribe layout: Settings' Close Zotero is inside the window") {
-    Rig rig;
+TEST_CASE("scribe layout: Home's close button is at the top right of the window") {
     ScopedMetrics s(kScribe);
-    SettingsScreen settings(someone(), [](Nav&) {});
-    settings.onShow(rig.nav);
-    CHECK(inside(settings.closeRect(), 2379));
-    CHECK(settings.closeRect().w > 1236);
+    CHECK(inside(HomeScreen::closeRect(), 2379));
+    CHECK(HomeScreen::closeRect().x + HomeScreen::closeRect().w == 1860 - kMargin);
 }
 
 TEST_CASE("scribe layout: Search and Setup fields stay above the keyboard") {
