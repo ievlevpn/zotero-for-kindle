@@ -15,6 +15,12 @@ namespace {
 const TextStyle kChipStyle{kSans, 7, 500};
 constexpr int kChipPad = 34, kChipGap = 18;
 
+std::string thousandsOf(int64_t n) {
+    std::string s = std::to_string(n);
+    for (int i = static_cast<int>(s.size()) - 3; i > 0; i -= 3) s.insert(static_cast<size_t>(i), ",");
+    return s;
+}
+
 std::string metaOf(const ItemRow& r) {
     if (r.progress < 0) return "new";
     if (r.progress <= 0) return "opened";
@@ -142,6 +148,47 @@ void drawPageIndicator(cairo_t* cr, Rect r, int page, int pages) {
     fillRect(cr, r, 255);
     if (pages <= 1) return;
     centredText(cr, std::to_string(page + 1) + " / " + std::to_string(pages), {kSans, 6.5, 400, false, kTertiary}, r);
+}
+
+Rect headerBackRect() { return {0, 0, 150, kHeaderH}; }
+
+void drawHeader(cairo_t* cr, const std::string& title, bool back) {
+    fillRect(cr, {0, 0, 1236, kHeaderH}, 255);
+    int x = kMargin;
+    if (back) {
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 6);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_move_to(cr, kMargin + 26, 52);
+        cairo_line_to(cr, kMargin + 4, 74);
+        cairo_line_to(cr, kMargin + 26, 96);
+        cairo_stroke(cr);
+        x = kMargin + 64;
+    }
+    drawText(cr, title, {kSans, back ? 13.0 : 17.0, 700}, {x, back ? 40 : 18, 1236 - x - kMargin, 100}, 1);
+}
+
+void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren) {
+    fillRect(cr, r, 255);
+    // Folder glyph.
+    gray(cr, kSecondary);
+    cairo_set_line_width(cr, 4);
+    const double fx = r.x + 6, fy = r.y + r.h / 2.0 - 26;
+    cairo_move_to(cr, fx, fy + 8);
+    cairo_line_to(cr, fx + 22, fy + 8);
+    cairo_line_to(cr, fx + 30, fy + 16);
+    cairo_line_to(cr, fx + 62, fy + 16);
+    cairo_line_to(cr, fx + 62, fy + 52);
+    cairo_line_to(cr, fx, fy + 52);
+    cairo_close_path(cr);
+    cairo_stroke(cr);
+    const int tx = r.x + 112, countW = 160;
+    centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {tx, r.y, r.w - (tx - r.x) - countW - 40, r.h},
+                Align::Left);
+    centredText(cr, thousandsOf(items), {kSans, 7.5, 400, false, kTertiary}, {r.x + r.w - countW - 40, r.y, countW, r.h},
+                Align::Right);
+    if (hasChildren) centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {r.x + r.w - 30, r.y, 30, r.h}, Align::Right);
+    hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
 }
 
 }  // namespace zk

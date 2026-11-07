@@ -36,4 +36,11 @@ void drawToggle(cairo_t*, Rect, bool on);
 void drawButton(cairo_t*, Rect, const std::string& label, bool primary);
 void drawPageIndicator(cairo_t*, Rect, int page /* 0-based */, int pages);  // "3 / 41"
 
+// Screen header: large title, or "‹" + title for pushed screens; the back target is backRect().
+void drawHeader(cairo_t*, const std::string& title, bool back);
+Rect headerBackRect();
+
+// A collection line: folder glyph, name, item count, "›" when it has subcollections.
+void drawCollectionRow(cairo_t*, Rect, const std::string& name, int64_t items, bool hasChildren);
+
 }  // namespace zk

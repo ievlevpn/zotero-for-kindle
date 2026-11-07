@@ -17,7 +17,9 @@
 #include "platform/keyboard.h"
 #include "platform/lipc.h"
 #include "platform/power.h"
+#include "screens/collections.h"
 #include "screens/home.h"
+#include "screens/library.h"
 #include "screens/sync_status.h"
 #include "store/db.h"
 #include "store/library.h"
@@ -81,6 +83,8 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     SyncStatus status;
     std::unique_ptr<Screen> s;
     if (screen == "home") s = std::make_unique<HomeScreen>(status, HomeActions{}, wallMs);
+    if (screen == "library") s = std::make_unique<LibraryScreen>(nullptr);
+    if (screen == "collections") s = std::make_unique<CollectionsScreen>(nullptr);
     if (!s) {
         log(LogLevel::Error, "unknown screen %s", screen.c_str());
         return 2;
@@ -155,8 +159,9 @@ int main(int argc, char** argv) {
     App app(*display, lib, sync, *keyboard);
     SyncStatus status;
     app.setRoot(0, std::make_unique<HomeScreen>(status, HomeActions{}, wallMs));
-    app.setRoot(1, std::make_unique<PlaceholderScreen>("Library"));
-    app.setRoot(2, std::make_unique<PlaceholderScreen>("Collections"));
+    auto openItem = [](const ItemRow& r) { log(LogLevel::Info, "open %s (open flow arrives in Task 10)", r.key.c_str()); };
+    app.setRoot(1, std::make_unique<LibraryScreen>(openItem));
+    app.setRoot(2, std::make_unique<CollectionsScreen>(openItem));
     app.setRoot(3, std::make_unique<PlaceholderScreen>("Notes"));
     if (service) service->start();
     app.start();
