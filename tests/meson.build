@@ -31,6 +31,7 @@ test_sources = files(
   'test_layout_scribe.cpp',
   'test_keyboard_bounds.cpp',
   'test_review_fixes6.cpp',
+  'test_item_icons.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',

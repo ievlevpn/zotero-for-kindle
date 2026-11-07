@@ -1,5 +1,6 @@
 #include "ui/widgets.h"
 
+#include "ui/item_icons.h"
 #include "ui/metrics.h"
 
 #include <algorithm>
@@ -34,8 +35,7 @@ std::string metaOf(const ItemRow& r) {
 void drawItemRow(cairo_t* cr, Rect row, const ItemRow& item, const std::string& status) {
     fillRect(cr, row, 255);
     const int badgeW = 74;
-    if (!item.badge.empty()) typeBadge(cr, {row.x, row.y + 26, badgeW, 92}, item.badge);
-    else hRule(cr, row.y + 72, row.x + 20, row.x + badgeW - 20, kRule);
+    itemTypeIcon(cr, {row.x, row.y + 26, badgeW, 92}, item.itemType, item.badge);
     const int tx = row.x + badgeW + 38, metaW = 150, tw = row.x + row.w - tx;
     const int bottom = row.y + row.h - 12;
     const TextStyle titleStyle{kSerif, 10, 700};
