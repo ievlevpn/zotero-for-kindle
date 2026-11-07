@@ -8,6 +8,7 @@ namespace zk {
 class NullSync final : public SyncControl {
 public:
     void syncNow() override {}
+    void syncWhenOnline() override {}
     void openBook(const std::string&, const std::string&) override {}
     void setAllHighlightsOffline(bool) override {}
     void removeDownloads() override {}

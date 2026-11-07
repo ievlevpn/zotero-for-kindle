@@ -18,6 +18,7 @@ public:
     void open(const ItemRow&, Nav&);
     void onSyncEvent(const SyncEvent&, Nav&);  // from App::setEventHook
     std::string statusFor(const std::string& attachmentKey) const;
+    void reset() { pending_.clear(); }  // a new sync service: forget downloads the old one had
     StatusFn statusFn() const {
         return [this](const std::string& k) { return statusFor(k); };
     }

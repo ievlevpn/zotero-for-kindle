@@ -44,10 +44,15 @@ std::string ItemList::statusFor(const std::string& key) const { return statusFn_
 
 void ItemList::onDownloadEvent(const SyncEvent& e, Rect area, Nav& nav) {
     if (e.kind != SyncEvent::Kind::DownloadProgress && e.kind != SyncEvent::Kind::DownloadFinished) return;
-    const int i = indexOfAttachment(e.attachmentKey);
-    if (i < 0) return;
-    if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());  // the file state changed
-    nav.damage(rowRects(area)[static_cast<size_t>(i)], Waveform::Fast);
+    if (indexOfAttachment(e.attachmentKey) < 0) return;
+    if (e.kind == SyncEvent::Kind::DownloadFinished) {
+        // The file state changed, and opening the book may have moved it (Unread, Recent...):
+        // reload and repaint the page rather than trust the old row index.
+        refresh(nav.library());
+        nav.damage(area, Waveform::Quality);
+        return;
+    }
+    nav.damage(rowRects(area)[static_cast<size_t>(indexOfAttachment(e.attachmentKey))], Waveform::Fast);
 }
 
 int ItemList::indexOfAttachment(const std::string& key) const {

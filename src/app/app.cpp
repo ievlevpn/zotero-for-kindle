@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "core/log.h"
+#include "store/db.h"
 #include "ui/widgets.h"
 
 namespace zk {
@@ -35,6 +36,7 @@ Rect toastRect() { return {kMargin, 1547 - kTabBarH - 130, 1236 - 2 * kMargin, 1
 
 void App::toast(const std::string& text) {
     toast_ = text;
+    lastToast_ = text;
     toastUntil_ = clock_() + 3000;
     pending_.push_back({toastRect(), Waveform::Fast});
 }
@@ -55,7 +57,7 @@ void App::showTop() {
     if (s->wantsKeyboard()) keyboard_.show();
     else keyboard_.hide();
     caller_ = s;
-    s->onShow(*this);
+    guard([&] { s->onShow(*this); });
     caller_ = nullptr;
     redrawAll(Waveform::Quality);
 }
@@ -97,7 +99,20 @@ void App::damage(Rect r, Waveform w) {
     pending_.push_back({r, w});
 }
 
-void App::redrawAll(Waveform w) { pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, w}); }
+void App::redrawAll(Waveform w) {
+    if (caller_ && caller_ != visibleTop()) return;  // hidden screens repaint when shown
+    pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, w});
+}
+
+void App::guard(const std::function<void()>& f) {
+    try {
+        f();
+    } catch (const DbError& e) {
+        // Busy behind a long sync transaction, disk full, storage gone: say so, keep running.
+        log(LogLevel::Warn, "library error on the UI thread: %s", e.what());
+        toast(e.diskFull() ? "Storage is full." : "The library is busy. Try again in a moment.");
+    }
+}
 
 void App::handle(const Gesture& g) {
     if (g.type == GestureType::LongPress && g.pos.y < kHeaderH) {
@@ -120,7 +135,7 @@ void App::handle(const Gesture& g) {
         return;
     }
     caller_ = s;
-    s->onGesture(g, *this);
+    guard([&] { s->onGesture(g, *this); });
     caller_ = nullptr;
 }
 
@@ -141,7 +156,7 @@ void App::step(int timeout_ms) {
             case InputEvent::Kind::Key:
                 if (Screen* s = visibleTop()) {
                     caller_ = s;
-                    s->onKey(e.key, *this);
+                    guard([&] { s->onKey(e.key, *this); });
                     caller_ = nullptr;
                 }
                 break;
@@ -167,12 +182,12 @@ void App::step(int timeout_ms) {
     while (sync_->poll(ev)) {
         if (hook_) {
             caller_ = nullptr;
-            hook_(ev, *this);
+            guard([&] { hook_(ev, *this); });
         }
         for (auto& stack : stacks_)
             for (auto& s : stack) {
                 caller_ = s.get();
-                s->onSyncEvent(ev, *this);
+                guard([&] { s->onSyncEvent(ev, *this); });
                 caller_ = nullptr;
             }
     }
@@ -183,7 +198,7 @@ void App::step(int timeout_ms) {
     }
     if (Screen* s = visibleTop()) {
         caller_ = s;
-        s->onTick(*this);
+        guard([&] { s->onTick(*this); });
         caller_ = nullptr;
     }
     if (watchdog_ && clock_() - lastWatchdogMs_ >= watchdogPeriodMs_) {
@@ -192,7 +207,7 @@ void App::step(int timeout_ms) {
     }
     auto deferred = std::move(deferred_);
     deferred_.clear();
-    for (auto& f : deferred) f();
+    for (auto& f : deferred) guard(f);
     flush();
 }
 
@@ -209,7 +224,7 @@ void App::flush() {
         full = all;
         quality = {};
     }
-    visibleTop()->draw(canvas_);
+    guard([&] { visibleTop()->draw(canvas_); });
     if (visibleTop()->showsTabBar()) drawTabBar(canvas_.cr(), tabBar(), kTabNames, tab_);
     if (!toast_.empty()) {
         drawToast(canvas_.cr(), toastRect(), toast_);

@@ -43,6 +43,7 @@ struct Rig {
     std::mutex serverMutex;  // the worker thread uses the fakes; tests set them up before start
     std::function<HttpResponse(const HttpRequest&)> route;
     std::unique_ptr<SyncService> service;
+    std::atomic<bool> wifi{true};
 
     Rig() {
         char tmpl[] = "/tmp/zk-svc-XXXXXX";
@@ -74,6 +75,8 @@ struct Rig {
         deps.config.webdavUser = "u";
         deps.config.webdavPassword = "p";
         deps.keepAwake = &keepAwake;
+        deps.wifiUp = [this] { return wifi.load(); };
+        deps.onlinePollMs = 20;
         service = std::make_unique<SyncService>(std::move(deps));
         service->start();
     }
@@ -245,4 +248,36 @@ TEST_CASE("sync service: removing downloads deletes the files and marks them rem
     Db db = Db::open(rig.db());
     Library ui(db);
     CHECK(ui.attachment("ABCD1234")->state == AttachmentRecord::State::Remote);
+}
+
+TEST_CASE("sync service: sync-when-online waits on the worker until Wi-Fi is back") {
+    Rig rig;
+    rig.wifi = false;
+    rig.start();
+    rig.service->syncWhenOnline();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    SyncEvent e;
+    CHECK_FALSE(rig.service->poll(e));  // nothing yet
+    rig.wifi = true;
+    auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    CHECK_FALSE(events.back().error);
+}
+
+TEST_CASE("sync service: opening a book goes ahead of a queued sync") {
+    Rig rig;
+    rig.serveFile();
+    std::atomic<bool> release{false};
+    rig.route = [&release, base = rig.route](const HttpRequest& r) {
+        if (r.url.find("collections?since=") != std::string::npos)
+            while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        return base(r);
+    };
+    rig.start();
+    rig.service->syncNow();  // runs (blocked)
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    rig.service->syncNow();  // queued
+    rig.service->openBook("BOOK0001", "ABCD1234");  // must jump ahead of the queued sync
+    release = true;
+    std::vector<SyncEvent> events = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished), 8000);
+    CHECK(count(events, SyncEvent::Kind::SyncFinished) == 1);  // only the running one finished first
 }

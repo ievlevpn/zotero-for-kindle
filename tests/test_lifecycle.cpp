@@ -27,8 +27,8 @@ struct Rig {
     int64_t now = 10'000'000;
     App app{display, lib, sync, keyboard, [this] { return now += 10; }};
     SyncStatus status;
-    bool wifi = true, storage = true;
-    Lifecycle life{sync, status, [] { return 10; }, [this] { return wifi; }, [this] { return storage; }};
+    bool storage = true;
+    Lifecycle life{sync, status, [] { return 10; }, [this] { return storage; }};
     Rig() {
         for (int i = 0; i < 4; ++i) app.setRoot(i, std::make_unique<Blank>());
         life.attach(app);
@@ -39,30 +39,23 @@ struct Rig {
 
 }  // namespace
 
-TEST_CASE("lifecycle: background stops periodic sync; foreground flashes, restores it and syncs") {
+TEST_CASE("lifecycle: background stops periodic sync; foreground flashes, restores it and syncs once online") {
     Rig rig;
     rig.display.lifecycle(InputEvent::Kind::Background);
     rig.app.step(0);
     CHECK(rig.sync.interval == 0);
-    CHECK(rig.sync.syncs == 0);
     rig.now += 30 * 60'000;
     rig.display.lifecycle(InputEvent::Kind::Foreground);
     rig.app.step(0);
     CHECK(rig.sync.interval == 10);
-    CHECK(rig.sync.syncs == 1);
+    CHECK(rig.sync.whenOnline == 1);  // the worker waits for Wi-Fi; the UI thread never probes it
+    CHECK(rig.sync.syncs == 0);
     REQUIRE_FALSE(rig.display.presents.empty());
     CHECK(rig.display.presents.back().waveform == Waveform::Full);
 }
 
-TEST_CASE("lifecycle: no sync on wake without Wi-Fi or right after a sync") {
+TEST_CASE("lifecycle: no sync on wake right after a successful sync") {
     Rig rig;
-    rig.wifi = false;
-    rig.display.lifecycle(InputEvent::Kind::Background);
-    rig.display.lifecycle(InputEvent::Kind::Foreground);
-    rig.app.step(0);
-    rig.app.step(0);
-    CHECK(rig.sync.syncs == 0);
-    rig.wifi = true;
     SyncEvent done;
     done.kind = SyncEvent::Kind::SyncFinished;
     rig.status.onEvent(done, rig.now);
@@ -70,32 +63,16 @@ TEST_CASE("lifecycle: no sync on wake without Wi-Fi or right after a sync") {
     rig.display.lifecycle(InputEvent::Kind::Foreground);
     rig.app.step(0);
     rig.app.step(0);
-    CHECK(rig.sync.syncs == 0);
+    CHECK(rig.sync.whenOnline == 0);
 }
 
 TEST_CASE("lifecycle: when the app's storage disappears the app quits within seconds") {
     Rig rig;
     rig.storage = false;
     const int64_t start = rig.now;
-    rig.display.closed = false;
     for (int i = 0; i < 2000 && !rig.app.quitting(); ++i) rig.app.step(0);
     CHECK(rig.app.quitting());
     CHECK(rig.now - start <= 6000);
-}
-
-TEST_CASE("lifecycle: a sync wanted on wake waits for Wi-Fi to reconnect") {
-    Rig rig;
-    rig.wifi = false;  // Wi-Fi takes a few seconds to come back after wake
-    rig.display.lifecycle(InputEvent::Kind::Background);
-    rig.display.lifecycle(InputEvent::Kind::Foreground);
-    rig.app.step(0);
-    rig.app.step(0);
-    CHECK(rig.sync.syncs == 0);
-    rig.wifi = true;
-    for (int i = 0; i < 2000 && rig.sync.syncs == 0; ++i) rig.app.step(0);
-    CHECK(rig.sync.syncs == 1);
-    for (int i = 0; i < 2000; ++i) rig.app.step(0);
-    CHECK(rig.sync.syncs == 1);  // only once
 }
 
 TEST_CASE("lifecycle: a failed last sync is retried on wake even if it was recent") {
@@ -108,5 +85,5 @@ TEST_CASE("lifecycle: a failed last sync is retried on wake even if it was recen
     rig.display.lifecycle(InputEvent::Kind::Foreground);
     rig.app.step(0);
     rig.app.step(0);
-    CHECK(rig.sync.syncs == 1);
+    CHECK(rig.sync.whenOnline == 1);
 }

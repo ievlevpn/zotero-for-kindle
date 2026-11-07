@@ -25,6 +25,9 @@ struct SyncDeps {
     Config config;
     KeepAwake* keepAwake = nullptr;
     int intervalMinutes = 10;
+    std::function<bool()> wifiUp;  // default: probeNetState() (lipc on the Kindle), on the worker
+    int onlinePollMs = 5000;
+    int onlineGiveUpMs = 120'000;
 };
 
 class SyncService final : public SyncControl {
@@ -38,6 +41,7 @@ public:
     void stop();
 
     void syncNow() override;
+    void syncWhenOnline() override;
     void openBook(const std::string& itemKey, const std::string& attachmentKey) override;
     void setAllHighlightsOffline(bool) override;
     void removeDownloads() override;
@@ -47,7 +51,7 @@ public:
 
 private:
     struct Command {
-        enum class Kind { Sync, OpenBook, SetAllOffline, RemoveDownloads } kind;
+        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads } kind;
         std::string itemKey, attachmentKey;
         bool flag = false;
     };
@@ -57,6 +61,7 @@ private:
     void run();
     void emit(SyncEvent);
     bool sleepFor(int seconds);  // false when stopping
+    bool sleepForMs(int ms);
 
     SyncDeps deps_;
     std::thread thread_;

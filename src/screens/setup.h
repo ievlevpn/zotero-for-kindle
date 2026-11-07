@@ -4,7 +4,8 @@
 // the key (and WebDAV, if given) on a background thread and shows any problem in plain words.
 
 #include <functional>
-#include <future>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -24,7 +25,7 @@ public:
     using Connected = std::function<void(const Config&, Nav&)>;
     static constexpr int kFields = 5;
 
-    SetupScreen(Config initial, bool imported, std::string configDir, Checker, Connected);
+    SetupScreen(Config initial, bool imported, std::string configDir, Checker, Connected, bool canGoBack = false);
 
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
@@ -50,7 +51,14 @@ private:
     Connected connected_;
     int focus_ = -1;
     bool checking_ = false;
-    std::future<UserError> pending_;
+    bool canGoBack_ = false;
+    // The check runs on a detached thread; leaving the screen never waits for the network.
+    struct Check {
+        std::mutex mutex;
+        bool done = false;
+        UserError result;
+    };
+    std::shared_ptr<Check> pending_;
     std::optional<UserError> error_;
 };
 

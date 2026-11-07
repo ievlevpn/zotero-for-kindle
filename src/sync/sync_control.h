@@ -25,6 +25,8 @@ class SyncControl {
 public:
     virtual ~SyncControl() = default;
     virtual void syncNow() = 0;
+    // Sync once Wi-Fi is up (after wake): the worker waits for it, the UI thread never probes it.
+    virtual void syncWhenOnline() = 0;
     // Download the file if needed, then its annotations (on demand, spec §7.4).
     virtual void openBook(const std::string& itemKey, const std::string& attachmentKey) = 0;
     virtual void setAllHighlightsOffline(bool) = 0;

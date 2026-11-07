@@ -60,6 +60,7 @@ class CurrentSync final : public SyncControl {
 public:
     explicit CurrentSync(App& app) : app_(app) {}
     void syncNow() override { app_.sync().syncNow(); }
+    void syncWhenOnline() override { app_.sync().syncWhenOnline(); }
     void openBook(const std::string& i, const std::string& a) override { app_.sync().openBook(i, a); }
     void setAllHighlightsOffline(bool on) override { app_.sync().setAllHighlightsOffline(on); }
     void removeDownloads() override { app_.sync().removeDownloads(); }
@@ -155,9 +156,13 @@ int main(int argc, char** argv) {
     NullSync nullSync;
     App app(*display, lib, nullSync, *keyboard);
     std::unique_ptr<SyncService> service;
+    SyncStatus status;
+    OpenFlow flow(wallMs);
     auto startService = [&](const Config& c) {
         if (service) service->stop();
         app.setSync(nullSync);
+        status.reset();  // the old worker's sync and downloads are gone
+        flow.reset();
         SyncDeps deps;
         deps.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
         deps.dbPath = paths.dbPath;
@@ -170,22 +175,20 @@ int main(int argc, char** argv) {
         service->start();
     };
 
-    SyncStatus status;
-    OpenFlow flow(wallMs);
     app.setEventHook([&flow](const SyncEvent& e, Nav& nav) { flow.onSyncEvent(e, nav); });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
-    std::function<std::unique_ptr<Screen>(const Config&, bool)> makeSetup;
+    std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
     auto makeHome = [&]() {
         HomeActions home;
         home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
         home.openSettings = [&] {
-            app.push(std::make_unique<SettingsScreen>(*config, [&](Nav& nav) { nav.push(makeSetup(*config, false)); }));
+            app.push(std::make_unique<SettingsScreen>(*config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }));
         };
         home.openItem = openItem;
         home.status = flow.statusFn();
         return std::make_unique<HomeScreen>(status, home, wallMs);
     };
-    makeSetup = [&](const Config& initial, bool imported) -> std::unique_ptr<Screen> {
+    makeSetup = [&](const Config& initial, bool imported, bool canGoBack) -> std::unique_ptr<Screen> {
         auto check = [](const Config& c) {
             CurlHttp http(kCaBundle);
             return checkAccount(http, c);
@@ -197,7 +200,7 @@ int main(int argc, char** argv) {
                 app.replaceRoot(0, makeHome());
             });
         };
-        return std::make_unique<SetupScreen>(initial, imported, paths.configDir, check, connected);
+        return std::make_unique<SetupScreen>(initial, imported, paths.configDir, check, connected, canGoBack);
     };
 
     app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
@@ -208,11 +211,10 @@ int main(int argc, char** argv) {
         app.setRoot(0, makeHome());
     } else {
         // No account yet, or one just dropped over USB: confirm it on the Setup screen first.
-        app.setRoot(0, makeSetup(config.value_or(Config{}), startup.imported));
+        app.setRoot(0, makeSetup(config.value_or(Config{}), startup.imported, false));
     }
     CurrentSync current(app);
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
-                        [] { return probeNetState().wifiConnected; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
     app.start();

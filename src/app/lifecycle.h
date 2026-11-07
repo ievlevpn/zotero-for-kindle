@@ -1,7 +1,7 @@
 #pragma once
 // Background/foreground and storage watch (spec §7.8): while the Kindle sleeps no periodic sync
 // runs; on wake the screen gets a full refresh and, with Wi-Fi up, a sync if the last one is
-// older than 2 minutes. If the app's storage goes away (USB storage mode), the app quits.
+// older than 2 minutes (or failed) — the worker waits for Wi-Fi. If the app's storage goes away (USB storage mode), the app quits.
 
 #include <functional>
 
@@ -15,20 +15,18 @@ public:
     static constexpr int64_t kResyncAfterMs = 2 * 60'000;
     static constexpr int64_t kStorageCheckMs = 5'000;
 
-    Lifecycle(SyncControl&, SyncStatus&, std::function<int()> intervalMinutes, std::function<bool()> wifiUp,
-              std::function<bool()> storageOk);
+    Lifecycle(SyncControl&, SyncStatus&, std::function<int()> intervalMinutes, std::function<bool()> storageOk);
     void attach(App&);  // installs the hooks; the App must outlive nothing beyond this object
 
     void onBackground();
     void onForeground(int64_t nowMs);
-    bool watch();  // every few seconds: storage still there? Wi-Fi back for a wanted sync?
+    bool watch();  // every few seconds: is the app's storage still there?
 
 private:
     SyncControl& sync_;
     SyncStatus& status_;
     std::function<int()> interval_;
-    std::function<bool()> wifi_, storage_;
-    bool syncWhenOnline_ = false;  // woke without Wi-Fi: sync once it reconnects
+    std::function<bool()> storage_;
 };
 
 }  // namespace zk

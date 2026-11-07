@@ -70,6 +70,11 @@ void BookScreen::draw(Canvas& canvas) {
                  1, Align::Center);
         return;
     }
+    if (error_ && all_.empty()) {
+        drawBanner(cr, {0, area.y + 40, kW, 150}, UserError{error_->kind, "Couldn't load the highlights: " + error_->message,
+                                                              error_->details});
+        return;
+    }
     if (all_.empty()) {
         drawText(cr, "No highlights in this book yet.", {kSerif, 10, 400, false, kSecondary},
                  {kMargin, area.y + 120, kW - 2 * kMargin, 80}, 1, Align::Center);
@@ -95,6 +100,7 @@ void BookScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind == SyncEvent::Kind::AnnotationsReady) {
         load(nav.library());
         loading_ = false;
+        error_ = e.error;
         nav.damage(listArea(), Waveform::Quality);
     } else if (e.kind == SyncEvent::Kind::SyncFinished) {
         const bool wasLoading = loading_;

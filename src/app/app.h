@@ -23,6 +23,7 @@ public:
     void step(int timeout_ms);  // one loop iteration
     int run();                  // until quit or the window closes; returns the exit code
     bool quitting() const { return quit_; }
+    const std::string& lastToast() const { return lastToast_; }
 
     // Nav
     void push(std::unique_ptr<Screen>) override;
@@ -56,6 +57,7 @@ private:
     Screen* visibleTop() const;
     void showTop();
     void handle(const Gesture&);
+    void guard(const std::function<void()>&);  // runs screen code; DbError -> a toast
     void flush();
     Rect tabBar() const;
 
@@ -77,7 +79,7 @@ private:
     std::function<void(bool)> lifecycle_;
     std::function<bool()> watchdog_;
     int64_t watchdogPeriodMs_ = 0, lastWatchdogMs_ = 0;
-    std::string toast_;
+    std::string toast_, lastToast_;
     int64_t toastUntil_ = 0;
     bool toastShown_ = false;
     bool closed_ = false;

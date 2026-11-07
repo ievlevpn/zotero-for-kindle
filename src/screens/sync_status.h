@@ -16,6 +16,10 @@ namespace zk {
 class SyncStatus {
 public:
     void onEvent(const SyncEvent&, int64_t nowMs);
+    void reset() {  // a new sync service: nothing is running
+        syncing_ = false;
+        progress_ = {};
+    }
     bool syncing() const { return syncing_; }
     bool hasError() const { return error_.has_value(); }
     const UserError& error() const { return *error_; }

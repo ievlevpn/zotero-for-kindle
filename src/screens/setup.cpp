@@ -1,5 +1,7 @@
 #include "screens/setup.h"
 
+#include <thread>
+
 #include "sync/webdav.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -39,8 +41,10 @@ UserError checkAccount(Http& http, const Config& c) {
     return {};
 }
 
-SetupScreen::SetupScreen(Config initial, bool imported, std::string configDir, Checker checker, Connected connected)
-    : imported_(imported), configDir_(std::move(configDir)), checker_(std::move(checker)), connected_(std::move(connected)) {
+SetupScreen::SetupScreen(Config initial, bool imported, std::string configDir, Checker checker, Connected connected,
+                         bool canGoBack)
+    : imported_(imported), configDir_(std::move(configDir)), checker_(std::move(checker)), connected_(std::move(connected)),
+      canGoBack_(canGoBack) {
     if (initial.userId > 0) fields_[0].setText(std::to_string(initial.userId));
     fields_[1].setText(initial.apiKey);
     fields_[2].setText(initial.webdavUrl);
@@ -80,14 +84,27 @@ void SetupScreen::connect(Nav& nav) {
     checking_ = true;
     error_.reset();
     const Config c = config();
-    pending_ = std::async(std::launch::async, [checker = checker_, c] { return checker(c); });
+    auto check = std::make_shared<Check>();
+    pending_ = check;
+    std::thread([check, checker = checker_, c] {
+        UserError r = checker(c);
+        std::lock_guard<std::mutex> lock(check->mutex);
+        check->result = std::move(r);
+        check->done = true;
+    }).detach();
     nav.redrawAll(Waveform::Quality);
 }
 
 void SetupScreen::onTick(Nav& nav) {
-    if (!checking_ || pending_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    if (!checking_ || !pending_) return;
+    UserError verdict;
+    {
+        std::lock_guard<std::mutex> lock(pending_->mutex);
+        if (!pending_->done) return;
+        verdict = pending_->result;
+    }
     checking_ = false;
-    UserError verdict = pending_.get();
+    pending_.reset();
     if (verdict.kind != ErrorKind::None) {
         error_ = verdict;
         nav.redrawAll(Waveform::Quality);
@@ -105,7 +122,7 @@ void SetupScreen::onTick(Nav& nav) {
 void SetupScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, kW, 1547}, 255);
-    drawHeader(cr, "Set up Zotero", false);
+    drawHeader(cr, "Set up Zotero", canGoBack_);
     const std::string intro = imported_ ? "Settings loaded from config.json. Connect to check them."
                                         : "Create an API key at zotero.org/settings/keys with access to your library.";
     drawText(cr, intro, {kSans, 8, 400, false, kSecondary}, {kMargin, kHeaderH + 10, kW - 2 * kMargin, 120}, 3);
@@ -124,7 +141,13 @@ void SetupScreen::draw(Canvas& canvas) {
 }
 
 void SetupScreen::onGesture(const Gesture& g, Nav& nav) {
-    if (g.type != GestureType::Tap || checking_) return;
+    if (g.type != GestureType::Tap) return;
+    if (canGoBack_ && headerBackRect().contains(g.pos)) {
+        nav.keyboard().hide();
+        nav.pop();
+        return;
+    }
+    if (checking_) return;
     if (connectRect().contains(g.pos)) {
         connect(nav);
         return;

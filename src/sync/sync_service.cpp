@@ -54,7 +54,9 @@ struct SyncService::Worker {
     std::unique_ptr<WebDav> dav;
 };
 
-SyncService::SyncService(SyncDeps deps) : deps_(std::move(deps)), intervalMinutes_(deps_.intervalMinutes) {}
+SyncService::SyncService(SyncDeps deps) : deps_(std::move(deps)), intervalMinutes_(deps_.intervalMinutes) {
+    if (!deps_.wifiUp) deps_.wifiUp = [] { return probeNetState().wifiConnected; };
+}
 
 SyncService::~SyncService() { stop(); }
 
@@ -80,15 +82,19 @@ void SyncService::stop() {
 void SyncService::enqueue(Command c) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (c.kind == Command::Kind::Sync &&
-            std::any_of(commands_.begin(), commands_.end(), [](const Command& q) { return q.kind == Command::Kind::Sync; }))
+        if ((c.kind == Command::Kind::Sync || c.kind == Command::Kind::SyncWhenOnline) &&
+            std::any_of(commands_.begin(), commands_.end(),
+                        [](const Command& q) { return q.kind == Command::Kind::Sync || q.kind == Command::Kind::SyncWhenOnline; }))
             return;  // one pending sync is enough
-        commands_.push_back(std::move(c));
+        // Opening a book is what the reader is waiting for: ahead of queued syncs.
+        if (c.kind == Command::Kind::OpenBook) commands_.push_front(std::move(c));
+        else commands_.push_back(std::move(c));
     }
     cv_.notify_all();
 }
 
 void SyncService::syncNow() { enqueue({Command::Kind::Sync, {}, {}, false}); }
+void SyncService::syncWhenOnline() { enqueue({Command::Kind::SyncWhenOnline, {}, {}, false}); }
 void SyncService::openBook(const std::string& itemKey, const std::string& attachmentKey) {
     enqueue({Command::Kind::OpenBook, itemKey, attachmentKey, false});
 }
@@ -113,6 +119,12 @@ bool SyncService::poll(SyncEvent& out) {
 void SyncService::emit(SyncEvent e) {
     std::lock_guard<std::mutex> lock(mutex_);
     events_.push_back(std::move(e));
+}
+
+bool SyncService::sleepForMs(int ms) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait_for(lock, std::chrono::milliseconds(ms), [this] { return stopping_.load(); });
+    return !stopping_;
 }
 
 bool SyncService::sleepFor(int seconds) {
@@ -170,7 +182,19 @@ void SyncService::run() {
         std::optional<KeepAwakeScope> awake;
         if (deps_.keepAwake) awake.emplace(*deps_.keepAwake);
         try {
+            if (cmd.kind == Command::Kind::SyncWhenOnline) {
+                // Wi-Fi comes back a few seconds after wake; wait for it here, quietly.
+                const auto until = Clock::now() + std::chrono::milliseconds(deps_.onlineGiveUpMs);
+                bool online = deps_.wifiUp();
+                while (!online && !stopping_ && Clock::now() < until && sleepForMs(deps_.onlinePollMs)) online = deps_.wifiUp();
+                if (!online || stopping_) {
+                    busy_ = false;
+                    continue;
+                }
+                cmd.kind = Command::Kind::Sync;
+            }
             switch (cmd.kind) {
+                case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
                 case Command::Kind::Sync: {
                     SyncEvent start;
                     start.kind = SyncEvent::Kind::SyncStarted;
@@ -261,7 +285,9 @@ void SyncService::run() {
         } catch (const DbError& e) {
             log(LogLevel::Error, "sync service: %s", e.what());
             SyncEvent ev;
-            ev.kind = SyncEvent::Kind::SyncFinished;
+            ev.kind = cmd.kind == Command::Kind::OpenBook ? SyncEvent::Kind::DownloadFinished : SyncEvent::Kind::SyncFinished;
+            ev.itemKey = cmd.itemKey;
+            ev.attachmentKey = cmd.attachmentKey;
             ev.error = w.lib->lastError();
             emit(std::move(ev));
         }

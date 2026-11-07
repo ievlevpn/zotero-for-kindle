@@ -31,7 +31,8 @@ void OpenFlow::open(const ItemRow& row, Nav& nav) {
         nav.sync().openBook(row.key, row.attachmentKey);  // refreshes its highlights
         return;
     }
-    pending_[row.attachmentKey] = Pending{row, nav.top(), "Downloading…", true};
+    pending_[row.attachmentKey] =
+        Pending{row, nav.top(), nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true};
     nav.sync().openBook(row.key, row.attachmentKey);
 }
 
