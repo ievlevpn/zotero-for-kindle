@@ -253,6 +253,9 @@ namespace {
 struct PdfPosition {
     int pageIndex = -1;
     std::vector<std::array<double, 4>> rects;
+    double fontSize = 0;                     // text annotations
+    double width = 0;                        // ink: pen width
+    std::vector<std::vector<double>> paths;  // ink: x, y, x, y, …
 };
 
 PdfPosition parsePosition(const std::string& s) {
@@ -264,6 +267,16 @@ PdfPosition parsePosition(const std::string& s) {
         for (const auto& r : j["rects"])
             if (r.is_array() && r.size() == 4 && r[0].is_number() && r[1].is_number() && r[2].is_number() && r[3].is_number())
                 out.rects.push_back({r[0].get<double>(), r[1].get<double>(), r[2].get<double>(), r[3].get<double>()});
+    if (j.contains("fontSize") && j["fontSize"].is_number()) out.fontSize = j["fontSize"].get<double>();
+    if (j.contains("width") && j["width"].is_number()) out.width = j["width"].get<double>();
+    if (j.contains("paths") && j["paths"].is_array())
+        for (const auto& path : j["paths"]) {
+            if (!path.is_array()) continue;
+            std::vector<double> xy;
+            for (const auto& v : path)
+                if (v.is_number()) xy.push_back(v.get<double>());
+            if (xy.size() >= 2) out.paths.push_back(std::move(xy));
+        }
     return out;
 }
 
@@ -291,9 +304,33 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
     }
     fz_always(ctx_) { fz_drop_page(ctx_, p); }
     fz_catch(ctx_) { return out; }
+    auto toDevice = [&](double x, double y) {
+        const fz_point q = fz_transform_point(fz_make_point(static_cast<float>(x), static_cast<float>(y)), userToPage);
+        return Point{static_cast<int>(std::lround(q.x * scale + dx)), static_cast<int>(std::lround(q.y * scale + dy))};
+    };
     for (const auto& a : anns) {
         const PdfPosition pos = parsePosition(a.position);
         if (pos.pageIndex != page) continue;
+        if (a.type == "ink") {  // strokes, boxed by their extent
+            HighlightBox b{a.key, {}, shadeOf(a.color), false};
+            b.kind = HighlightBox::Kind::Ink;
+            b.strokePx = std::max(3, static_cast<int>(std::lround(pos.width * scale)));
+            Rect extent;
+            for (const auto& xy : pos.paths) {
+                std::vector<Point> path;
+                for (size_t i = 0; i + 1 < xy.size(); i += 2) {
+                    path.push_back(toDevice(xy[i], xy[i + 1]));
+                    extent = extent.united({path.back().x - b.strokePx, path.back().y - b.strokePx, 2 * b.strokePx + 1,
+                                            2 * b.strokePx + 1});
+                }
+                b.paths.push_back(std::move(path));
+            }
+            if (!b.paths.empty()) {
+                b.rect = extent;
+                out.push_back(std::move(b));
+            }
+            continue;
+        }
         for (const auto& r : pos.rects) {
             fz_rect q = fz_transform_rect(fz_make_rect(static_cast<float>(r[0]), static_cast<float>(r[1]),
                                                        static_cast<float>(r[2]), static_cast<float>(r[3])),
@@ -301,7 +338,19 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
             const int x0 = static_cast<int>(std::floor(q.x0 * scale + dx)), y0 = static_cast<int>(std::floor(q.y0 * scale + dy));
             const int x1 = static_cast<int>(std::ceil(q.x1 * scale + dx)), y1 = static_cast<int>(std::ceil(q.y1 * scale + dy));
             if (x1 <= x0 || y1 <= y0) continue;
-            out.push_back({a.key, {x0, y0, x1 - x0, y1 - y0}, shadeOf(a.color), a.type == "underline"});
+            HighlightBox b{a.key, {x0, y0, x1 - x0, y1 - y0}, shadeOf(a.color), a.type == "underline"};
+            if (a.type == "text") {
+                b.kind = HighlightBox::Kind::Text;
+                b.text = a.comment;
+                b.fontPx = static_cast<int>(std::lround((pos.fontSize > 0 ? pos.fontSize : 12) * scale));
+            } else if (a.type == "note") {
+                b.kind = HighlightBox::Kind::Note;
+            } else if (a.type == "image") {
+                b.kind = HighlightBox::Kind::Image;
+            }
+            const bool single = b.kind != HighlightBox::Kind::Highlight;  // one box for these
+            out.push_back(std::move(b));
+            if (single) break;
         }
     }
     return out;

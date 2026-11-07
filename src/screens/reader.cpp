@@ -84,7 +84,7 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
     const int stride = cairo_image_surface_get_stride(c.surface());
     for (const auto& b : boxes) {
         const Rect r = b.rect.intersected(ReaderScreen::pageArea());
-        if (r.empty()) continue;
+        if (r.empty() || b.kind != HighlightBox::Kind::Highlight) continue;  // drawn below, with cairo
         if (b.underline) {
             for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < c.height(); ++y) {
                 auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
@@ -101,6 +101,58 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
         }
     }
     cairo_surface_mark_dirty(c.surface());
+
+    // Text boxes, sticky notes, image areas and ink (PDF).
+    cairo_t* cr = c.cr();
+    cairo_save(cr);
+    const Rect page = ReaderScreen::pageArea();
+    cairo_rectangle(cr, page.x, page.y, page.w, page.h);
+    cairo_clip(cr);
+    for (const auto& b : boxes) {
+        switch (b.kind) {
+            case HighlightBox::Kind::Highlight:
+                break;
+            case HighlightBox::Kind::Text:  // its words at their size (pt at 300 dpi from px), in ink
+                drawText(cr, b.text, {kSans, std::max(4.0, b.fontPx * 72.0 / 300.0), 400, false, kInk},
+                         {b.rect.x, b.rect.y, std::max(b.rect.w, 40), std::max(b.rect.h, b.fontPx + 8)}, 20);
+                break;
+            case HighlightBox::Kind::Note: {  // a small note, the size of Zotero's icon
+                const int s = std::clamp(std::min(b.rect.w, b.rect.h), 36, 60);
+                roundedRect(cr, b.rect.x + 1.5, b.rect.y + 1.5, s - 3, s - 3, 6);
+                gray(cr, b.shade);
+                cairo_fill_preserve(cr);
+                gray(cr, kInk);
+                cairo_set_line_width(cr, 3);
+                cairo_stroke(cr);
+                for (int i = 1; i <= 3; ++i) {
+                    cairo_move_to(cr, b.rect.x + s * 0.22, b.rect.y + s * (0.22 + i * 0.16));
+                    cairo_line_to(cr, b.rect.x + s * 0.78, b.rect.y + s * (0.22 + i * 0.16));
+                }
+                cairo_set_line_width(cr, 2.5);
+                cairo_stroke(cr);
+                break;
+            }
+            case HighlightBox::Kind::Image:  // the area, outlined
+                gray(cr, kInk);
+                cairo_set_line_width(cr, 4);
+                cairo_rectangle(cr, b.rect.x + 2, b.rect.y + 2, b.rect.w - 4, b.rect.h - 4);
+                cairo_stroke(cr);
+                break;
+            case HighlightBox::Kind::Ink:
+                gray(cr, kInk);
+                cairo_set_line_width(cr, b.strokePx);
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+                cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+                for (const auto& path : b.paths) {
+                    for (size_t i = 0; i < path.size(); ++i)
+                        i ? cairo_line_to(cr, path[i].x, path[i].y) : cairo_move_to(cr, path[i].x, path[i].y);
+                    if (path.size() == 1) cairo_line_to(cr, path[0].x + 0.1, path[0].y);
+                }
+                cairo_stroke(cr);
+                break;
+        }
+    }
+    cairo_restore(cr);
 }
 
 // The selection, shown inverted (white text on black), as Kindle shows it.

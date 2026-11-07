@@ -70,7 +70,15 @@ public:
     std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>& anns) override {
         std::vector<HighlightBox> out;
         for (const auto& a : anns)
-            if (a.pageLabel == std::to_string(page)) out.push_back({a.key, {100, 200, 600, 50}, shadeOf(a.color), a.type == "underline"});
+            if (a.pageLabel == std::to_string(page)) {
+                HighlightBox b{a.key, {100, 200, 600, 50}, shadeOf(a.color), a.type == "underline"};
+                if (a.type == "text") {
+                    b.kind = HighlightBox::Kind::Text;
+                    b.text = a.comment;
+                    b.fontPx = 36;
+                }
+                out.push_back(b);
+            }
         return out;
     }
     int pageOfAnnotation(const AnnotationRecord& a) override {

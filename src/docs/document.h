@@ -73,6 +73,14 @@ struct HighlightBox {
     Rect rect;
     uint8_t shade = 200;
     bool underline = false;
+    // Zotero's other annotation types (PDF): a text box shows its words, a sticky note an icon,
+    // an image annotation its area, ink its strokes.
+    enum class Kind { Highlight, Text, Note, Image, Ink };
+    Kind kind = Kind::Highlight;
+    std::string text;                       // Text: what it says
+    int fontPx = 0;                         // Text: its font size on the page
+    std::vector<std::vector<Point>> paths;  // Ink: device points
+    int strokePx = 3;                       // Ink: pen width on the page
 };
 
 // Text the reader selected, with everything Zotero needs to place an annotation on it.
