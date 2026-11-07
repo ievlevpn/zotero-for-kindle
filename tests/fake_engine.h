@@ -61,6 +61,13 @@ public:
             if (a.pageLabel == std::to_string(page)) out.push_back({a.key, {100, 200, 600, 50}, shadeOf(a.color), a.type == "underline"});
         return out;
     }
+    int pageOfAnnotation(const AnnotationRecord& a) override {
+        try {
+            return a.pageLabel.empty() ? -1 : std::stoi(a.pageLabel);
+        } catch (...) {
+            return -1;
+        }
+    }
     int64_t wordsBetween(int from, int to) override { return static_cast<int64_t>(to - from) * 300; }
 
     Layout layout;

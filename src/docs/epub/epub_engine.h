@@ -9,6 +9,8 @@ class LVDocView;
 
 namespace zk {
 
+class EpubDom;
+
 class EpubEngine final : public DocumentEngine {
 public:
     explicit EpubEngine(const EngineEnv&);
@@ -24,15 +26,18 @@ public:
     std::string chapterAt(int page) override;
     std::vector<SearchHit> search(const std::string& query, int maxHits) override;
     std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) override;
+    int pageOfAnnotation(const AnnotationRecord&) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
 
 private:
     void applyLayout();
+    void settle();
 
     EngineEnv env_;
     Layout layout_;
     std::unique_ptr<LVDocView> view_;
-    std::string path_;
+    std::unique_ptr<EpubDom> dom_;
+    std::vector<TocEntry> toc_;
 };
 
 }  // namespace zk

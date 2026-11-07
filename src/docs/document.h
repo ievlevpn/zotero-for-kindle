@@ -75,6 +75,7 @@ public:
     virtual std::string chapterAt(int page) = 0;
     virtual std::vector<SearchHit> search(const std::string& query, int maxHits) = 0;
     virtual std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) = 0;
+    virtual int pageOfAnnotation(const AnnotationRecord&) = 0;  // -1 if it can't be placed
     virtual int64_t wordsBetween(int fromPage, int toPage) = 0;  // for "time left"
 };
 

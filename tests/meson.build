@@ -33,6 +33,7 @@ test_sources = files(
   'test_review_fixes.cpp',
   'test_engine_isolation.cpp',
   'test_document_types.cpp',
+  'test_epub_engine.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
