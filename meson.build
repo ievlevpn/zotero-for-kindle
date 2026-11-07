@@ -263,6 +263,19 @@ executable('zk-sync', 'src/app/zk_sync.cpp',
   dependencies : [sync_dep, docs_dep],
   install : true)
 
+# Updates (Plan 7): versions, signatures (Monocypher), checking, downloading, installing.
+monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
+  'third_party/monocypher/monocypher-ed25519.c', c_args : ['-w'])
+update_lib = static_library('zk-update',
+  'src/update/version.cpp', 'src/update/signature.cpp',
+  include_directories : [inc, include_directories('third_party/monocypher', 'third_party', is_system : true)],
+  link_with : monocypher_lib)
+update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], include_directories : inc)
+
+executable('zk-sign', 'tools/zk_sign.cpp',
+  dependencies : [update_dep],
+  build_by_default : false)
+
 # The README's demo library (public-domain books only): tools/screenshots.sh.
 executable('zk-demo-library', 'tools/demo_library.cpp',
   include_directories : include_directories('third_party', is_system : true),
