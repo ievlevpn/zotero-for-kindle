@@ -30,8 +30,10 @@ int percent(const Updater::Status& s) { return s.total > 0 ? static_cast<int>(s.
 
 }  // namespace
 
-UpdateScreen::UpdateScreen(Updater& u, std::function<void()> stopSync, KeepAwake* keepAwake)
-    : updater_(u), stopSync_(std::move(stopSync)), keepAwake_(keepAwake), shown_(u.status()) {}
+UpdateScreen::UpdateScreen(Updater& u, std::function<void()> stopSync, KeepAwake* keepAwake,
+                           std::function<void()> resumeSync)
+    : updater_(u), stopSync_(std::move(stopSync)), resumeSync_(std::move(resumeSync)), keepAwake_(keepAwake),
+      shown_(u.status()) {}
 
 UpdateScreen::~UpdateScreen() = default;
 
@@ -150,6 +152,13 @@ void UpdateScreen::onTick(Nav& nav) {
                       s.phase == Phase::ReadyToRestart;
     if (busy && !awake_ && keepAwake_) awake_ = std::make_unique<KeepAwakeScope>(*keepAwake_);
     if (!busy) awake_.reset();
+    if (s.phase == Phase::Downloading) installRequested_ = syncResumed_ = false;  // "Try again"
+    // An install that failed without changing anything: sync again. (After a failed swap the
+    // app restarts instead, and the launcher puts the old version back.)
+    if (s.phase == Phase::Failed && installRequested_ && !s.mustRestart && !syncResumed_) {
+        syncResumed_ = true;
+        if (resumeSync_) resumeSync_();
+    }
     if (s.phase == Phase::Downloaded && !installRequested_) {
         installRequested_ = true;
         if (stopSync_) stopSync_();

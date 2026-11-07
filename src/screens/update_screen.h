@@ -17,7 +17,8 @@ struct KeepAwakeScope;
 class UpdateScreen final : public Screen {
 public:
     // `stopSync` runs on the UI thread just before installing (the library is backed up then).
-    UpdateScreen(Updater&, std::function<void()> stopSync, KeepAwake*);
+    // `resumeSync`: after an install that failed without changing anything.
+    UpdateScreen(Updater&, std::function<void()> stopSync, KeepAwake*, std::function<void()> resumeSync = nullptr);
     ~UpdateScreen() override;
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
@@ -32,12 +33,12 @@ private:
     using Phase = Updater::Status::Phase;
     void leave(Nav&);
     Updater& updater_;
-    std::function<void()> stopSync_;
+    std::function<void()> stopSync_, resumeSync_;
     KeepAwake* keepAwake_;
     std::unique_ptr<KeepAwakeScope> awake_;
     Updater::Status shown_;
     int shownPercent_ = -1;
-    bool installRequested_ = false, restartRequested_ = false;
+    bool installRequested_ = false, restartRequested_ = false, syncResumed_ = false;
 };
 
 }  // namespace zk

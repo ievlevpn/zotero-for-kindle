@@ -324,7 +324,10 @@ int main(int argc, char** argv) {
                             if (service) service->stop();
                             app.setSync(nullSync);
                         },
-                        &keepAwake));
+                        &keepAwake,
+                        [&] {  // the install failed and changed nothing
+                            if (config) startService(*config);
+                        }));
                 }));
         };
         home.openItem = openItem;

@@ -50,6 +50,10 @@ bool writeDurably(const fs::path& path, const std::string& text) {
     ::close(fd);
     std::error_code ec;
     if (ok) fs::rename(tmp, path, ec);
+    if (const int dir = ::open(path.parent_path().c_str(), O_RDONLY); dir >= 0) {  // the rename, too
+        ::fsync(dir);
+        ::close(dir);
+    }
     return ok && !ec;
 }
 
@@ -148,16 +152,24 @@ bool unpackRelease(const std::string& zipPath, const std::string& newDir, UserEr
 }
 
 bool installRelease(const InstallPaths& p, const std::string& newDir, Version from, Version to,
-                    std::function<void(const char*)> beat, UserError* err) {
+                    std::function<void(const char*)> beat, UserError* err, InstallHooks hooks) {
     const fs::path app(p.appDir), update(p.updateDir()), old = update / "old", trash = update / "trash";
     const fs::path fresh(newDir);
     auto step = [&](const char* what) {
         if (beat) beat(what);
     };
+    if (!hooks.flush) hooks.flush = [] { ::sync(); };
     std::error_code ec;
+    if (fs::exists(update / "state")) {  // an earlier update the launcher hasn't settled: its backup stays
+        log(LogLevel::Warn, "update: %s not installed: an earlier update is pending", to.str().c_str());
+        if (err) *err = {ErrorKind::Other, "Restart Zotero before updating.", "update/state exists"};
+        return false;
+    }
+    const std::string configBackup = p.configFile + ".old";
     auto failBeforeSwap = [&](const std::string& details) {
         std::error_code ignored;
         fs::remove_all(old, ignored);
+        if (!p.configFile.empty()) fs::remove(configBackup, ignored);
         log(LogLevel::Warn, "update: install of %s failed before the swap: %s", to.str().c_str(), details.c_str());
         if (err) *err = {ErrorKind::Other, "Couldn't install the update. Nothing was changed.", details};
         return false;
@@ -176,13 +188,18 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     }
     if (fs::exists(p.launcherPath)) fs::copy_file(p.launcherPath, old / "Zotero.sh", ec);
     if (ec) return failBeforeSwap("backup of the launcher: " + ec.message());
-    if (!p.configFile.empty() && fs::exists(p.configFile)) fs::copy_file(p.configFile, old / "config.json", ec);
+    // The account's backup stays beside it, off the USB drive, private.
+    if (!p.configFile.empty() && fs::exists(p.configFile)) {
+        fs::copy_file(p.configFile, configBackup, fs::copy_options::overwrite_existing, ec);
+        if (!ec) fs::permissions(configBackup, fs::perms::owner_read | fs::perms::owner_write, ec);
+    }
     if (ec) return failBeforeSwap("backup of the account: " + ec.message());
     std::string dbError;
     if (fs::exists(p.dbPath) && !backupDatabase(p.dbPath, (old / "zotero.db").string(), beat, &dbError))
         return failBeforeSwap(dbError);
 
-    // 2. From here on an interrupted install is undone by the launcher.
+    // 2. From here on an interrupted install is undone by the launcher: the backup must be on disk first.
+    hooks.flush();
     if (!writeDurably(update / "state", "installing " + from.str() + " " + to.str() + "\n"))
         return failBeforeSwap("can't write the state");
 
@@ -210,6 +227,7 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     fs::remove_all(fresh, ec);
 
     // 4. Done: the launcher starts the new version next.
+    hooks.flush();
     if (!writeDurably(update / "state", "installed " + from.str() + " " + to.str() + "\n"))
         return failDuringSwap("can't write the state");
     log(LogLevel::Info, "update: %s installed over %s; restarting", to.str().c_str(), from.str().c_str());
@@ -234,10 +252,16 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) {
         return c;
     }
     Version from, to;
+    if (!fs::exists(update / "state", ec)) {  // a download that was never installed
+        for (const char* leftover : {"new", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
+            fs::remove_all(update / leftover, ec);
+        return c;
+    }
     if (!parseState(readLine(update / "state"), &word, &from, &to)) return c;
     if ((word != "installed" && word != "tried") || to != running) return c;
     for (const char* leftover : {"state", "old", "new", "trash", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
         fs::remove_all(update / leftover, ec);
+    if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
     log(LogLevel::Info, "update: %s confirmed", to.str().c_str());
     return {StartupNote::Updated, from, to};
 }

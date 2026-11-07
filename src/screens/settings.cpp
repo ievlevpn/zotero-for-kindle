@@ -126,12 +126,12 @@ void SettingsScreen::onTick(Nav& nav) {
     const Updater::Status st = updater_->status();
     if (st.phase == Phase::Checking) return;
     checking_ = false;
-    if (st.phase == Phase::Available || st.phase == Phase::NotInstallable) {
-        if (openUpdate_) openUpdate_(nav);
-    } else if (st.phase == Phase::Failed) {
-        updateResult_ = st.error.message;
-    } else {
+    if (st.phase == Phase::UpToDate) {
         updateResult_ = "You have the latest version.";
+    } else if (st.phase == Phase::Failed && !st.mustRestart) {
+        updateResult_ = st.error.message;
+    } else if (st.phase != Phase::Idle) {  // a newer release, or an update already under way
+        if (openUpdate_) openUpdate_(nav);
     }
     nav.damage({0, kAboutY - 10, W(), 200}, Waveform::Ui);
 }

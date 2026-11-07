@@ -44,7 +44,7 @@ bool downloadRelease(Http& http, const ReleaseInfo& release, const std::array<ui
     };
     std::error_code ec;
     fs::create_directories(workDir, ec);
-    const int64_t needed = release.zipSize * 4 + (int64_t{64} << 20);
+    const int64_t needed = release.zipSize * 4 + hooks.extraBytes + (int64_t{64} << 20);
     if (hooks.freeSpace(workDir) < needed)
         return fail({ErrorKind::DiskFull, "Not enough space on the Kindle for the update.",
                      "needs " + std::to_string(needed) + " bytes"});

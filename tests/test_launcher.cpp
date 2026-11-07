@@ -34,7 +34,7 @@ std::string app(const std::string& version, int code, bool installs = false) {
     if (installs)
         s += "if [ -f install-me ]; then rm install-me\n"
              "  mkdir -p update/old && cp -r bin lib share update/old/ && cp \"$ZK_LAUNCHER\" update/old/Zotero.sh\n"
-             "  cp zotero.db update/old/zotero.db && cp \"$ZK_CONFIG\" update/old/config.json\n"
+             "  cp zotero.db update/old/zotero.db && cp \"$ZK_CONFIG\" \"$ZK_CONFIG.old\"\n"
              "  echo 'installing 0.2.0 0.3.0' > update/state\n"
              "  rm -rf bin lib share && cp -r update/new/bin update/new/lib update/new/share .\n"
              "  echo 'db 0.3.0' > zotero.db && echo 'config 0.3.0' > \"$ZK_CONFIG\"\n"
@@ -65,7 +65,7 @@ struct Kindle {
         for (const char* d : {"bin", "lib", "share"}) fs::copy(home / d, home / "update/old" / d, fs::copy_options::recursive);
         fs::copy_file(root / "documents/Zotero.sh", home / "update/old/Zotero.sh");
         fs::copy_file(home / "zotero.db", home / "update/old/zotero.db");
-        fs::copy_file(root / "var/config.json", home / "update/old/config.json");
+        fs::copy_file(root / "var/config.json", root / "var/config.json.old");
         writeFile(home / "bin/zotero", newApp, true);
         writeFile(home / "lib/libzk-pdf.so", "pdf 0.3.0");
         writeFile(home / "zotero.db", "db 0.3.0");
@@ -75,7 +75,11 @@ struct Kindle {
         writeFile(home / "update/state", word + " 0.2.0 0.3.0\n");
     }
     int launch() {
-        const std::string cmd = "cd '" + fs::current_path().string() + "' && ZK_HOME='" + home.string() +
+        // A `sync` on PATH that records what update/state held when it ran.
+        writeFile(root / "fakebin/sync", "#!/bin/sh\necho \"sync $(cat '" + (home / "update/state").string() +
+                                             "' 2>/dev/null)\" >> '" + (home / "syncs").string() + "'\n", true);
+        const std::string cmd = "cd '" + fs::current_path().string() + "' && PATH='" + (root / "fakebin").string() +
+                                ":'\"$PATH\" ZK_HOME='" + home.string() +
                                 "' ZK_LAUNCHER='" + (root / "documents/Zotero.sh").string() + "' ZK_CONFIG='" +
                                 (root / "var/config.json").string() + "' ZK_DISPLAY=none sh '" +
                                 (root / "documents/Zotero.sh.src").string() + "'";
@@ -90,6 +94,9 @@ struct Kindle {
         CHECK(file("zotero/zotero.db") == "db 0.2.0");
         CHECK_FALSE(fs::exists(home / "zotero.db-wal"));
         CHECK(file("var/config.json") == "config 0.2.0");
+        CHECK((fs::status(root / "var/config.json").permissions() & (fs::perms::group_all | fs::perms::others_all)) ==
+              fs::perms::none);
+        CHECK_FALSE(fs::exists(root / "var/config.json.old"));
         CHECK(file("documents/Zotero.sh") == "launcher 0.2.0");
         CHECK(file("zotero/update/rolled-back") == "0.2.0 0.3.0\n");
         CHECK_FALSE(fs::exists(home / "update/state"));
@@ -177,4 +184,31 @@ TEST_CASE("launcher: endless 75s stop after five") {
     Kindle k(app("0.2.0", 75));
     k.launch();
     CHECK(k.runs() == "0.2.0 75\n0.2.0 75\n0.2.0 75\n0.2.0 75\n0.2.0 75\n");
+}
+
+TEST_CASE("launcher fix: syncs before it drops or advances the state") {
+    Kindle k;
+    k.installed("tried", app("0.3.0", 0));
+    k.launch();
+    k.checkRolledBack();
+    // The restored files reached the disk while update/state still said "tried".
+    CHECK(readFile(k.home / "syncs").find("sync tried 0.2.0 0.3.0\n") != std::string::npos);
+}
+
+TEST_CASE("launcher fix: installed becomes tried on disk before the new version runs") {
+    Kindle k;
+    k.installed("installed", "#!/bin/sh\necho \"0.3.0 0\" >> runs\nrm -rf update/state update/old\nexit 0\n");
+    k.launch();
+    CHECK(readFile(k.home / "syncs").find("sync tried 0.2.0 0.3.0\n") != std::string::npos);
+    CHECK_FALSE(fs::exists(k.home / "update/state.tmp"));
+}
+
+TEST_CASE("launcher fix: an unreadable state with a backup rolls back") {
+    Kindle k;
+    k.installed("tried", app("0.3.0", 0));
+    writeFile(k.home / "update/state", "");  // a write torn by a power cut
+    k.launch();
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(k.file("zotero/bin/zotero") == app("0.2.0", 0));
+    CHECK_FALSE(fs::exists(k.home / "update/state"));
 }

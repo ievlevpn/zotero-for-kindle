@@ -195,3 +195,13 @@ TEST_CASE("update download: not enough space stops before downloading") {
     CHECK(err.kind == ErrorKind::DiskFull);
     CHECK(rig.http.sent.empty());
 }
+
+TEST_CASE("update fix: space for the library backup is counted") {
+    Rig rig;
+    rig.hooks.freeSpace = [](const std::string&) { return int64_t{200} << 20; };
+    rig.hooks.extraBytes = int64_t{300} << 20;  // a big library to back up
+    UserError err;
+    CHECK_FALSE(rig.run(&err));
+    CHECK(err.kind == ErrorKind::DiskFull);
+    CHECK(rig.http.sent.empty());
+}

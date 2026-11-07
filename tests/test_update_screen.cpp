@@ -79,7 +79,7 @@ struct Rig {
     std::string zip, manifest, sig;
     std::mutex m;
     std::condition_variable cv;
-    bool holdZip = false, released = false, zipWaiting = false;
+    bool holdZip = false, released = false, zipWaiting = false, cancelAfterZip = false;
     int zipRequests = 0;
     std::vector<std::string> urls;
     std::unique_ptr<Updater> updater;
@@ -88,9 +88,9 @@ struct Rig {
     FakeNav nav{lib};
     FakeLipc lipc;
     KeepAwake keepAwake{lipc};
-    int syncStops = 0;
+    int syncStops = 0, syncResumes = 0;
 
-    explicit Rig(bool installable = true) {
+    explicit Rig(bool installable = true, const std::string& launcherDir = "documents") {
         char tmpl[] = "/tmp/zk-update-ui-XXXXXX";
         root = mkdtemp(tmpl);
         seed.fill(3);
@@ -119,7 +119,7 @@ struct Rig {
         c.feedUrl = kFeed;
         c.publicKey = publicKeyFor(seed);
         if (installable)
-            c.paths = {(root / "zotero").string(), (root / "documents/Zotero.sh").string(),
+            c.paths = {(root / "zotero").string(), (root / launcherDir / "Zotero.sh").string(),
                        (root / "var/config.json").string(), (root / "zotero/zotero.db").string()};
         c.current = {0, 2, 0};
         c.hooks.freeSpace = [](const std::string&) { return int64_t{1} << 40; };
@@ -166,6 +166,7 @@ struct Rig {
                 return resp;
             }
             std::ofstream(r.outFile, std::ios::binary) << zip;
+            if (cancelAfterZip) updater->cancel();  // Cancel tapped while the zip is being checked
         } else {
             resp.status = 404;
         }
@@ -192,7 +193,7 @@ struct Rig {
         updater->check();
         updater->wait();
         REQUIRE(updater->status().phase == Updater::Status::Phase::Available);
-        auto s = std::make_unique<UpdateScreen>(*updater, [this] { ++syncStops; }, &keepAwake);
+        auto s = std::make_unique<UpdateScreen>(*updater, [this] { ++syncStops; }, &keepAwake, [this] { ++syncResumes; });
         s->onShow(nav);
         return s;
     }
@@ -345,4 +346,59 @@ TEST_CASE("app: restart makes run() return 75") {
     app.start();
     display.tap({600, 600}, 0);
     CHECK(app.run() == 75);
+}
+
+TEST_CASE("updater fix: a cancel at the end of the download goes back to Available and leaves nothing") {
+    Rig rig;
+    rig.cancelAfterZip = true;
+    rig.updater->check();
+    rig.updater->wait();
+    rig.updater->download();
+    rig.updater->wait();
+    CHECK(rig.phase() == Rig::Phase::Available);
+    CHECK_FALSE(fs::exists(rig.root / "zotero/update/zotero-for-kindle.zip"));
+    CHECK_FALSE(fs::exists(rig.root / "zotero/update/new"));
+}
+
+TEST_CASE("updater fix: after a failed swap only a restart is offered") {
+    Rig rig(true, "missing-folder");  // the launcher can't be replaced: the swap fails half way
+    auto s = rig.availableScreen();
+    s->onGesture(tapAt(UpdateScreen::primaryRect().center()), rig.nav);
+    rig.tickUntil(*s, [&] { return rig.phase() == Rig::Phase::Failed; });
+    REQUIRE(rig.updater->status().mustRestart);
+    rig.updater->check();
+    rig.updater->download();
+    rig.updater->wait();
+    CHECK(rig.phase() == Rig::Phase::Failed);
+    CHECK(rig.updater->status().mustRestart);
+    CHECK(rig.syncResumes == 0);  // the launcher puts things right at the restart
+}
+
+TEST_CASE("update screen fix: a failed install turns sync back on") {
+    Rig rig;
+    writeFile(rig.root / "zotero/zotero.db", "not a database");  // the library backup fails
+    auto s = rig.availableScreen();
+    s->onGesture(tapAt(UpdateScreen::primaryRect().center()), rig.nav);
+    rig.tickUntil(*s, [&] { return rig.phase() == Rig::Phase::Failed; });
+    rig.tickUntil(*s, [&] { return rig.syncResumes > 0; });
+    CHECK_FALSE(rig.updater->status().mustRestart);
+    CHECK(rig.syncStops == 1);
+    CHECK(rig.syncResumes == 1);
+    CHECK(readFile(rig.root / "zotero/bin/zotero") == "bin/zotero 0.2.0");
+}
+
+TEST_CASE("settings fix: a check that can't run doesn't claim the latest version") {
+    Rig rig;
+    rig.holdZip = true;
+    auto s = rig.availableScreen();
+    s->onGesture(tapAt(UpdateScreen::primaryRect().center()), rig.nav);
+    rig.waitForZip();  // a download is running
+    int opened = 0;
+    SettingsScreen settings(Config{}, [](Nav&) {}, rig.updater.get(), [&](Nav&) { ++opened; });
+    settings.onShow(rig.nav);
+    settings.onGesture(tapAt(settings.updateRect().center()), rig.nav);
+    settings.onTick(rig.nav);
+    CHECK(settings.updateLine() != "You have the latest version.");
+    CHECK(opened == 1);  // back to the running update
+    rig.updater->cancel();
 }

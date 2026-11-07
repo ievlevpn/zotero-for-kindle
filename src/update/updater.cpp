@@ -39,7 +39,9 @@ void Updater::start(Phase phase, std::function<void()> work) {
 void Updater::check() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (busy() || status_.phase == Phase::Downloaded || status_.phase == Phase::ReadyToRestart) return;
+        if (busy() || status_.phase == Phase::Downloaded || status_.phase == Phase::ReadyToRestart ||
+            status_.mustRestart)
+            return;
     }
     start(Phase::Checking, [this] {
         auto http = config_.makeHttp();
@@ -65,7 +67,7 @@ void Updater::download() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         const bool retry = status_.phase == Phase::Failed && !status_.mustRestart && status_.release.zipSize > 0;
-        if (!canInstall() || !(status_.phase == Phase::Available || retry)) return;
+        if (!canInstall() || status_.mustRestart || !(status_.phase == Phase::Available || retry)) return;
         release = status_.release;
     }
     *cancel_ = false;
@@ -74,6 +76,10 @@ void Updater::download() {
         const std::string work = config_.paths.updateDir();
         UserError err;
         std::string zip;
+        DownloadHooks hooks = config_.hooks;
+        std::error_code sizeError;
+        for (const std::string& f : {config_.paths.dbPath, config_.paths.dbPath + "-wal"})  // backed up while installing
+            if (auto n = std::filesystem::file_size(f, sizeError); !sizeError) hooks.extraBytes += static_cast<int64_t>(n);
         bool ok = downloadRelease(
             *http, release, config_.publicKey, work,
             [this](int64_t done, int64_t total) {
@@ -82,10 +88,21 @@ void Updater::download() {
                     s.total = total;
                 });
             },
-            cancel_, &zip, &err, config_.hooks);
+            cancel_, &zip, &err, hooks);
+        // Cancel counts until the download is ready, checks and unpacking included.
+        auto cancelled = [&] {
+            if (!*cancel_) return false;
+            err = {ErrorKind::Cancelled, "Cancelled.", "cancelled"};
+            return true;
+        };
+        if (ok && cancelled()) ok = false;
         if (ok) ok = unpackRelease(zip, work + "/new", &err);
+        if (ok && cancelled()) ok = false;
         std::error_code ec;
-        if (!ok) std::filesystem::remove(work + "/zotero-for-kindle.zip", ec);
+        if (!ok) {
+            std::filesystem::remove(work + "/zotero-for-kindle.zip", ec);
+            std::filesystem::remove_all(work + "/new", ec);
+        }
         set([&](Status& s) {
             if (ok) {
                 s.phase = Phase::Downloaded;
@@ -104,7 +121,7 @@ void Updater::install() {
     ReleaseInfo release;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (status_.phase != Phase::Downloaded) return;
+        if (status_.phase != Phase::Downloaded || status_.mustRestart) return;
         release = status_.release;
     }
     start(Phase::Installing, [this, release] {

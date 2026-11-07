@@ -7,7 +7,8 @@
 # Starts the app, and keeps its updates safe: update protocol format 1 (src/update/install.h).
 # Every launcher from 0.2.0 on must understand it; a new format ships a launcher that knows both.
 #   update/state   "installing|installed|tried <from> <to>", written by the app while installing
-#   update/old/    bin lib share Zotero.sh zotero.db config.json: what a rollback restores
+#   update/old/    bin lib share Zotero.sh zotero.db: what a rollback restores, with the account's
+#                  backup beside it, $ZK_CONFIG.old (kept off the USB drive, mode 0600)
 #   exit code 75   the app installed an update: start it again
 # installing: the swap was interrupted. tried: the new version ran and never confirmed (the app
 # confirms by deleting update/state once it has drawn its first screen). Both: roll back.
@@ -34,22 +35,33 @@ restore() {
     if [ -f "$U/old/zotero.db" ]; then
         cp "$U/old/zotero.db" zotero.db.tmp && rm -f zotero.db-wal zotero.db-shm && mv zotero.db.tmp zotero.db || return 1
     fi
-    if [ -f "$U/old/config.json" ]; then
-        cp "$U/old/config.json" "$ZK_CONFIG.tmp" && mv "$ZK_CONFIG.tmp" "$ZK_CONFIG" || return 1
+    if [ -f "$ZK_CONFIG.old" ]; then
+        cp "$ZK_CONFIG.old" "$ZK_CONFIG.tmp" && chmod 600 "$ZK_CONFIG.tmp" && mv "$ZK_CONFIG.tmp" "$ZK_CONFIG" || return 1
     fi
     echo "$1 $2" > "$U/rolled-back"
+    sync  # the restored files reach the disk before the state that asked for them goes
     rm -f "$U/state"
     rm -rf "$U/old" "$U/new" "$U/trash"
+    rm -f "$ZK_CONFIG.old"
     note "rolled back from $2 to $1"
 }
 
 # Looks at update/state before a start: rolls back if needed, marks a first start as tried.
 check_update() {
     [ -f "$U/state" ] || return 0
+    word= from= to=
     read -r word from to < "$U/state"
     case "$word" in
         installing|tried) restore "$from" "$to" || note "rollback from $to failed; will try again" ;;
-        installed) echo "tried $from $to" > "$U/state" ;;
+        installed)
+            echo "tried $from $to" > "$U/state.tmp" && mv "$U/state.tmp" "$U/state"
+            sync
+            ;;
+        *)  # unreadable (a write torn by a power cut): go back if there is something to go back to
+            if [ -d "$U/old/bin" ]; then
+                restore "?" "?" || note "rollback after an unreadable state failed; will try again"
+            fi
+            ;;
     esac
 }
 

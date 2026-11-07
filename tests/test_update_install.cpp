@@ -6,6 +6,7 @@
 #include <sqlite3.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -146,7 +147,8 @@ TEST_CASE("update install: install swaps the folders and keeps the user's data")
     CHECK(readFile(k.app("update/old/bin/zotero")) == "zotero 0.2.0");
     CHECK(readFile(k.app("update/old/share/crengine/hyph/English_US.pattern")) == "hyph 0.2.0");
     CHECK(readFile(k.app("update/old/Zotero.sh")) == "launcher 0.2.0");
-    CHECK(readFile(k.app("update/old/config.json")) == R"({"userId":1})");
+    CHECK_FALSE(fs::exists(k.app("update/old/config.json")));  // the account stays off USB storage
+    CHECK(readFile(k.root / "var/config.json.old") == R"({"userId":1})");
     CHECK(rowCount(k.app("update/old/zotero.db")) == 4);
     // The user's things are untouched.
     CHECK(rowCount(k.app("zotero.db")) == 4);
@@ -213,4 +215,52 @@ TEST_CASE("update install: confirm with no update says nothing") {
     CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
     InstallPaths none;  // the desktop: no app folder
     CHECK(confirmStartup(none, {0, 2, 0}).note == StartupNote::None);
+}
+
+TEST_CASE("update fix: the install flushes to disk before each state change") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    std::vector<std::string> flushes;  // what was on disk at each flush
+    InstallHooks hooks;
+    hooks.flush = [&] {
+        flushes.push_back((fs::exists(k.app("update/state")) ? readFile(k.app("update/state")) : std::string("-")) +
+                          "|" + readFile(k.app("bin/zotero")) + "|" +
+                          (fs::exists(k.app("update/old/zotero.db")) ? "db" : "nodb"));
+    };
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr, hooks));
+    // The backup is on disk before "installing"; the swap is on disk before "installed".
+    CHECK(std::find(flushes.begin(), flushes.end(), "-|zotero 0.2.0|db") != flushes.end());
+    CHECK(std::find(flushes.begin(), flushes.end(), "installing 0.2.0 0.3.0\n|zotero 0.3.0|db") != flushes.end());
+}
+
+TEST_CASE("update fix: install refuses while an update is pending") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    writeFile(k.app("update/state"), "installing 0.1.0 0.2.0\n");  // the launcher hasn't rolled back yet
+    writeFile(k.app("update/old/bin/zotero"), "zotero 0.1.0");
+    UserError err;
+    CHECK_FALSE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, &err));
+    CHECK(readFile(k.app("update/old/bin/zotero")) == "zotero 0.1.0");
+    CHECK(readFile(k.app("update/state")) == "installing 0.1.0 0.2.0\n");
+    CHECK(readFile(k.app("bin/zotero")) == "zotero 0.2.0");
+}
+
+TEST_CASE("update fix: the account backup is private") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    const auto perms = fs::status(k.root / "var/config.json.old").permissions();
+    CHECK((perms & (fs::perms::group_all | fs::perms::others_all)) == fs::perms::none);
+    writeFile(k.app("update/state"), "tried 0.2.0 0.3.0\n");
+    confirmStartup(k.paths, {0, 3, 0});
+    CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+}
+
+TEST_CASE("update fix: startup clears a download that was never installed") {
+    Kindle k;
+    k.unpackNew(releaseFiles("0.3.0"));
+    writeFile(k.app("update/zotero-for-kindle.zip"), "zip");
+    CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
+    CHECK_FALSE(fs::exists(k.app("update/new")));
+    CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));
 }

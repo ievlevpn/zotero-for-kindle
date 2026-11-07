@@ -1,8 +1,8 @@
 #pragma once
 // Putting a verified release in place, so that a failed update can always be undone.
 //
-// installRelease copies the current bin/lib/share, the launcher, the library database and the
-// account file into <appDir>/update/old/, writes update/state = "installing <from> <to>", swaps
+// installRelease copies the current bin/lib/share, the launcher and the library database into
+// <appDir>/update/old/ (the account file to <configFile>.old, mode 0600, off the USB drive), writes update/state = "installing <from> <to>", swaps
 // the new folders in (current ones to update/trash/), then writes "installed <from> <to>". The
 // app then exits with 75 and the launcher (assets/launcher/Zotero.sh, protocol format 1) starts
 // the new version, marking it "tried"; if it never confirms, the launcher restores update/old/.
@@ -31,8 +31,11 @@ bool unpackRelease(const std::string& zipPath, const std::string& newDir, UserEr
 // `beat` is called between steps (the stall watchdog). Fails without changing the install if
 // anything goes wrong before the swap; a failure during the swap leaves state "installing", which
 // the launcher undoes at the next start.
+struct InstallHooks {
+    std::function<void()> flush;  // to disk before each state change; default sync()
+};
 bool installRelease(const InstallPaths&, const std::string& newDir, Version from, Version to,
-                    std::function<void(const char* step)> beat, UserError*);
+                    std::function<void(const char* step)> beat, UserError*, InstallHooks hooks = {});
 
 enum class StartupNote { None, Updated, RolledBack };
 struct Confirmed {
