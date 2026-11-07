@@ -34,6 +34,7 @@ bool BookNotesScreen::wantsKeyboard() const { return editor_ && editor_->wantsKe
 
 void BookNotesScreen::closeEditor(Nav& nav) {
     if (!editor_) return;
+    if (editor_->takeChanged()) nav.sync().pushSoon();
     editor_.reset();
     reload(nav);
     nav.damage(kArea, Waveform::Quality);
@@ -71,6 +72,7 @@ void BookNotesScreen::onGesture(const Gesture& g, Nav& nav) {
             if (editor_->takeChanged()) {
                 reload(nav);
                 nav.damage(kArea, Waveform::Quality);
+                nav.sync().pushSoon();
             }
             return;
         }

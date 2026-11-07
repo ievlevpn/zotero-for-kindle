@@ -174,3 +174,21 @@ TEST_CASE("home: very long Latin and Cyrillic titles stay inside the card and ro
     rig.draw();
     test::checkGolden(rig.canvas, "tests/golden/home-stress-real.png");
 }
+
+TEST_CASE("home: an upload repaints the header, fast when it starts and quality when it is done") {
+    Rig rig;
+    rig.nav.damages.clear();
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::PushStarted;
+    e.total = 2;
+    rig.home.onSyncEvent(e, rig.nav);
+    REQUIRE(rig.nav.damages.size() == 1);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Fast);
+    CHECK(rig.nav.damages[0].rect.y + rig.nav.damages[0].rect.h <= kHeaderH);
+    CHECK(rig.status.line(0) == "Uploading 2 changes…");
+    rig.nav.damages.clear();
+    e.kind = SyncEvent::Kind::PushFinished;
+    rig.home.onSyncEvent(e, rig.nav);
+    REQUIRE(rig.nav.damages.size() == 1);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Quality);
+}

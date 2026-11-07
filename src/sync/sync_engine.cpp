@@ -331,6 +331,12 @@ SyncReport SyncEngine::push() {
     return rep;
 }
 
+int SyncEngine::pendingChanges() {
+    int n = static_cast<int>(lib_.pendingDeletions().size());
+    for (const auto& a : lib_.dirtyAnnotations()) n += !a.conflict && !a.localOnly;
+    return n;
+}
+
 // Sends the Kindle's deletions, then every unsent creation and edit (conflict copies and
 // annotations that can't be placed exactly stay local). False if a batch hit a 412 or failed.
 bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {

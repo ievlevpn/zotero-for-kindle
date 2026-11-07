@@ -253,7 +253,10 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (editor_) {
         if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
-            if (editor_->takeChanged()) refreshHighlights(nav);
+            if (editor_->takeChanged()) {
+                refreshHighlights(nav);
+                nav.sync().pushSoon();
+            }
             return;
         }
         closeEditor(nav);
@@ -340,7 +343,10 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
 
 void ReaderScreen::closeEditor(Nav& nav) {
     if (!editor_) return;
-    if (editor_->takeChanged()) refreshHighlights(nav);
+    if (editor_->takeChanged()) {
+        refreshHighlights(nav);
+        nav.sync().pushSoon();
+    }
     editor_.reset();
     nav.damage(pageArea(), Waveform::Quality);
 }
@@ -427,6 +433,7 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     nav.library().createAnnotation(a);
     nav.library().setMetaValue(kColourKey, colour_);
     if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
+    else nav.sync().pushSoon();
     refreshHighlights(nav);
     closeSelection(nav);
 }

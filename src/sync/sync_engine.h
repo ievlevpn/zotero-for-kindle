@@ -31,6 +31,7 @@ public:
     SyncEngine(ZoteroApi&, Library&);
     SyncReport pull(std::function<void(const SyncProgress&)> progress);
     SyncReport push();
+    int pendingChanges();  // what push() would send: deletions, creations and edits
     // On-demand annotations: called when a book is opened. Downloads the attachment's
     // annotations and keeps them in sync from then on.
     SyncReport pullAnnotationsFor(const std::string& attachmentKey, std::function<void(const SyncProgress&)> progress);

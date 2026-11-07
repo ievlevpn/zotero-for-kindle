@@ -29,15 +29,23 @@ void SyncStatus::onEvent(const SyncEvent& e, int64_t nowMs) {
             lastFinishedMs_ = nowMs;
             error_ = e.error;
             break;
+        case SyncEvent::Kind::PushStarted:
+            uploading_ = e.total;
+            break;
+        case SyncEvent::Kind::PushFinished:
+            uploading_ = 0;
+            pushError_ = e.error;
+            break;
         default: break;
     }
 }
 
 std::string SyncStatus::line(int64_t nowMs) const {
+    if (uploading_ > 0) return "Uploading " + thousands(uploading_) + (uploading_ == 1 ? " change…" : " changes…");
     if (syncing_)
         return progress_.total > 0 ? "Syncing… " + thousands(progress_.done) + " of " + thousands(progress_.total)
                                    : "Syncing…";
-    if (lastFinishedMs_ < 0 || error_) return {};
+    if (lastFinishedMs_ < 0 || hasError()) return {};
     const int64_t minutes = (nowMs - lastFinishedMs_) / 60'000;
     return minutes < 1 ? "Synced just now" : "Synced " + std::to_string(minutes) + " min ago";
 }
@@ -47,7 +55,7 @@ int64_t SyncStatus::msSinceSync(int64_t nowMs) const { return lastFinishedMs_ < 
 void SyncStatus::drawIndicator(cairo_t* cr, Rect r) const {
     fillRect(cr, r, 255);
     const double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
-    if (syncing_) {
+    if (syncing()) {
         gray(cr, theme::kTertiary);
         cairo_set_line_width(cr, 5);
         cairo_arc(cr, cx, cy, 20, 0, 2 * M_PI);
@@ -59,7 +67,7 @@ void SyncStatus::drawIndicator(cairo_t* cr, Rect r) const {
     } else {
         syncIcon(cr, cx, cy, 20);
     }
-    if (error_) {
+    if (hasError()) {
         // A small "!" badge to the lower right, clear of the arrow.
         const int bx = static_cast<int>(cx) + 16, by = static_cast<int>(cy) + 10;
         gray(cr, 255);

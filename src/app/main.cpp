@@ -65,6 +65,7 @@ class CurrentSync final : public SyncControl {
 public:
     explicit CurrentSync(App& app) : app_(app) {}
     void syncNow() override { app_.sync().syncNow(); }
+    void pushSoon() override { app_.sync().pushSoon(); }
     void syncWhenOnline() override { app_.sync().syncWhenOnline(); }
     void openBook(const std::string& i, const std::string& a) override { app_.sync().openBook(i, a); }
     void setAllHighlightsOffline(bool on) override { app_.sync().setAllHighlightsOffline(on); }

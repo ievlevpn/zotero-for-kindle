@@ -12,6 +12,7 @@ namespace zk::test {
 class FakeSync : public SyncControl {
 public:
     void syncNow() override { ++syncs; }
+    void pushSoon() override { ++pushes; }
     void syncWhenOnline() override { ++whenOnline; }
     void openBook(const std::string& itemKey, const std::string& attachmentKey) override {
         opened.push_back(itemKey + "/" + attachmentKey);
@@ -27,7 +28,7 @@ public:
     }
     bool busy() const override { return isBusy; }
 
-    int syncs = 0, whenOnline = 0, removals = 0, interval = -1;
+    int syncs = 0, pushes = 0, whenOnline = 0, removals = 0, interval = -1;
     bool isBusy = false;
     std::vector<std::string> opened;
     std::vector<bool> allOffline;

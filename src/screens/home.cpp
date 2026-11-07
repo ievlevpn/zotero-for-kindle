@@ -206,6 +206,12 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
             reload(nav.library());
             nav.damage({0, kCardY, kW, kH - kCardY - kTabBarH}, Waveform::Quality);
             break;
+        case SyncEvent::Kind::PushStarted:  // "Uploading 3 changes…", then the header as before
+            nav.damage({0, 0, kW, kHeaderH}, Waveform::Fast);
+            break;
+        case SyncEvent::Kind::PushFinished:
+            nav.damage({0, 0, kW, kHeaderH}, Waveform::Quality);
+            break;
         default: break;
     }
 }

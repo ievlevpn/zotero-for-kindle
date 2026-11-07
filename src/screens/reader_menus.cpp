@@ -187,6 +187,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type != GestureType::Tap) return;
     if (backRect().contains(g.pos)) {
+        nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
         nav.pop();
         return;
     }

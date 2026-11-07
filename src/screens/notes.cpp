@@ -113,6 +113,7 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         if (!lines_[i].header && a.conflict) {
             if (noteRowButtonRect(rects[i], 0).contains(g.pos)) {
                 nav.library().reapplyConflict(a.key);
+                nav.sync().pushSoon();
                 load(nav.library());
                 nav.damage(kArea, Waveform::Quality);
                 return;
@@ -128,7 +129,9 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
 }
 
 void NotesScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
-    if (e.kind != SyncEvent::Kind::SyncFinished && e.kind != SyncEvent::Kind::AnnotationsReady) return;
+    if (e.kind != SyncEvent::Kind::SyncFinished && e.kind != SyncEvent::Kind::AnnotationsReady &&
+        e.kind != SyncEvent::Kind::PushFinished)
+        return;
     load(nav.library());
     nav.damage(kArea, Waveform::Quality);
 }

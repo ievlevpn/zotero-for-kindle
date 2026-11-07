@@ -20,9 +20,9 @@ public:
         syncing_ = false;
         progress_ = {};
     }
-    bool syncing() const { return syncing_; }
-    bool hasError() const { return error_.has_value(); }
-    const UserError& error() const { return *error_; }
+    bool syncing() const { return syncing_ || uploading_ > 0; }
+    bool hasError() const { return error_.has_value() || pushError_.has_value(); }
+    const UserError& error() const { return error_ ? *error_ : *pushError_; }
     std::string line(int64_t nowMs) const;
     int64_t msSinceSync(int64_t nowMs) const;  // INT64_MAX before the first sync
     void drawIndicator(cairo_t*, Rect) const;
@@ -32,6 +32,8 @@ private:
     SyncProgress progress_;
     int64_t lastFinishedMs_ = -1;
     std::optional<UserError> error_;
+    int64_t uploading_ = 0;                // changes going up now
+    std::optional<UserError> pushError_;  // the last upload failed: its changes are still unsent
 };
 
 // 6560 -> "6,560".
