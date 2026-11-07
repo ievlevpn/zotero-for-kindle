@@ -24,6 +24,8 @@ case "$PLATFORM" in
         CMAKE_TC="-DCMAKE_TOOLCHAIN_FILE=$ROOT/tools/kindlehf.cmake"
         export CC=arm-kindlehf-linux-gnueabihf-gcc CXX=arm-kindlehf-linux-gnueabihf-g++
         export AR=arm-kindlehf-linux-gnueabihf-ar RANLIB=arm-kindlehf-linux-gnueabihf-ranlib
+        # Position-independent: the libraries are linked into the reader's shared module (Plan 4).
+        export CFLAGS="-O2 -fPIC -march=armv7-a -mfpu=neon -mfloat-abi=hard" CXXFLAGS="-O2 -fPIC -march=armv7-a -mfpu=neon -mfloat-abi=hard"
         ;;
     *) echo "unknown platform $PLATFORM" >&2; exit 2 ;;
 esac

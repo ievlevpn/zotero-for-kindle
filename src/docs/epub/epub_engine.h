@@ -1,0 +1,38 @@
+#pragma once
+// EPUB engine on crengine (inside libzk-epub.so only).
+
+#include <memory>
+
+#include "docs/document.h"
+
+class LVDocView;
+
+namespace zk {
+
+class EpubEngine final : public DocumentEngine {
+public:
+    explicit EpubEngine(const EngineEnv&);
+    ~EpubEngine() override;
+
+    bool open(const std::string& path, UserError*) override;
+    void setLayout(const Layout&) override;
+    int pageCount() override;
+    PageImage render(int page) override;
+    DocPosition positionOfPage(int page) override;
+    int pageOf(const DocPosition&) override;
+    std::vector<TocEntry> toc() override;
+    std::string chapterAt(int page) override;
+    std::vector<SearchHit> search(const std::string& query, int maxHits) override;
+    std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) override;
+    int64_t wordsBetween(int fromPage, int toPage) override;
+
+private:
+    void applyLayout();
+
+    EngineEnv env_;
+    Layout layout_;
+    std::unique_ptr<LVDocView> view_;
+    std::string path_;
+};
+
+}  // namespace zk
