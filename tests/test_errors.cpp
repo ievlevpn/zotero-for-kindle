@@ -20,7 +20,7 @@ HttpResponse http(long status, std::map<std::string, std::string> headers = {}) 
     return r;
 }
 
-const std::string dav = "brighton.example.ts.net";
+const std::string dav = "dav.example.ts.net";
 const std::string api = "api.zotero.org";
 const NetState allUp{};
 
@@ -86,8 +86,8 @@ TEST_CASE("classify: success and write-guard blocks") {
 }
 
 TEST_CASE("isTailnetHost recognises ts.net names and CGNAT addresses") {
-    CHECK(isTailnetHost("brighton.example.ts.net"));
-    CHECK(isTailnetHost("100.81.5.116"));
+    CHECK(isTailnetHost("dav.example.ts.net"));
+    CHECK(isTailnetHost("100.100.1.1"));
     CHECK_FALSE(isTailnetHost("100.128.0.1"));
     CHECK_FALSE(isTailnetHost("api.zotero.org"));
     CHECK_FALSE(isTailnetHost("192.168.1.10"));

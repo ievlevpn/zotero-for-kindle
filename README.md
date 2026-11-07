@@ -46,6 +46,9 @@ prompt:
 
 To do it yourself, see [INSTALL.md](INSTALL.md). It amounts to copying two folders over USB.
 
+**Updates:** from 0.2.0 on, use *Settings → Check for updates* on the Kindle. Releases are signed, and if a new
+version doesn't start, the app goes back to the previous one. To get from 0.1.0 to 0.2.0, install over USB once.
+
 ## Building from source
 
 The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built with Meson.
@@ -55,6 +58,7 @@ The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built
     tools/build-kindle.sh                                      # cross-build in the zk-kindlehf container
     tools/package.sh                                           # dist/zotero-for-kindle.zip
     tools/deploy.sh                                            # copy to a Kindle over USBNetwork (SSH)
+    tools/release.sh 0.3.0 notes.md                            # a signed release (needs the signing key)
 
 `tools/screenshots.sh` regenerates the screenshots above from a demo library of public-domain books.
 

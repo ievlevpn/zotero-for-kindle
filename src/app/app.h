@@ -59,6 +59,10 @@ public:
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
     void quit() override { quit_ = true; }
+    void restart() override {
+        exitCode_ = 75;
+        quit_ = true;
+    }
     void toast(const std::string& text) override;
     const Screen* top() const override { return visibleTop(); }
 
@@ -86,6 +90,7 @@ private:
     std::vector<std::pair<Rect, Waveform>> pending_;
     int fullChanges_ = 0;
     bool quit_ = false;
+    int exitCode_ = 0;
     std::function<void(const SyncEvent&, Nav&)> hook_;
     std::vector<std::function<void()>> deferred_;
     std::function<void(const char*)> heartbeat_;
