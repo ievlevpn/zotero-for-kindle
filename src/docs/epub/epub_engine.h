@@ -6,6 +6,7 @@
 #include "docs/document.h"
 
 class LVDocView;
+class ldomNode;
 
 namespace zk {
 
@@ -23,6 +24,8 @@ public:
     DocPosition positionOfPage(int page) override;
     int pageOf(const DocPosition&) override;
     int pageOfPlaced(const DocPosition&) override;
+    std::vector<LinkBox> links(int page) override;
+    std::optional<LinkInfo> link(int page, int index) override;
     std::vector<TocEntry> toc() override;
     std::string chapterAt(int page) override;
     std::vector<SearchHit> search(const std::string& query, int maxHits) override;
@@ -40,6 +43,15 @@ private:
     int crPage(int spread) const { return spread * cols(); }
     int spreadOf(int crPage) const { return crPage < 0 ? crPage : crPage / cols(); }
     void settle();
+    // The current page's <a> links (cached for one page): their element, href, text and boxes.
+    struct PageLink {
+        ldomNode* anchor = nullptr;
+        std::string href, text;
+        std::vector<Rect> rects;
+    };
+    const std::vector<PageLink>& pageLinks(int page);
+    int linksPage_ = -1;
+    std::vector<PageLink> links_;
 
     EngineEnv env_;
     Layout layout_;

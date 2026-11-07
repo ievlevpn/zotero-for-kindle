@@ -34,10 +34,14 @@ public:
     std::string zoteroPosition(int page) override;
     int pageOfZoteroPosition(const std::string& json) override;
     int pageOfPlaced(const DocPosition&) override;
+    std::vector<LinkBox> links(int page) override;
+    std::optional<LinkInfo> link(int page, int index) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
 
 private:
     std::string pageText(int page);
+    // The text at a link's target: the line at or below `y` and the lines that continue it.
+    std::string textAt(int page, float y);
     // Page space -> device: scale and offset for fitting page `page` into the layout area.
     bool fit(int page, double& scale, double& dx, double& dy);
     // The page's inked area (page space), for trimmed margins; measured once per page.

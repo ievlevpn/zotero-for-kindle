@@ -324,6 +324,18 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 break;
             case RenderEvent::Kind::HitAnnotation:
                 break;
+            case RenderEvent::Kind::Link: {
+                if (e.requestId != linkId_) break;
+                linkId_ = 0;
+                if (!e.link || e.page != page_) break;
+                if (e.link->kind == LinkInfo::Kind::Jump) {
+                    followLink(*e.link);
+                    break;
+                }
+                linkPopup_ = e.link;
+                if (visible) nav.damage(linkPopupRect(), Waveform::Ui);
+                break;
+            }
             case RenderEvent::Kind::Placed: {
                 if (e.requestId != placeId_) break;
                 placeId_ = 0;
@@ -380,6 +392,8 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 layoutPending_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
                 markPlaces_ = e.bookmarkPlaces;
+                links_ = e.links;
+                if (turned) linkPopup_.reset();  // a pop-up belongs to the page it opened on
                 if (e.landed && arriving_) {  // a jump landed; one onto the page it left needs no Back
                     arriving_ = false;
                     if (!back_.empty() && back_.back().page == page_) back_.pop_back();
@@ -509,11 +523,20 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         menus_->onGesture(g, nav);
         return;
     }
+    if (linkPopup_) {  // any gesture closes it; its button follows the link
+        const LinkInfo info = *linkPopup_;
+        const bool go = g.type == GestureType::Tap && linkButtonRect().contains(g.pos);
+        nav.damage(linkPopupRect(), Waveform::Ui);
+        linkPopup_.reset();
+        if (go) followLink(info);
+        return;
+    }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
         if (backLabel() && backRect().contains(g.pos)) return back(nav);
         if (bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
             !layoutPending_ && !position_.value.empty())
             return toggleBookmark(nav);
+        if (!(question_ && positionBannerRect().contains(g.pos)) && tapLink(g.pos, nav)) return;
     }
     if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()
         if (positionGoRect().contains(g.pos)) return answerPosition(true, nav);
@@ -850,6 +873,23 @@ void ReaderScreen::draw(Canvas& canvas) {
         drawButton(cr, go, "Go", true);
         drawButton(cr, positionStayRect(), "Stay", false);
     }
+    if (linkPopup_ && !menus_) {
+        const Rect p = linkPopupRect();
+        fillRect(cr, p, 255);
+        fillRect(cr, {p.x, p.y, p.w, 3}, kInk);
+        const int w = p.w - 2 * kMargin;
+        const LinkInfo& l = *linkPopup_;
+        drawText(cr, l.label, {kSans, 7, 500, false, kSecondary}, {kMargin, p.y + 34, w, 44}, 1);
+        const Rect button = linkButtonRect();
+        const int textBottom = (button.empty() ? p.y + p.h - 30 : button.y - 30);
+        if (l.kind == LinkInfo::Kind::Web)
+            drawText(cr, l.url, {kSans, 8.5, 500}, {kMargin, p.y + 88, w, textBottom - p.y - 88}, 4);
+        else
+            drawText(cr, l.text, {kSerif, 8.5, 400}, {kMargin, p.y + 88, w, textBottom - p.y - 88}, 12);
+        if (!button.empty())
+            drawButton(cr, button, l.kind == LinkInfo::Kind::Note ? "Go to note" : "Go to page " + std::to_string(l.targetPage + 1),
+                       false);
+    }
     if (menus_) menus_->draw(canvas);
 }
 
@@ -932,6 +972,54 @@ void ReaderScreen::toggleBookmark(Nav& nav) {
 void ReaderScreen::goToPage(int page) {
     menus_.reset();
     turnTo(page);
+}
+
+// --- Links ---------------------------------------------------------------------------------
+
+bool ReaderScreen::tapLink(Point p, Nav&) {
+    if (turning_ || layoutPending_ || links_.empty() || !worker_) return false;
+    constexpr int kSlack = 14;  // fingers are wider than a note mark
+    const LinkBox* best = nullptr;
+    int bestDistance = 0;
+    for (const LinkBox& b : links_) {
+        const Rect r{b.rect.x - kSlack, b.rect.y - kSlack, b.rect.w + 2 * kSlack, b.rect.h + 2 * kSlack};
+        if (!r.contains(p)) continue;
+        const Point c = b.rect.center();
+        const int d = std::abs(c.x - p.x) + std::abs(c.y - p.y);
+        if (!best || d < bestDistance) {
+            best = &b;
+            bestDistance = d;
+        }
+    }
+    if (!best) return false;
+    linkId_ = worker_->linkAt(page_, best->index);
+    return true;
+}
+
+void ReaderScreen::followLink(const LinkInfo& l) {
+    if (!worker_ || (l.target.value.empty() && l.targetPage < 0)) return;
+    markJumpOrigin();
+    commitInk();
+    turning_ = true;
+    if (!l.target.value.empty()) worker_->showPosition(l.target);
+    else worker_->show(l.targetPage);
+}
+
+Rect ReaderScreen::linkPopupRect() const {
+    if (!linkPopup_) return {};
+    const Rect page = pageArea();
+    const int w = page.w - 2 * kMargin;
+    const std::string& text = linkPopup_->kind == LinkInfo::Kind::Web ? linkPopup_->url : linkPopup_->text;
+    const int textH = measureText(text, {kSerif, 8.5, 400}, w, 12).height;
+    const bool button = linkPopup_->kind != LinkInfo::Kind::Web && linkPopup_->targetPage >= 0;
+    const int h = std::min(page.h * 11 / 20, 40 + 54 + textH + (button ? 40 + 90 : 0) + 40);
+    return {0, page.y + page.h - h, page.w, h};
+}
+
+Rect ReaderScreen::linkButtonRect() const {
+    if (!linkPopup_ || linkPopup_->kind == LinkInfo::Kind::Web || linkPopup_->targetPage < 0) return {};
+    const Rect p = linkPopupRect();
+    return {kMargin, p.y + p.h - 40 - 90, 420, 90};
 }
 
 std::optional<std::string> ReaderScreen::positionQuestion() const {

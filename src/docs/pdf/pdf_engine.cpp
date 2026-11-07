@@ -282,6 +282,125 @@ PdfPosition parsePosition(const std::string& s) {
 
 }  // namespace
 
+std::vector<LinkBox> PdfEngine::links(int page) {
+    std::vector<LinkBox> out;
+    double scale = 1, dx = 0, dy = 0;
+    if (page < 0 || page >= pageCount() || !fit(page, scale, dx, dy)) return out;
+    fz_page* p = nullptr;
+    fz_link* links = nullptr;
+    fz_var(p);
+    fz_var(links);
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, page);
+        links = fz_load_links(ctx_, p);
+        int i = 0;
+        for (fz_link* l = links; l; l = l->next, ++i) {
+            const Rect r{static_cast<int>(l->rect.x0 * scale + dx), static_cast<int>(l->rect.y0 * scale + dy),
+                         static_cast<int>((l->rect.x1 - l->rect.x0) * scale), static_cast<int>((l->rect.y1 - l->rect.y0) * scale)};
+            if (!r.empty()) out.push_back({r, i});
+        }
+    }
+    fz_always(ctx_) {
+        fz_drop_link(ctx_, links);
+        fz_drop_page(ctx_, p);
+    }
+    fz_catch(ctx_) { return {}; }
+    return out;
+}
+
+std::optional<LinkInfo> PdfEngine::link(int page, int index) {
+    if (page < 0 || page >= pageCount() || index < 0) return std::nullopt;
+    std::string uri;
+    fz_page* p = nullptr;
+    fz_link* links = nullptr;
+    fz_var(p);
+    fz_var(links);
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, page);
+        links = fz_load_links(ctx_, p);
+        int i = 0;
+        for (fz_link* l = links; l; l = l->next, ++i)
+            if (i == index && l->uri) uri = l->uri;
+    }
+    fz_always(ctx_) {
+        fz_drop_link(ctx_, links);
+        fz_drop_page(ctx_, p);
+    }
+    fz_catch(ctx_) { return std::nullopt; }
+    if (uri.empty()) return std::nullopt;
+    LinkInfo info;
+    if (fz_is_external_link(ctx_, uri.c_str())) {
+        info.kind = LinkInfo::Kind::Web;
+        info.label = "Web link";
+        info.url = uri.rfind("doi:", 0) == 0 ? "https://doi.org/" + uri.substr(4) : uri;
+        return info;
+    }
+    float x = 0, y = 0;
+    int target = -1;
+    fz_try(ctx_) { target = fz_page_number_from_location(ctx_, doc_, fz_resolve_link(ctx_, doc_, uri.c_str(), &x, &y)); }
+    fz_catch(ctx_) { target = -1; }
+    if (target < 0 || target >= pageCount()) return std::nullopt;
+    info.kind = LinkInfo::Kind::Reference;
+    info.targetPage = target;
+    info.target = positionOfPage(target);
+    info.label = "Page " + std::to_string(target + 1);
+    info.text = textAt(target, y);
+    return info;
+}
+
+std::string PdfEngine::textAt(int page, float y) {
+    struct Line {
+        float x0, y0, y1;
+        std::string text;
+    };
+    std::vector<Line> lines;
+    fz_stext_page* st = nullptr;
+    fz_var(st);
+    fz_try(ctx_) {
+        st = fz_new_stext_page_from_page_number(ctx_, doc_, page, nullptr);
+        for (fz_stext_block* b = st->first_block; b; b = b->next) {
+            if (b->type != FZ_STEXT_BLOCK_TEXT) continue;
+            for (fz_stext_line* l = b->u.t.first_line; l; l = l->next) {
+                Line line{l->bbox.x0, l->bbox.y0, l->bbox.y1, {}};
+                for (fz_stext_char* c = l->first_char; c; c = c->next) {
+                    char buf[8];
+                    const int n = fz_runetochar(buf, c->c);
+                    line.text.append(buf, static_cast<size_t>(n));
+                }
+                lines.push_back(std::move(line));
+            }
+        }
+    }
+    fz_always(ctx_) { fz_drop_stext_page(ctx_, st); }
+    fz_catch(ctx_) { return ""; }
+    std::sort(lines.begin(), lines.end(), [](const Line& a, const Line& b) { return a.y0 < b.y0 || (a.y0 == b.y0 && a.x0 < b.x0); });
+    // The first line at or below the target, then the lines that continue it: no wider gap than
+    // a line, and not a new numbered entry ("[2] …", "2. …").
+    auto newEntry = [](const std::string& t) {
+        size_t i = t.find_first_not_of(' ');
+        if (i == std::string::npos) return false;
+        if (t[i] == '[') return i + 1 < t.size() && std::isdigit(static_cast<unsigned char>(t[i + 1]));
+        size_t j = i;
+        while (j < t.size() && std::isdigit(static_cast<unsigned char>(t[j]))) ++j;
+        return j > i && j < t.size() && t[j] == '.';
+    };
+    std::string out;
+    const Line* prev = nullptr;
+    int taken = 0;
+    for (const Line& l : lines) {
+        if (l.y1 < y - 2) continue;
+        if (prev) {
+            const float height = prev->y1 - prev->y0;
+            if (l.y0 - prev->y1 > height * 0.8f || newEntry(l.text) || ++taken >= 8 || out.size() > 700) break;
+            out += (out.empty() || out.back() == '-') ? "" : " ";
+        }
+        if (!out.empty() && out.back() == '-') out.pop_back();  // a word broken across lines
+        out += l.text;
+        prev = &l;
+    }
+    return out;
+}
+
 int PdfEngine::pageOfPlaced(const DocPosition& pos) {
     if (pos.value.rfind("p:", 0) != 0) return -1;
     try {

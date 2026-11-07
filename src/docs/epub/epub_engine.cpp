@@ -133,6 +133,7 @@ bool EpubEngine::open(const std::string& path, UserError* err) {
 }
 
 void EpubEngine::setLayout(const Layout& l) {
+    linksPage_ = -1;  // laid out again: the cached links' boxes are gone
     if (l == layout_ && view_) return;
     layout_ = l;
     applyLayout();
@@ -159,6 +160,111 @@ DocPosition EpubEngine::positionOfPage(int page) {
     if (!view_) return {};
     ldomXPointer p = view_->getPageBookmark(crPage(page));
     return p.isNull() ? DocPosition{} : DocPosition{utf8(p.toString())};
+}
+
+const std::vector<EpubEngine::PageLink>& EpubEngine::pageLinks(int page) {
+    if (page == linksPage_) return links_;
+    links_.clear();
+    linksPage_ = page;
+    if (!view_ || page < 0 || page >= pageCount()) return links_;
+    for (int col = 0; col < cols() && crPage(page) + col < view_->getPageCount(); ++col) {
+        view_->goToPage(crPage(page) + col);
+        ldomXRangeList list;
+        view_->getCurrentPageLinks(list);
+        for (int i = 0; i < list.length(); ++i) {
+            ldomXRange* r = list[i];
+            ldomXPointer a;
+            const lString32 href = r->getHRef(a);
+            if (href.empty()) continue;
+            PageLink link;
+            link.anchor = a.getNode();
+            link.href = utf8(href);
+            link.text = utf8(r->getRangeText());
+            LVArray<lvRect> rects;
+            r->getSegmentRects(rects);
+            for (int k = 0; k < rects.length(); ++k) {
+                lvPoint tl = rects[k].topLeft(), br = rects[k].bottomRight();
+                if (!view_->docToWindowPoint(tl) || !view_->docToWindowPoint(br, true)) continue;
+                const Rect box{tl.x, tl.y, br.x - tl.x, br.y - tl.y};
+                if (!box.empty() && box.y >= 0 && box.y + box.h <= layout_.height) link.rects.push_back(box);
+            }
+            if (!link.rects.empty()) links_.push_back(std::move(link));
+        }
+    }
+    view_->goToPage(crPage(page));
+    return links_;
+}
+
+std::vector<LinkBox> EpubEngine::links(int page) {
+    std::vector<LinkBox> out;
+    const auto& links = pageLinks(page);
+    for (size_t i = 0; i < links.size(); ++i)
+        for (const Rect& r : links[i].rects) out.push_back({r, static_cast<int>(i)});
+    return out;
+}
+
+namespace {
+
+bool hasWord(const lString32& value, const char* word) { return utf8(value).find(word) != std::string::npos; }
+
+// epub:type / role marking a note: <a epub:type="noteref">, <aside epub:type="footnote">, …
+bool markedNote(ldomNode* n, bool ref) {
+    if (!n || !n->isElement()) return false;
+    const lString32& type = n->getAttributeValue((const lChar8*)nullptr, "type");
+    const lString32& role = n->getAttributeValue((const lChar8*)nullptr, "role");
+    if (ref) return hasWord(type, "noteref") || hasWord(role, "doc-noteref");
+    return hasWord(type, "footnote") || hasWord(type, "endnote") || hasWord(type, "rearnote") ||
+           hasWord(role, "doc-footnote") || hasWord(role, "doc-endnote");
+}
+
+std::string trimmed(std::string s) {
+    const size_t b = s.find_first_not_of(" \t\n\r");
+    if (b == std::string::npos) return "";
+    return s.substr(b, s.find_last_not_of(" \t\n\r") - b + 1);
+}
+
+}  // namespace
+
+std::optional<LinkInfo> EpubEngine::link(int page, int index) {
+    const auto& links = pageLinks(page);
+    if (!view_ || index < 0 || index >= static_cast<int>(links.size())) return std::nullopt;
+    const PageLink& l = links[static_cast<size_t>(index)];
+    LinkInfo info;
+    if (l.href.find(':') != std::string::npos && l.href[0] != '#') {
+        info.kind = LinkInfo::Kind::Web;
+        info.label = "Web link";
+        info.url = l.href;
+        return info;
+    }
+    if (l.href.size() < 2 || l.href[0] != '#') return std::nullopt;
+    ldomDocument* doc = view_->getDocument();
+    ldomNode* dest = doc->getNodeById(doc->getAttrValueIndex(Utf8ToUnicode(lString8(l.href.c_str() + 1)).c_str()));
+    if (!dest) return std::nullopt;
+    ldomXPointer target(dest, 0);
+    info.target = {utf8(target.toString())};
+    info.targetPage = spreadOf(view_->getBookmarkPage(target));
+    // The note's block: the target itself if it is one, else the block that holds it.
+    ldomNode* block = dest;
+    while (block && block->getParentNode() && block->getRendMethod() == erm_inline) block = block->getParentNode();
+    bool note = markedNote(l.anchor, true);
+    for (ldomNode* n = dest; n && !note && n != block->getParentNode(); n = n->getParentNode()) note = markedNote(n, false);
+    if (!note && block && block->getParentNode()) note = markedNote(block->getParentNode(), false);
+    std::string text = block ? trimmed(utf8(block->getText(' '))) : "";
+    const std::string mark = trimmed(l.text);
+    // Unmarked: a short mark ("3", "*", "†") pointing at a short passage is a footnote too.
+    if (!note && mark.size() <= 4 && !text.empty() && text.size() < 3000) note = true;
+    if (!note) {
+        info.kind = LinkInfo::Kind::Jump;
+        return info;
+    }
+    // Endnotes end with a link back ("↩"): not part of the note.
+    for (const char* back : {"\xE2\x86\xA9\xEF\xB8\x8E", "\xE2\x86\xA9", "^"})
+        if (text.size() >= std::strlen(back) && text.compare(text.size() - std::strlen(back), std::strlen(back), back) == 0)
+            text = trimmed(text.substr(0, text.size() - std::strlen(back)));
+    info.kind = LinkInfo::Kind::Note;
+    info.label = mark.empty() || mark.size() > 8 ? "Footnote" : "Footnote " + mark;
+    info.text = text;
+    return info;
 }
 
 int EpubEngine::pageOfPlaced(const DocPosition& pos) {

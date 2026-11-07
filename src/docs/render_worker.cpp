@@ -8,6 +8,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <tuple>
 
 #include "core/log.h"
 
@@ -63,6 +64,7 @@ struct RenderWorker::Impl {
     std::optional<PointRequest> selectRequest, hitRequest;
     std::optional<std::pair<uint64_t, std::string>> placeRequest;
     std::optional<std::vector<DocPosition>> bookmarkRequest;
+    std::optional<std::tuple<uint64_t, int, int>> linkRequest;  // id, page, index
     uint64_t nextPointId = 1;
     struct InkRequest {
         uint64_t id = 0;
@@ -95,7 +97,7 @@ struct RenderWorker::Impl {
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
         return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
-               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest;
+               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest;
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
@@ -139,6 +141,7 @@ struct RenderWorker::Impl {
         ev.position = engine->positionOfPage(page);
         ev.zoteroPosition = engine->zoteroPosition(page);
         ev.bookmarkPlaces = bookmarkPlaces;
+        ev.links = engine->links(page);
         return ev;
     }
     void relaid(int page) {
@@ -180,7 +183,7 @@ void RenderWorker::Impl::run() {
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
-                           selectRequest || hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest;
+                           selectRequest || hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest;
                 });
             if (stop) break;
         }
@@ -209,6 +212,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<PointRequest> sel, hit;
     std::optional<std::pair<uint64_t, std::string>> place;
     std::optional<std::vector<DocPosition>> marks;
+    std::optional<std::tuple<uint64_t, int, int>> linkAsk;
     bool landed = false;
     std::deque<InkRequest> inks;
     uint64_t gen = 0;
@@ -232,6 +236,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         placeRequest.reset();
         marks = std::move(bookmarkRequest);
         bookmarkRequest.reset();
+        linkAsk = linkRequest;
+        linkRequest.reset();
         inks.swap(inkRequests);
         gen = generation;
     }
@@ -308,6 +314,14 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.requestId = hit->id;
         ev.page = hit->page;
         ev.annotationKey = engine->annotationAt(hit->page, hit->from, anns).value_or("");
+        emit(std::move(ev));
+    }
+    if (linkAsk) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Link;
+        ev.requestId = std::get<0>(*linkAsk);
+        ev.page = std::get<1>(*linkAsk);
+        ev.link = engine->link(ev.page, std::get<2>(*linkAsk));
         emit(std::move(ev));
     }
     if (place) {
@@ -430,6 +444,15 @@ void RenderWorker::showAnnotation(AnnotationRecord a) {
         impl_->target = {Impl::Target::Kind::Annotation, 0, {}, std::move(a)};
         ++impl_->generation;
     });
+}
+
+uint64_t RenderWorker::linkAt(int page, int index) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextPointId++;
+        impl_->linkRequest = std::make_tuple(id, page, index);
+    });
+    return id;
 }
 
 void RenderWorker::setBookmarks(std::vector<DocPosition> marks) {

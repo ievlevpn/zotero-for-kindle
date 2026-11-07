@@ -18,7 +18,7 @@
 namespace zk {
 
 struct RenderEvent {
-    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink };
+    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink, Link };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
     std::shared_ptr<const PageImage> image;
@@ -37,6 +37,8 @@ struct RenderEvent {
     // Page: each bookmark given to setBookmarks with its page (-1: can't be placed), by position.
     std::vector<std::pair<std::string, int>> bookmarkPlaces;
     bool landed = false;  // Page: where a show/showPosition/showAnnotation request took it
+    std::vector<LinkBox> links;      // Page: the page's links
+    std::optional<LinkInfo> link;    // Link: what the asked-for link is (nullopt: nothing to follow)
     std::string zoteroPosition;      // Page: this page in Zotero's terms (lastPageIndex), "" if none
                                      // Placed: page (-1 if it can't be placed), chapter, progress
 };
@@ -66,6 +68,8 @@ public:
     uint64_t placeZotero(std::string json);
     // The book's bookmarks: each Page event says which page each one is on (the page is posted again).
     void setBookmarks(std::vector<DocPosition>);
+    // What link `index` on `page` is: a Link event with this request id.
+    uint64_t linkAt(int page, int index);
     // Handwriting on `page` placed for Zotero; every request is answered, in order.
     uint64_t ink(int page, std::vector<std::vector<Point>> paths, int widthPx);
     bool poll(RenderEvent&);  // UI thread, non-blocking

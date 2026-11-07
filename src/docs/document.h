@@ -34,6 +34,24 @@ struct TocEntry {
     int page = 0;
 };
 
+// A link on a page (device pixels), by its index on that page.
+struct LinkBox {
+    Rect rect;
+    int index = 0;
+};
+
+// What a link is. Note: a footnote or endnote (shown in a pop-up, "Go to note"). Reference: a
+// PDF's internal link, e.g. a citation (the text at its target in a pop-up, "Go to page N").
+// Jump: an EPUB link to another part of the book. Web: an address outside the book.
+struct LinkInfo {
+    enum class Kind { Note, Reference, Jump, Web } kind = Kind::Jump;
+    std::string label;  // "Footnote 3", "Page 14", "Web link"
+    std::string text;   // the note or the text at the target ("" for a jump)
+    std::string url;    // Web
+    DocPosition target;
+    int targetPage = -1;
+};
+
 struct SearchHit {
     int page = 0;
     std::string snippet;
@@ -116,6 +134,9 @@ public:
     virtual int pageOf(const DocPosition&) = 0;
     // As pageOf, but -1 where the position can't be placed (a bookmark from another edition).
     virtual int pageOfPlaced(const DocPosition& p) { return pageOf(p); }
+    // A page's links, and what one of them is (nullopt: not a link we can follow).
+    virtual std::vector<LinkBox> links(int /*page*/) { return {}; }
+    virtual std::optional<LinkInfo> link(int /*page*/, int /*index*/) { return std::nullopt; }
     virtual std::vector<TocEntry> toc() = 0;
     virtual std::string chapterAt(int page) = 0;
     virtual std::vector<SearchHit> search(const std::string& query, int maxHits) = 0;

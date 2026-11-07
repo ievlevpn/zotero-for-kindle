@@ -65,6 +65,12 @@ public:
     bool bookmarked() const;
     std::vector<TocEntry> bookmarks() const;  // by page, for Contents
     void goToPage(int page);                  // Go to… (a jump)
+    // Links: a tap on one asks the worker what it is; a note, a PDF reference or a web address
+    // opens in a pop-up over the bottom of the page (any tap closes it), a jump goes there.
+    const std::vector<LinkBox>& links() const { return links_; }
+    const std::optional<LinkInfo>& linkPopup() const { return linkPopup_; }
+    Rect linkPopupRect() const;
+    Rect linkButtonRect() const;  // "Go to note" / "Go to page N"; empty when there's nothing to go to
     bool turning() const { return turning_; }
 
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
@@ -187,6 +193,11 @@ private:
         int page = 0;
     };
     std::vector<BackEntry> back_;
+    bool tapLink(Point, Nav&);
+    void followLink(const LinkInfo&);
+    std::vector<LinkBox> links_;
+    std::optional<LinkInfo> linkPopup_;
+    uint64_t linkId_ = 0;
     int turnsSinceJump_ = 0;
     static constexpr int kBackTurns = 3;  // pages read at the new place before Back goes
     std::vector<Bookmark> marks_;

@@ -41,6 +41,7 @@ test_sources = files(
   'test_reading_position.cpp',
   'test_reader_position.cpp',
   'test_navigation.cpp',
+  'test_links.cpp',
   'test_layout_scribe.cpp',
   'test_keyboard_bounds.cpp',
   'test_review_fixes6.cpp',

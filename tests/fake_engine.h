@@ -102,6 +102,31 @@ public:
         const int page = pageOf(p);
         return page >= 0 && page < pageCount() ? page : -1;
     }
+    // Links on every page ending in 3: a note, a jump (20 pages on) and a web address.
+    std::vector<LinkBox> links(int page) override {
+        if (page % 10 != 3) return {};
+        return {{{200, 400, 60, 40}, 0}, {{500, 400, 120, 40}, 1}, {{800, 400, 120, 40}, 2}};
+    }
+    std::optional<LinkInfo> link(int page, int index) override {
+        if (page % 10 != 3 || index < 0 || index > 2) return std::nullopt;
+        LinkInfo l;
+        if (index == 0) {
+            l.kind = LinkInfo::Kind::Note;
+            l.label = "Footnote 3";
+            l.text = "See Zosimus, l. ii. p. 104, who allows the prudence of the measure.";
+            l.targetPage = page + 50;
+        } else if (index == 1) {
+            l.kind = LinkInfo::Kind::Jump;
+            l.targetPage = page + 20;
+        } else {
+            l.kind = LinkInfo::Kind::Web;
+            l.label = "Web link";
+            l.url = "https://example.org/pinns";
+            return l;
+        }
+        l.target = positionOfPage(l.targetPage);
+        return l;
+    }
     // Zotero positions: the page number as text.
     std::string zoteroPosition(int page) override { return std::to_string(page); }
     int pageOfZoteroPosition(const std::string& v) override {
