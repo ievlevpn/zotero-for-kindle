@@ -6,6 +6,7 @@
 #include "screens/screen.h"
 
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace zk::test {
@@ -32,6 +33,8 @@ public:
     Keyboard& keyboard() override { return keyboardFake; }
     int64_t nowMs() const override { return now; }
     void quit() override { quitted = true; }
+    void toast(const std::string& text) override { toasts.push_back(text); }
+    const Screen* top() const override { return visible; }
 
     struct Damage {
         Rect rect;
@@ -39,6 +42,8 @@ public:
     };
     std::vector<Damage> damages;
     std::vector<std::unique_ptr<Screen>> pushed;
+    std::vector<std::string> toasts;
+    const Screen* visible = nullptr;
     FakeSync syncFake;
     FakeKeyboard keyboardFake;
     int pops = 0, tab = -1;

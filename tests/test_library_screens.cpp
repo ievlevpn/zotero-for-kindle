@@ -245,3 +245,11 @@ TEST_CASE("library: one item as a row, for the Continue reading card") {
     CHECK(r->title == "");
     CHECK_FALSE(rig.lib.rowFor("NOPE0000"));
 }
+
+TEST_CASE("library: all attachments of an item, including linked files") {
+    Rig rig;
+    auto atts = rig.lib.attachmentsOf("IT000002");
+    REQUIRE(atts.size() == 1);
+    CHECK(atts[0].linkMode == "linked_file");
+    CHECK(rig.lib.attachmentsOf("IT000005").empty());
+}

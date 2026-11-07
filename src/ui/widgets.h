@@ -40,6 +40,13 @@ void drawPageIndicator(cairo_t*, Rect, int page /* 0-based */, int pages);  // "
 void drawHeader(cairo_t*, const std::string& title, bool back);
 Rect headerBackRect();
 
+// A dark pill with a short message.
+void drawToast(cairo_t*, Rect, const std::string& text);
+
+// A highlight or note: shade bar, text (Bookerly, 3 lines), comment, page label.
+constexpr int kNoteRowH = 220;
+void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&);
+
 // A collection line: folder glyph, name, item count, "›" when it has subcollections.
 void drawCollectionRow(cairo_t*, Rect, const std::string& name, int64_t items, bool hasChildren);
 

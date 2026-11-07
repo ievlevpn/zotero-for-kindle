@@ -27,8 +27,9 @@ const char* sortLabel(SortBy s) {
     return "Recent";
 }
 
-LibraryScreen::LibraryScreen(std::function<void(const ItemRow&)> openItem) : openItem_(std::move(openItem)) {
+LibraryScreen::LibraryScreen(std::function<void(const ItemRow&)> openItem, StatusFn status) : openItem_(std::move(openItem)) {
     list_.setRowsPerPage(ItemList::rowsFitting(listArea()));
+    list_.setStatusFn(std::move(status));
 }
 
 Rect LibraryScreen::chipsArea() { return {kMargin, kHeaderH, kW - 2 * kMargin, kChipsH}; }
@@ -136,6 +137,7 @@ void LibraryScreen::onGesture(const Gesture& g, Nav& nav) {
 }
 
 void LibraryScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
+    list_.onDownloadEvent(e, listArea(), nav);
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     tags_ = nav.library().topTags(3);
     list_.refresh(nav.library());

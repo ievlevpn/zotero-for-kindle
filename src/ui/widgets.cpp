@@ -150,6 +150,32 @@ void drawPageIndicator(cairo_t* cr, Rect r, int page, int pages) {
     centredText(cr, std::to_string(page + 1) + " / " + std::to_string(pages), {kSans, 6.5, 400, false, kTertiary}, r);
 }
 
+void drawToast(cairo_t* cr, Rect r, const std::string& text) {
+    gray(cr, 40);
+    roundedRect(cr, r.x, r.y, r.w, r.h, r.h / 2.0);
+    cairo_fill(cr);
+    centredText(cr, text, {kSans, 8, 500, false, 255}, {r.x + 40, r.y, r.w - 80, r.h});
+}
+
+void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a) {
+    fillRect(cr, r, 255);
+    fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
+    const int tx = r.x + 34, tw = r.w - 34 - 120;
+    int y = r.y + 18;
+    if (!a.text.empty()) {
+        TextResult t = drawText(cr, a.text, {kSerif, 8.5, 400}, {tx, y, tw, 132}, 3);
+        y += t.height + 8;
+    }
+    if (!a.comment.empty()) drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, r.y + r.h - 14 - y}, 2);
+    if (!a.pageLabel.empty())
+        drawText(cr, "p. " + a.pageLabel, {kSans, 6.5, 400, false, kTertiary}, {r.x + r.w - 110, r.y + 20, 110, 40}, 1,
+                 Align::Right);
+    if (a.conflict)
+        drawText(cr, "not synced", {kSans, 6, 500, false, kSecondary}, {r.x + r.w - 160, r.y + r.h - 50, 160, 40}, 1,
+                 Align::Right);
+    hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
+}
+
 Rect headerBackRect() { return {0, 0, 150, kHeaderH}; }
 
 void drawHeader(cairo_t* cr, const std::string& title, bool back) {

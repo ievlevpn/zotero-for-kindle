@@ -567,6 +567,14 @@ std::optional<AttachmentRecord> Library::attachment(const std::string& key) {
     });
 }
 
+std::vector<AttachmentRecord> Library::attachmentsOf(const std::string& itemKey) {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kAttachmentColumns + " FROM attachments WHERE parentKey = ? ORDER BY key");
+        st.bind(1, itemKey);
+        return readAttachments(st);
+    });
+}
+
 std::optional<AnnotationRecord> Library::annotation(const std::string& key) {
     return guarded([&]() -> std::optional<AnnotationRecord> {
         Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns + " FROM annotations WHERE key = ?");

@@ -28,7 +28,8 @@ bool turnPage(const Gesture& g, Pager& pager) {
 
 // ---- top level -------------------------------------------------------------------------------
 
-CollectionsScreen::CollectionsScreen(std::function<void(const ItemRow&)> openItem) : openItem_(std::move(openItem)) {}
+CollectionsScreen::CollectionsScreen(std::function<void(const ItemRow&)> openItem, StatusFn status)
+    : openItem_(std::move(openItem)), status_(std::move(status)) {}
 
 void CollectionsScreen::load(Library& lib) {
     all_ = lib.childCollections("");
@@ -75,7 +76,7 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     auto rects = entryRects();
     for (size_t i = 0; i < rects.size(); ++i)
-        if (rects[i].contains(g.pos)) nav.push(std::make_unique<CollectionScreen>(entries_[i], openItem_));
+        if (rects[i].contains(g.pos)) nav.push(std::make_unique<CollectionScreen>(entries_[i], openItem_, status_));
 }
 
 void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
@@ -86,8 +87,8 @@ void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
 
 // ---- one collection --------------------------------------------------------------------------
 
-CollectionScreen::CollectionScreen(CollectionEntry entry, std::function<void(const ItemRow&)> openItem)
-    : entry_(std::move(entry)), openItem_(std::move(openItem)) {}
+CollectionScreen::CollectionScreen(CollectionEntry entry, std::function<void(const ItemRow&)> openItem, StatusFn status)
+    : entry_(std::move(entry)), openItem_(std::move(openItem)), status_(std::move(status)) {}
 
 Rect CollectionScreen::backRect() { return headerBackRect(); }
 
@@ -141,7 +142,7 @@ void CollectionScreen::draw(Canvas& canvas) {
             drawCollectionRow(cr, rects[i], page_[i].collection.collection.name, page_[i].collection.items,
                               page_[i].collection.hasChildren);
         else
-            drawItemRow(cr, rects[i], page_[i].item, "");
+            drawItemRow(cr, rects[i], page_[i].item, status_ ? status_(page_[i].item.attachmentKey) : "");
     }
     if (page_.empty())
         drawText(cr, "This collection is empty.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, kW - 2 * kMargin, 100},
@@ -163,12 +164,19 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
     auto rects = lineRects();
     for (size_t i = 0; i < rects.size(); ++i) {
         if (!rects[i].contains(g.pos)) continue;
-        if (page_[i].isCollection) nav.push(std::make_unique<CollectionScreen>(page_[i].collection, openItem_));
+        if (page_[i].isCollection) nav.push(std::make_unique<CollectionScreen>(page_[i].collection, openItem_, status_));
         else if (openItem_) openItem_(page_[i].item);
     }
 }
 
 void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
+    if (e.kind == SyncEvent::Kind::DownloadProgress || e.kind == SyncEvent::Kind::DownloadFinished) {
+        if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());
+        auto rects = lineRects();
+        for (size_t i = 0; i < page_.size(); ++i)
+            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Fast);
+        return;
+    }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     load(nav.library());
     nav.damage(kArea, Waveform::Quality);

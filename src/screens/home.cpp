@@ -150,7 +150,8 @@ void HomeScreen::draw(Canvas& canvas) {
         hRule(cr, kCardY + kCoverH + 44, 0, kW);
         drawText(cr, "RECENT", {kSans, 7, 700, false, kSecondary}, {kMargin, kRecentLabelY, contentW, 50}, 1);
         auto rects = recentRowRects();
-        for (size_t i = 0; i < rects.size(); ++i) drawItemRow(cr, rects[i], recent_[i], "");
+        for (size_t i = 0; i < rects.size(); ++i)
+            drawItemRow(cr, rects[i], recent_[i], actions_.status ? actions_.status(recent_[i].attachmentKey) : "");
     }
     if (status_.hasError()) drawBanner(cr, bannerRect(), status_.error());
 }
@@ -194,6 +195,12 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
             reload(nav.library());
             nav.redrawAll(Waveform::Quality);
             break;
+        case SyncEvent::Kind::DownloadProgress: {
+            auto rects = recentRowRects();
+            for (size_t i = 0; i < rects.size(); ++i)
+                if (recent_[i].attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Fast);
+            break;
+        }
         case SyncEvent::Kind::DownloadFinished:
         case SyncEvent::Kind::AnnotationsReady:
             reload(nav.library());

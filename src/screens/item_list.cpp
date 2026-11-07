@@ -40,9 +40,14 @@ std::vector<Rect> ItemList::rowRects(Rect area) const {
     return out;
 }
 
-std::string ItemList::statusFor(const std::string& key) const {
-    auto it = status_.find(key);
-    return it == status_.end() ? std::string{} : it->second;
+std::string ItemList::statusFor(const std::string& key) const { return statusFn_ && !key.empty() ? statusFn_(key) : std::string{}; }
+
+void ItemList::onDownloadEvent(const SyncEvent& e, Rect area, Nav& nav) {
+    if (e.kind != SyncEvent::Kind::DownloadProgress && e.kind != SyncEvent::Kind::DownloadFinished) return;
+    const int i = indexOfAttachment(e.attachmentKey);
+    if (i < 0) return;
+    if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());  // the file state changed
+    nav.damage(rowRects(area)[static_cast<size_t>(i)], Waveform::Fast);
 }
 
 int ItemList::indexOfAttachment(const std::string& key) const {

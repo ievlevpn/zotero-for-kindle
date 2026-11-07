@@ -15,6 +15,7 @@ struct HomeActions {
     std::function<void()> openSearch;
     std::function<void()> openSettings;
     std::function<void(const ItemRow&)> openItem;
+    StatusFn status;  // download progress/errors for the Recent rows
 };
 
 class HomeScreen final : public Screen {

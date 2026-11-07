@@ -17,7 +17,11 @@ constexpr int kMaxResults = 200;
 
 }  // namespace
 
-SearchScreen::SearchScreen(std::function<void(const ItemRow&)> openItem) : openItem_(std::move(openItem)) {}
+SearchScreen::SearchScreen(std::function<void(const ItemRow&)> openItem, StatusFn status) : openItem_(std::move(openItem)) {
+    list_.setStatusFn(std::move(status));
+}
+
+void SearchScreen::onSyncEvent(const SyncEvent& e, Nav& nav) { list_.onDownloadEvent(e, areaCache_, nav); }
 
 Rect SearchScreen::fieldRect() { return {kMargin + 70, 30, kW - 2 * kMargin - 70, 92}; }
 

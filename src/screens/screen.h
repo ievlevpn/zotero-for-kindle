@@ -4,6 +4,7 @@
 // parts of the window changed with which e-ink waveform.
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -32,7 +33,12 @@ public:
     virtual Keyboard& keyboard() = 0;
     virtual int64_t nowMs() const = 0;
     virtual void quit() = 0;
+    virtual void toast(const std::string& text) = 0;  // a short message above the tab bar, ~3 s
+    virtual const Screen* top() const = 0;            // the visible screen
 };
+
+// What a list row shows instead of its byline (download progress or an error), by attachment key.
+using StatusFn = std::function<std::string(const std::string& attachmentKey)>;
 
 class Screen {
 public:

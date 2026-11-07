@@ -16,7 +16,8 @@ class SearchScreen final : public Screen {
 public:
     static constexpr int64_t kPauseMs = 700;
 
-    explicit SearchScreen(std::function<void(const ItemRow&)> openItem);
+    explicit SearchScreen(std::function<void(const ItemRow&)> openItem, StatusFn status = {});
+    void onSyncEvent(const SyncEvent&, Nav&) override;
 
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;

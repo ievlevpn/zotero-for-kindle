@@ -11,7 +11,7 @@ namespace zk {
 
 class LibraryScreen final : public Screen {
 public:
-    explicit LibraryScreen(std::function<void(const ItemRow&)> openItem);
+    explicit LibraryScreen(std::function<void(const ItemRow&)> openItem, StatusFn status = {});
 
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;

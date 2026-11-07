@@ -130,6 +130,9 @@ screens_lib = static_library('zk-screens',
   'src/screens/library.cpp',
   'src/screens/collections.cpp',
   'src/screens/search.cpp',
+  'src/screens/open_flow.cpp',
+  'src/screens/book.cpp',
+  'src/screens/notes.cpp',
   include_directories : ui_incs,
   dependencies : [ui_dep, store_dep])
 

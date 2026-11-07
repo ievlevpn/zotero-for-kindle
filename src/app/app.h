@@ -35,9 +35,14 @@ public:
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
     void quit() override { quit_ = true; }
+    void toast(const std::string& text) override;
+    const Screen* top() const override { return visibleTop(); }
+
+    // Called with every sync event before the screens see it (the open flow's download states).
+    void setEventHook(std::function<void(const SyncEvent&, Nav&)> hook) { hook_ = std::move(hook); }
 
 private:
-    Screen* top() const;
+    Screen* visibleTop() const;
     void showTop();
     void handle(const Gesture&);
     void flush();
@@ -56,6 +61,10 @@ private:
     std::vector<std::pair<Rect, Waveform>> pending_;
     int fullChanges_ = 0;
     bool quit_ = false;
+    std::function<void(const SyncEvent&, Nav&)> hook_;
+    std::string toast_;
+    int64_t toastUntil_ = 0;
+    bool toastShown_ = false;
     bool closed_ = false;
 };
 

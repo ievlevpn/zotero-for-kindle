@@ -27,7 +27,17 @@ void App::setRoot(int tab, std::unique_ptr<Screen> s) {
     stacks_[tab].push_back(std::move(s));
 }
 
-Screen* App::top() const { return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get(); }
+Screen* App::visibleTop() const { return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get(); }
+
+namespace {
+Rect toastRect() { return {kMargin, 1547 - kTabBarH - 130, 1236 - 2 * kMargin, 100}; }
+}  // namespace
+
+void App::toast(const std::string& text) {
+    toast_ = text;
+    toastUntil_ = clock_() + 3000;
+    pending_.push_back({toastRect(), Waveform::Fast});
+}
 
 Rect App::tabBar() const { return {0, canvas_.height() - kTabBarH, canvas_.width(), kTabBarH}; }
 
@@ -39,7 +49,7 @@ void App::start() {
 }
 
 void App::showTop() {
-    Screen* s = top();
+    Screen* s = visibleTop();
     if (!s) return;
     if (s->wantsKeyboard()) keyboard_.show();
     else keyboard_.hide();
@@ -75,7 +85,7 @@ void App::switchTab(int index) {
 }
 
 void App::damage(Rect r, Waveform w) {
-    if (caller_ && caller_ != top()) return;  // a hidden screen updated its state; it redraws when shown
+    if (caller_ && caller_ != visibleTop()) return;  // a hidden screen updated its state; it redraws when shown
     pending_.push_back({r, w});
 }
 
@@ -87,7 +97,7 @@ void App::handle(const Gesture& g) {
         quit_ = true;
         return;
     }
-    Screen* s = top();
+    Screen* s = visibleTop();
     if (!s) return;
     if (s->showsTabBar() && tabBar().contains(g.pos)) {
         if (g.type != GestureType::Tap) return;
@@ -121,7 +131,7 @@ void App::step(int timeout_ms) {
                 break;
             }
             case InputEvent::Kind::Key:
-                if (Screen* s = top()) {
+                if (Screen* s = visibleTop()) {
                     caller_ = s;
                     s->onKey(e.key, *this);
                     caller_ = nullptr;
@@ -142,14 +152,24 @@ void App::step(int timeout_ms) {
     }
 
     SyncEvent ev;
-    while (sync_.poll(ev))
+    while (sync_.poll(ev)) {
+        if (hook_) {
+            caller_ = nullptr;
+            hook_(ev, *this);
+        }
         for (auto& stack : stacks_)
             for (auto& s : stack) {
                 caller_ = s.get();
                 s->onSyncEvent(ev, *this);
                 caller_ = nullptr;
             }
-    if (Screen* s = top()) {
+    }
+    if (toastShown_ && clock_() >= toastUntil_) {
+        toast_.clear();
+        toastShown_ = false;
+        pending_.push_back({toastRect(), Waveform::Quality});
+    }
+    if (Screen* s = visibleTop()) {
         caller_ = s;
         s->onTick(*this);
         caller_ = nullptr;
@@ -158,7 +178,7 @@ void App::step(int timeout_ms) {
 }
 
 void App::flush() {
-    if (pending_.empty() || !top()) return;
+    if (pending_.empty() || !visibleTop()) return;
     const Rect all{0, 0, canvas_.width(), canvas_.height()};
     Rect fast, quality, full;
     for (const auto& [r, w] : pending_) {
@@ -170,8 +190,12 @@ void App::flush() {
         full = all;
         quality = {};
     }
-    top()->draw(canvas_);
-    if (top()->showsTabBar()) drawTabBar(canvas_.cr(), tabBar(), kTabNames, tab_);
+    visibleTop()->draw(canvas_);
+    if (visibleTop()->showsTabBar()) drawTabBar(canvas_.cr(), tabBar(), kTabNames, tab_);
+    if (!toast_.empty()) {
+        drawToast(canvas_.cr(), toastRect(), toast_);
+        toastShown_ = true;
+    }
     if (!full.empty()) {
         display_.present(canvas_, full.united(quality).united(fast), Waveform::Full);
         return;

@@ -12,7 +12,7 @@ namespace zk {
 
 class CollectionsScreen final : public Screen {
 public:
-    explicit CollectionsScreen(std::function<void(const ItemRow&)> openItem);
+    explicit CollectionsScreen(std::function<void(const ItemRow&)> openItem, StatusFn status = {});
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
@@ -24,6 +24,7 @@ public:
 private:
     void load(Library&);
     std::function<void(const ItemRow&)> openItem_;
+    StatusFn status_;
     std::vector<CollectionEntry> all_, entries_;
     Pager pager_{0, 1};
 };
@@ -36,7 +37,7 @@ public:
         ItemRow item;
     };
 
-    CollectionScreen(CollectionEntry, std::function<void(const ItemRow&)> openItem);
+    CollectionScreen(CollectionEntry, std::function<void(const ItemRow&)> openItem, StatusFn status = {});
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
@@ -52,6 +53,7 @@ private:
 
     CollectionEntry entry_;
     std::function<void(const ItemRow&)> openItem_;
+    StatusFn status_;
     std::vector<CollectionEntry> subs_;
     std::vector<Line> page_;
     Pager pager_{0, 1};

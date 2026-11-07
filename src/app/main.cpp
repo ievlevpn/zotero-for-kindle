@@ -20,6 +20,8 @@
 #include "screens/collections.h"
 #include "screens/home.h"
 #include "screens/library.h"
+#include "screens/notes.h"
+#include "screens/open_flow.h"
 #include "screens/search.h"
 #include "screens/sync_status.h"
 #include "store/db.h"
@@ -54,20 +56,6 @@ public:
     Rect bounds() const override { return {}; }
 };
 
-// Tabs not built yet in this plan's order (Library, Collections, Notes come in later tasks).
-class PlaceholderScreen final : public Screen {
-public:
-    explicit PlaceholderScreen(std::string title) : title_(std::move(title)) {}
-    void draw(Canvas& c) override {
-        fillRect(c.cr(), {0, 0, c.width(), c.height()}, 255);
-        drawText(c.cr(), title_, {theme::kSans, 17, 700}, {kMargin, 18, c.width() - 2 * kMargin, 100}, 1);
-    }
-    void onGesture(const Gesture&, Nav&) override {}
-
-private:
-    std::string title_;
-};
-
 std::optional<Config> appConfig(const Paths& paths) {
     if (!paths.droppedConfig.empty()) importDroppedConfig(paths.droppedConfig, paths.configDir);
     if (auto c = loadConfig(paths.configDir)) return c;
@@ -86,6 +74,7 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     if (screen == "home") s = std::make_unique<HomeScreen>(status, HomeActions{}, wallMs);
     if (screen == "library") s = std::make_unique<LibraryScreen>(nullptr);
     if (screen == "collections") s = std::make_unique<CollectionsScreen>(nullptr);
+    if (screen == "notes") s = std::make_unique<NotesScreen>();
     if (!s) {
         log(LogLevel::Error, "unknown screen %s", screen.c_str());
         return 2;
@@ -105,6 +94,8 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         Keyboard& keyboard() override { return kb; }
         int64_t nowMs() const override { return 0; }
         void quit() override {}
+        void toast(const std::string&) override {}
+        const Screen* top() const override { return nullptr; }
     } nav(lib, sync);
     s->onShow(nav);
     Canvas c(1236, 1547);
@@ -159,14 +150,17 @@ int main(int argc, char** argv) {
     std::unique_ptr<Display> display = makeDisplay();
     App app(*display, lib, sync, *keyboard);
     SyncStatus status;
-    auto openItem = [](const ItemRow& r) { log(LogLevel::Info, "open %s (open flow arrives in Task 10)", r.key.c_str()); };
+    OpenFlow flow(wallMs);
+    app.setEventHook([&flow](const SyncEvent& e, Nav& nav) { flow.onSyncEvent(e, nav); });
+    auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     HomeActions home;
-    home.openSearch = [&app, openItem] { app.push(std::make_unique<SearchScreen>(openItem)); };
+    home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
     home.openItem = openItem;
+    home.status = flow.statusFn();
     app.setRoot(0, std::make_unique<HomeScreen>(status, home, wallMs));
-    app.setRoot(1, std::make_unique<LibraryScreen>(openItem));
-    app.setRoot(2, std::make_unique<CollectionsScreen>(openItem));
-    app.setRoot(3, std::make_unique<PlaceholderScreen>("Notes"));
+    app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
+    app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
+    app.setRoot(3, std::make_unique<NotesScreen>());
     if (service) service->start();
     app.start();
     const int rc = app.run();

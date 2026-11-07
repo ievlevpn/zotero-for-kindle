@@ -103,6 +103,7 @@ public:
     void dropUntrackedAnnotations();
 
     std::optional<AttachmentRecord> attachment(const std::string& key);
+    std::vector<AttachmentRecord> attachmentsOf(const std::string& itemKey);  // every kind, linked too
     std::optional<AnnotationRecord> annotation(const std::string& key);
 
     std::vector<ItemRecord> recentItems(int limit);  // top-level items, newest dateAdded first

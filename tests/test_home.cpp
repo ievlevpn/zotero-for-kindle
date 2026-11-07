@@ -26,7 +26,7 @@ struct Rig {
     std::vector<std::string> opened;
     int searches = 0, settings = 0;
     HomeScreen home{status, HomeActions{[this] { ++searches; }, [this] { ++settings; },
-                                        [this](const ItemRow& r) { opened.push_back(r.key); }},
+                                        [this](const ItemRow& r) { opened.push_back(r.key); }, nullptr},
                     [] { return kNowWall; }};
     Canvas canvas{1236, 1547};
     explicit Rig(int items = 40) {

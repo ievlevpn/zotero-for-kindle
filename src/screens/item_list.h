@@ -28,9 +28,10 @@ public:
     // Swipes turn pages (damaging `area`); taps on a row call `open`. True if handled.
     bool onGesture(const Gesture&, Rect area, Nav&, const std::function<void(const ItemRow&)>& open);
 
-    void setStatus(const std::string& attachmentKey, std::string status) { status_[attachmentKey] = std::move(status); }
-    void clearStatus(const std::string& attachmentKey) { status_.erase(attachmentKey); }
+    void setStatusFn(StatusFn f) { statusFn_ = std::move(f); }
     std::string statusFor(const std::string& attachmentKey) const;
+    // A download started/progressed/finished for a row on this page: repaint that row (Fast).
+    void onDownloadEvent(const SyncEvent&, Rect area, Nav&);
     int indexOfAttachment(const std::string& attachmentKey) const;  // on this page; -1 if not shown
 
     const std::vector<ItemRow>& rows() const { return rows_; }
@@ -48,7 +49,7 @@ private:
     Pager pager_;
     int perPage_ = kRowsPerPageDefault;
     std::vector<ItemRow> rows_;
-    std::map<std::string, std::string> status_;
+    StatusFn statusFn_;
 };
 
 }  // namespace zk
