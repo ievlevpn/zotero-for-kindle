@@ -3,6 +3,8 @@
 #include <sys/ipc.h>
 #include <sys/msg.h>
 #include <sys/sem.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <csignal>
 #include <cerrno>
@@ -28,6 +30,10 @@ constexpr int kNews = 1, kConnected = 3, kStroke = 5, kContext = 8, kIdle = 11;
 constexpr long kSetMode = 1, kSetCanvas = 6, kSetWindow = 7, kSetParam = 8, kSetScale = 9, kReply = 15;
 constexpr uint8_t kModePen = 0x00, kModeDisabled = 0x0a, kModeOff = 0x0b;
 
+// Exists while this app holds a session: after a crash, forceOff acts only if it's still there
+// (the firmware's reader keeps a session of its own, which a blind disconnect would end).
+constexpr const char* kSessionMark = "/tmp/zk-wet-ink-session";
+
 // The live session, for emergencyOff (-1: none).
 volatile sig_atomic_t gSem = -1, gQueue = -1;
 
@@ -39,19 +45,42 @@ void onFatalSignal(int sig) {
 
 }  // namespace
 
-void WetInk::emergencyOff() {
-    const int sem = gSem, queue = gQueue;
-    if (sem < 0 || queue < 0) return;
-    gSem = gQueue = -1;
+namespace {
+
+// Turns the handler off and ends the session: semop and msgsnd only (async-signal-safe).
+// Strokes the handler is waiting on are acknowledged first, so it isn't left waiting for them.
+void offAndDisconnect(int sem, int queue) {
+    auto op = [sem](int num, int delta) {
+        sembuf b{static_cast<unsigned short>(num), static_cast<short>(delta), IPC_NOWAIT};
+        return semop(sem, &b, 1) == 0;
+    };
+    while (op(kStroke, -1)) op(kStrokeDone, 1);
+    while (op(kContext, -1)) op(kContextDone, 1);
     struct {
         long type;
         unsigned char mode;
     } m{kSetMode, kModeOff};
     msgsnd(queue, &m, 1, IPC_NOWAIT);
-    for (int num : {kMessages, kWake, kDisconnect, kWake}) {
-        sembuf op{static_cast<unsigned short>(num), 1, IPC_NOWAIT};
-        semop(sem, &op, 1);
-    }
+    for (int num : {kMessages, kWake, kDisconnect, kWake}) op(num, 1);
+}
+
+}  // namespace
+
+void WetInk::emergencyOff() {
+    const int sem = gSem, queue = gQueue;
+    if (sem < 0 || queue < 0) return;
+    gSem = gQueue = -1;
+    offAndDisconnect(sem, queue);
+    unlink(kSessionMark);
+}
+
+void WetInk::forceOff() {
+    if (access(kSessionMark, F_OK) != 0) return;  // ended cleanly (or never connected)
+    const int sem = semget(kSemKey, kSemCount, 0666);
+    const int queue = msgget(kQueueKey, 0666);
+    if (sem >= 0 && queue >= 0) offAndDisconnect(sem, queue);
+    unlink(kSessionMark);
+    log(LogLevel::Info, "wet ink: turned off after an unclean exit");
 }
 
 std::unique_ptr<WetInk> WetInk::open() {
@@ -82,8 +111,12 @@ bool WetInk::send(long type, const void* data, size_t n) {
     } m{};
     m.type = type;
     std::memcpy(m.data, data, n);
-    if (msgsnd(queue_, &m, n, IPC_NOWAIT) == 0) return true;
-    log(LogLevel::Warn, "wet ink: message %ld: %s", type, std::strerror(errno));
+    if (msgsnd(queue_, &m, n, IPC_NOWAIT) == 0) {
+        sendFailing_ = false;
+        return true;
+    }
+    if (!sendFailing_) log(LogLevel::Warn, "wet ink: message %ld: %s", type, std::strerror(errno));
+    sendFailing_ = true;
     return false;
 }
 
@@ -94,26 +127,26 @@ bool WetInk::sendMode(uint8_t m) {
     return ok;
 }
 
+// The handler answers within milliseconds (seen 2026-11-07). If it doesn't, everything posted
+// is taken back: SysV semaphores outlive the app, and a stray post would act on a later session.
 bool WetInk::handshake() {
     post(kConnect, 1);
     post(kWake, 1);
-    if (take(kConnected, 1500)) return true;
-    take(kConnect, 0);  // nobody answered: withdraw the request
+    if (take(kConnected, 500)) return true;
+    take(kConnect, 0);
+    take(kWake, 0);
     return false;
 }
 
 bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
     if (connected_) disconnect();
+    // No retry with a disconnect: the open session may be the firmware notebook's own.
     if (!handshake()) {
-        // A session a crashed run left open makes the handler ignore new requests: end it, retry.
-        post(kDisconnect, 1);
-        post(kWake, 1);
-        if (!handshake()) {
-            log(LogLevel::Warn, "wet ink: the handler did not answer");
-            return false;
-        }
+        log(LogLevel::Warn, "wet ink: the handler did not answer");
+        return false;
     }
     connected_ = true;
+    if (const int fd = ::open(kSessionMark, O_CREAT | O_WRONLY | O_TRUNC | O_CLOEXEC, 0644); fd >= 0) ::close(fd);
     gSem = sem_;
     gQueue = queue_;
     for (int sig : {SIGTERM, SIGINT, SIGHUP, SIGSEGV, SIGABRT, SIGBUS}) std::signal(sig, onFatalSignal);
@@ -141,14 +174,18 @@ bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
     return true;
 }
 
-void WetInk::setMode(Mode m) {
-    if (!connected_ || m == mode_) return;
-    if (sendMode(m == Mode::Pen ? kModePen : kModeDisabled)) mode_ = m;  // else retried next time
+bool WetInk::setMode(Mode m) {
+    if (!connected_) return false;
+    if (m == mode_) return true;
+    if (!sendMode(m == Mode::Pen ? kModePen : kModeDisabled)) return false;
+    mode_ = m;
+    return true;
 }
 
 void WetInk::disconnect() {
     if (!connected_) return;
     gSem = gQueue = -1;
+    unlink(kSessionMark);
     sendMode(kModeOff);
     post(kDisconnect, 1);
     post(kWake, 1);

@@ -22,12 +22,15 @@ public:
     bool connect(unsigned long window, int canvasW, int canvasH);
     // Pen: the handler draws the tip's line; Paused: it draws nothing (menus, other screens).
     enum class Mode { Pen, Paused };
-    void setMode(Mode);
+    bool setMode(Mode);  // false: not sent (try again later)
     bool connected() const { return connected_; }
     void disconnect();  // also on destruction; leaves the handler off
     // For crash paths (signal handlers, the stall watchdog): turns the handler off and ends the
     // session with async-signal-safe calls only. No-op when nothing is connected.
     static void emergencyOff();
+    // After an exit that couldn't clean up (SIGKILL, the OOM killer): turns the handler off if a
+    // session is still open. Run by the launcher when the app didn't end normally.
+    static void forceOff();
 
 private:
     WetInk(int sem, int queue) : sem_(sem), queue_(queue) {}
@@ -42,6 +45,7 @@ private:
     std::atomic<bool> connected_{false}, stop_{false};
     std::thread acker_;
     Mode mode_ = Mode::Paused;
+    bool sendFailing_ = false;  // log a failing queue once, not on every send
 };
 
 }  // namespace zk

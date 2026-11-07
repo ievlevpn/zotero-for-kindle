@@ -97,6 +97,17 @@ public:
     void setPenWrites(bool on, Nav&);
     bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
+    // commitInk, then waits (at most kInkFlushMs) until every stroke is an annotation: before
+    // the book closes. Back in the menus and onClose call it.
+    void flushInk(Nav&);
+    static constexpr int64_t kInkFlushMs = 3000;
+    // One annotation holds at most this much: steady writing doesn't become one huge annotation
+    // that a touch of the eraser deletes whole (and that Zotero might refuse).
+    static constexpr size_t kMaxInkStrokes = 24, kMaxInkPoints = 2000;
+    static constexpr int64_t kMaxInkSpanMs = 10000;
+    void onHide(Nav&) override { commitInk(); }
+    void onBackground(Nav&) override { commitInk(); }
+    void onClose(Nav& nav) override { flushInk(nav); }
 
 private:
     void startSelection(Point at, Nav&);
@@ -158,9 +169,20 @@ private:
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
-    std::vector<std::vector<Point>> inkPending_;          // drawn, not yet sent
-    std::map<uint64_t, std::vector<std::vector<Point>>> inkSent_;  // sent, being placed
-    std::vector<std::vector<Point>> inkSaved_;           // saved; shown until the page comes back with them
+    std::vector<std::vector<Point>> inkPending_;  // drawn, not yet sent
+    struct SentInk {
+        int page = -1;
+        std::vector<std::vector<Point>> paths;
+        bool erased = false;  // a path was erased while it was being placed: place the rest again
+    };
+    std::map<uint64_t, SentInk> inkSent_;  // sent to the worker, being placed
+    struct SavedInk {
+        std::string key;  // the annotation it became
+        int page = -1;
+        std::vector<std::vector<Point>> paths;
+    };
+    std::vector<SavedInk> inkSaved_;  // saved; drawn (and erasable) until the page comes back with it
+    int64_t inkFirstMs_ = 0;          // the first pending stroke's start
     int inkPage_ = -1;
     int64_t inkLastMs_ = 0, inkDownMs_ = 0;
 };

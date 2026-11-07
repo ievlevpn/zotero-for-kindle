@@ -1,11 +1,15 @@
 #include "screens/reader.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <set>
+#include <thread>
 
 #include <nlohmann/json.hpp>
 
 #include "app/settings_store.h"
+#include "core/log.h"
 #include "screens/annotation_bar.h"
 #include "screens/reader_menus.h"
 #include "ui/metrics.h"
@@ -169,6 +173,32 @@ void strokePaths(cairo_t* cr, const std::vector<std::vector<Point>>& paths, int 
     cairo_stroke(cr);
 }
 
+double distSq(Point p, Point a, Point b);
+
+// Douglas-Peucker: drops points within `eps` px of the line through their neighbours.
+void simplify(const std::vector<Point>& in, size_t from, size_t to, double eps, std::vector<bool>& keep) {
+    if (to <= from + 1) return;
+    double worst = -1;
+    size_t at = from;
+    for (size_t i = from + 1; i < to; ++i)
+        if (const double d = distSq(in[i], in[from], in[to]); d > worst) worst = d, at = i;
+    if (worst <= eps * eps) return;
+    keep[at] = true;
+    simplify(in, from, at, eps, keep);
+    simplify(in, at, to, eps, keep);
+}
+
+std::vector<Point> simplified(const std::vector<Point>& in, double eps = 1.0) {
+    if (in.size() < 3) return in;
+    std::vector<bool> keep(in.size(), false);
+    keep.front() = keep.back() = true;
+    simplify(in, 0, in.size() - 1, eps, keep);
+    std::vector<Point> out;
+    for (size_t i = 0; i < in.size(); ++i)
+        if (keep[i]) out.push_back(in[i]);
+    return out;
+}
+
 // Distance from p to the segment a-b, squared.
 double distSq(Point p, Point a, Point b) {
     const double vx = b.x - a.x, vy = b.y - a.y, wx = p.x - a.x, wy = p.y - a.y;
@@ -298,7 +328,15 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 }
                 image_ = e.image;
                 highlights_ = e.highlights;
-                inkSaved_.clear();  // now drawn from the annotations
+                // Saved ink is drawn by the page once the page carries its annotation.
+                inkSaved_.erase(std::remove_if(inkSaved_.begin(), inkSaved_.end(),
+                                               [&](const SavedInk& s) {
+                                                   if (s.page != e.page) return true;
+                                                   for (const auto& b : e.highlights)
+                                                       if (b.annotationKey == s.key) return true;
+                                                   return false;
+                                               }),
+                                inkSaved_.end());
                 page_ = e.page;
                 pageCount_ = e.pageCount;
                 chapter_ = e.chapter;
@@ -680,8 +718,10 @@ void ReaderScreen::draw(Canvas& canvas) {
         const Rect pa = pageArea();
         cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
         cairo_clip(cr);
-        strokePaths(cr, inkSaved_, kInkWidthPx);
-        for (const auto& [id, paths] : inkSent_) strokePaths(cr, paths, kInkWidthPx);
+        for (const auto& s : inkSaved_)
+            if (s.page == page_) strokePaths(cr, s.paths, kInkWidthPx);
+        for (const auto& [id, s] : inkSent_)
+            if (s.page == page_) strokePaths(cr, s.paths, kInkWidthPx);
         strokePaths(cr, inkPending_, kInkWidthPx);
         if (inkDown_) strokePaths(cr, {inkStroke_}, kInkWidthPx);
         cairo_restore(cr);
@@ -718,7 +758,8 @@ bool ReaderScreen::penAllowed() const {
 }
 
 bool ReaderScreen::wantsSystemInk() const {
-    return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_;
+    // Not in landscape yet: the handler's canvas is registered portrait (untried turned).
+    return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_ && !landscape();
 }
 
 void ReaderScreen::setPenWrites(bool on, Nav& nav) {
@@ -758,9 +799,17 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
                 onGesture(Gesture{GestureType::Tap, at, at}, nav);
                 return false;
             }
-            if (!inkStroke_.empty()) inkPending_.push_back(std::move(inkStroke_));
+            if (!inkStroke_.empty()) {
+                if (inkPending_.empty()) inkFirstMs_ = inkDownMs_;
+                inkPending_.push_back(simplified(inkStroke_));
+            }
             inkStroke_.clear();
             inkLastMs_ = nav.nowMs();
+            size_t points = 0;
+            for (const auto& s : inkPending_) points += s.size();
+            if (inkPending_.size() >= kMaxInkStrokes || points >= kMaxInkPoints ||
+                inkLastMs_ - inkFirstMs_ >= kMaxInkSpanMs)
+                commitInk();
         }
         if (erasing_) {
             erasing_ = false;
@@ -815,15 +864,32 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
 void ReaderScreen::commitInk() {
     if (inkPending_.empty() || !worker_ || inkPage_ < 0) return;
     const uint64_t id = worker_->ink(inkPage_, inkPending_, kInkWidthPx);
-    inkSent_[id] = std::move(inkPending_);
+    inkSent_[id] = SentInk{inkPage_, std::move(inkPending_), false};
     inkPending_.clear();
+}
+
+void ReaderScreen::flushInk(Nav& nav) {
+    commitInk();
+    using clock = std::chrono::steady_clock;
+    const auto deadline = clock::now() + std::chrono::milliseconds(kInkFlushMs);
+    while (!inkSent_.empty() && clock::now() < deadline) {
+        pumpEvents(nav, false);  // the Ink answers make the annotations
+        if (!inkSent_.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (!inkSent_.empty()) log(LogLevel::Warn, "reader: handwriting not placed in time, %zu request(s) lost", inkSent_.size());
 }
 
 void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     auto it = inkSent_.find(e.requestId);
     if (it == inkSent_.end()) return;
-    std::vector<std::vector<Point>> paths = std::move(it->second);
+    SentInk sent = std::move(it->second);
     inkSent_.erase(it);
+    if (sent.paths.empty()) return;  // all of it erased while it was being placed
+    if (sent.erased) {               // placed with strokes since erased: place what is left
+        const uint64_t id = worker_->ink(sent.page, sent.paths, kInkWidthPx);
+        inkSent_[id] = SentInk{sent.page, std::move(sent.paths), false};
+        return;
+    }
     if (!e.ink) {
         nav.toast("This handwriting couldn't be saved.");
         nav.damage(pageArea(), Waveform::Quality);
@@ -836,13 +902,15 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     a.position = e.ink->position;
     a.sortIndex = e.ink->sortIndex;
     a.pageLabel = e.ink->pageLabel;
-    nav.library().createAnnotation(a);
+    const std::string key = nav.library().createAnnotation(a);
     nav.sync().pushSoon();
-    if (e.page == page_) inkSaved_.insert(inkSaved_.end(), paths.begin(), paths.end());
+    inkSaved_.push_back(SavedInk{key, sent.page, std::move(sent.paths)});
     refreshHighlights(nav);
 }
 
-// The eraser end: strokes not yet saved go at once; saved ink annotations it touches are deleted.
+// The eraser end takes away the strokes it crosses, one by one: strokes not saved yet at once;
+// a saved ink annotation loses those strokes (rewritten without them), and is deleted when none
+// is left, unless it carries a comment or tags (then Notes is the place to delete it).
 void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
     if (path.empty()) return;
     // A quick swipe leaves samples far apart: test the line between them too, every few pixels.
@@ -854,30 +922,86 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
             probe.push_back({a.x + (b.x - a.x) * k / steps, a.y + (b.y - a.y) * k / steps});
     }
     const double radius = kInkWidthPx / 2.0 + 12;
+    auto near = [&](const std::vector<Point>& p, double r) { return pathNear(p, probe, r); };
+    bool changed = false;
+
     const size_t before = inkPending_.size();
-    inkPending_.erase(std::remove_if(inkPending_.begin(), inkPending_.end(),
-                                     [&](const std::vector<Point>& path) { return pathNear(path, probe, radius); }),
+    inkPending_.erase(std::remove_if(inkPending_.begin(), inkPending_.end(), [&](const auto& p) { return near(p, radius); }),
                       inkPending_.end());
-    bool changed = inkPending_.size() != before;
-    std::vector<std::string> keys;
+    changed |= inkPending_.size() != before;
+    for (auto& [id, sent] : inkSent_) {
+        const size_t n = sent.paths.size();
+        sent.paths.erase(std::remove_if(sent.paths.begin(), sent.paths.end(), [&](const auto& p) { return near(p, radius); }),
+                         sent.paths.end());
+        if (sent.paths.size() != n) sent.erased = changed = true;
+    }
+
+    // Saved annotations: which of their strokes the eraser crossed (by stroke index, the order
+    // of annotationPosition.paths). The page's drawing if it has them yet, else the strokes kept
+    // since saving.
+    std::map<std::string, std::pair<std::set<size_t>, size_t>> hits;  // key -> (crossed, strokes)
+    std::set<std::string> onPage;
     for (const auto& b : highlights_) {
         if (b.kind != HighlightBox::Kind::Ink) continue;
-        const double r = b.strokePx / 2.0 + 12;
-        for (const auto& path : b.paths)
-            if (pathNear(path, probe, r)) {
-                keys.push_back(b.annotationKey);
-                break;
+        onPage.insert(b.annotationKey);
+        for (size_t i = 0; i < b.paths.size(); ++i)
+            if (near(b.paths[i], b.strokePx / 2.0 + 12)) {
+                auto& h = hits[b.annotationKey];
+                h.first.insert(i);
+                h.second = b.paths.size();
             }
     }
-    for (const auto& k : keys) nav.library().deleteAnnotation(k);
-    if (!keys.empty()) {
-        nav.sync().pushSoon();
-        inkSaved_.clear();
+    for (const auto& s : inkSaved_) {
+        if (s.page != page_ || onPage.count(s.key)) continue;
+        for (size_t i = 0; i < s.paths.size(); ++i)
+            if (near(s.paths[i], radius)) {
+                auto& h = hits[s.key];
+                h.first.insert(i);
+                h.second = s.paths.size();
+            }
+    }
+    bool saved = false;
+    for (const auto& [key, h] : hits) {
+        auto rec = nav.library().annotation(key);
+        if (!rec || rec->deletedHere) continue;
+        const auto& [crossed, strokes] = h;
+        if (crossed.size() < strokes) {
+            nlohmann::json pos = nlohmann::json::parse(rec->position, nullptr, false);
+            if (pos.is_discarded() || !pos.contains("paths") || pos["paths"].size() != strokes) continue;
+            nlohmann::json kept = nlohmann::json::array();
+            for (size_t i = 0; i < strokes; ++i)
+                if (!crossed.count(i)) kept.push_back(pos["paths"][i]);
+            pos["paths"] = kept;
+            rec->position = pos.dump();
+            nav.library().editAnnotation(*rec);
+        } else if (!rec->comment.empty() || !rec->tags.empty()) {
+            nav.toast("This handwriting has a comment or tags: delete it in Notes.");
+            continue;
+        } else {
+            nav.library().deleteAnnotation(key);
+        }
+        saved = true;
+        // Shown at once: those strokes off the page's drawing and the kept strokes.
+        for (auto& b : highlights_)
+            if (b.annotationKey == key) {
+                std::vector<std::vector<Point>> left;
+                for (size_t i = 0; i < b.paths.size(); ++i)
+                    if (!crossed.count(i)) left.push_back(b.paths[i]);
+                b.paths = std::move(left);
+            }
+        for (auto& s : inkSaved_)
+            if (s.key == key) {
+                std::vector<std::vector<Point>> left;
+                for (size_t i = 0; i < s.paths.size(); ++i)
+                    if (!crossed.count(i)) left.push_back(s.paths[i]);
+                s.paths = std::move(left);
+            }
+    }
+    if (saved) {
         highlights_.erase(std::remove_if(highlights_.begin(), highlights_.end(),
-                                         [&](const HighlightBox& b) {
-                                             return std::find(keys.begin(), keys.end(), b.annotationKey) != keys.end();
-                                         }),
+                                         [](const HighlightBox& b) { return b.kind == HighlightBox::Kind::Ink && b.paths.empty(); }),
                           highlights_.end());
+        nav.sync().pushSoon();
         refreshHighlights(nav);
         changed = true;
     }

@@ -41,6 +41,7 @@ public:
     void setSystemInk(bool on) override;
     // Palm rejection: touches are ignored while the pen is in range and this long after it left.
     static constexpr int64_t kPalmMs = 700;
+    static constexpr int64_t kPenStaleMs = 2000;  // no pen event this long: not near any more
     // Ink reaches the screen at most once per frame, as one update for everything drawn since:
     // an e-ink update per pen sample queues hundreds of them and the line lags in pieces.
     static constexpr int64_t kInkFrameMs = 25;
@@ -127,6 +128,12 @@ private:
     void handlePen(const PenEvent&, std::vector<Gesture>& gestures);
     static constexpr int kPenFinger = 99;  // the touch id of a pen stroke used as a finger
     bool penAsTouch_ = false;
+    Point penTouchAt_;
+    int64_t penLastMs_ = 0;
+    void penReset(std::vector<Gesture>& gestures);
+    void close(Screen&);                     // onClose, as the caller
+    void retire(std::unique_ptr<Screen>);    // onClose, then to the graveyard
+    Screen* lastVisible_ = nullptr;          // for onHide
     bool palmBlocked(const TouchEvent&);
     bool penNear_ = false;
     int64_t penLeftMs_ = -1;

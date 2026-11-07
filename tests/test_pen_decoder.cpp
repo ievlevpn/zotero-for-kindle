@@ -88,3 +88,22 @@ TEST_CASE("pen: the side button is reported with the stroke") {
     CHECK(e[0].type == PenEvent::Type::Down);
     CHECK(e[0].button);
 }
+
+TEST_CASE("pen: BTN_TOUCH without a pen tool is not a pen") {
+    PenDecoder d(identity());
+    auto e = report(d, {{ev::KEY, ev::BTN_TOUCH, 1}, {ev::ABS, ev::ABS_X, 50}});
+    CHECK(e.empty());
+}
+
+TEST_CASE("pen: after SYN_DROPPED events wait for a resync with the device's state") {
+    PenDecoder d(identity());
+    report(d, {{ev::KEY, ev::BTN_TOOL_PEN, 1}, {ev::KEY, ev::BTN_TOUCH, 1}});  // Near + Down
+    CHECK(d.feed(ev::SYN, ev::SYN_DROPPED, 0, 0).empty());
+    CHECK(report(d, {{ev::KEY, ev::BTN_TOUCH, 0}, {ev::KEY, ev::BTN_TOOL_PEN, 0}}).empty());  // incomplete: ignored
+    REQUIRE(d.needsResync());
+    auto e = d.resync(false, false, false, false, 10, 20, 0);  // the device: pen gone
+    REQUIRE(e.size() == 2);
+    CHECK(e[0].type == PenEvent::Type::Up);
+    CHECK(e[1].type == PenEvent::Type::Leave);
+    CHECK_FALSE(d.needsResync());
+}

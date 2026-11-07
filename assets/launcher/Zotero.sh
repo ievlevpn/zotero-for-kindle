@@ -80,6 +80,11 @@ while [ "$starts" -lt 5 ]; do
     fi
     break
 done
+# An end that skipped the app's own clean-up (killed, out of memory): the Scribe's wet ink may be
+# left on over a window that's gone. Turn it off.
+if [ "$code" != 0 ] && [ "$code" != 75 ]; then
+    DISPLAY=$ZK_DISPLAY ./bin/zotero --reset-system-ink >> log/zotero.log 2>&1
+fi
 # Whatever happened to the app, let the Kindle sleep again.
 command -v lipc-set-prop >/dev/null 2>&1 && lipc-set-prop com.lab126.powerd preventScreenSaver 0
 exit 0

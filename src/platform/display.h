@@ -42,7 +42,7 @@ public:
     virtual bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) = 0;
     // The system draws the pen's line itself (Scribe wet ink): on while a screen takes handwriting.
     virtual bool systemInk() const { return false; }
-    virtual void setSystemInk(bool /*on*/) {}
+    virtual bool setSystemInk(bool /*on*/) { return true; }  // false: not done, ask again
 };
 
 // Backend chosen at build time (-Dplatform=desktop|kindle).
@@ -51,6 +51,9 @@ std::unique_ptr<Display> makeDisplay();
 // Before an exit that skips destructors (the stall watchdog): leaves system state the display
 // changed (the Scribe's wet ink) as it was. Async-signal-safe.
 void displayEmergencyExit();
+// After the app ended abnormally (the launcher runs `zotero --reset-system-ink`): undoes what a
+// crash may have left on (the Scribe's wet ink).
+void displayResetSystemInk();
 
 // Directory with the UI fonts on this platform.
 const char* fontDir();

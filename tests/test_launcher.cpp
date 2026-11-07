@@ -26,11 +26,12 @@ void writeFile(const fs::path& p, const std::string& text, bool exec = false) {
     if (exec) fs::permissions(p, fs::perms::owner_all);
 }
 
-// A stand-in bin/zotero: records "<version> <exit>" in $ZK_HOME/runs and exits with `code`.
+// A stand-in bin/zotero: records "<version> <exit>" in $ZK_HOME/runs and exits with `code`;
+// `--reset-system-ink` (after an unclean exit) is recorded in $ZK_HOME/resets instead.
 // With `installs`, it first does what the app does after a verified download, if the test left
 // an "install-me" note: backups, the swap, state=installed, then exit 75.
 std::string app(const std::string& version, int code, bool installs = false) {
-    std::string s = "#!/bin/sh\n";
+    std::string s = "#!/bin/sh\n[ \"$1\" = --reset-system-ink ] && { echo reset >> resets; exit 0; }\n";
     if (installs)
         s += "if [ -f install-me ]; then rm install-me\n"
              "  mkdir -p update/old && cp -r bin lib share update/old/ && cp \"$ZK_LAUNCHER\" update/old/Zotero.sh\n"
@@ -178,6 +179,20 @@ TEST_CASE("launcher: an interrupted rollback finishes on the next start") {
     k.launch();
     CHECK(k.runs() == "0.2.0 0\n");
     k.checkRolledBack();
+}
+
+TEST_CASE("launcher: after an unclean exit it resets the system ink, not after a normal one") {
+    {
+        Kindle k(app("0.2.0", 137));  // killed (SIGKILL)
+        k.launch();
+        CHECK(k.runs() == "0.2.0 137\n");
+        CHECK(readFile(k.home / "resets") == "reset\n");
+    }
+    {
+        Kindle k;
+        k.launch();
+        CHECK_FALSE(fs::exists(k.home / "resets"));
+    }
 }
 
 TEST_CASE("launcher: endless 75s stop after five") {

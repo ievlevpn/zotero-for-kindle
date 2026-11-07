@@ -145,6 +145,7 @@ private:
 std::unique_ptr<Display> makeDisplay() { return std::make_unique<SdlDisplay>(); }
 
 void displayEmergencyExit() {}
+void displayResetSystemInk() {}
 
 const char* fontDir() { return "assets/fonts-device"; }
 
