@@ -73,6 +73,11 @@ Rect ReaderMenus::spacingRect(int i) {
 }
 
 bool ReaderMenus::showsTextOptions() const { return reader_.type() != DocType::Pdf; }
+bool ReaderMenus::showsPenOptions() const { return reader_.type() == DocType::Pdf && reader_.penSeen(); }
+Rect ReaderMenus::penRect(int i) {
+    const int w = (W() - 2 * kMargin - 240) / 2;
+    return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 354, w - 12, 90};
+}
 
 const std::vector<std::string>& ReaderMenus::fonts() {
     // Scanning fonts reads every file with FreeType: once per process, not per menu.
@@ -96,6 +101,13 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
         for (int i = 0; i < 3; ++i)
             if (spacingRect(i).contains(p)) l.lineSpacingPct = kSpacings[i];
     }
+    if (showsPenOptions())
+        for (int i = 0; i < 2; ++i)
+            if (penRect(i).contains(p)) {
+                reader_.setPenWrites(i == 0, nav);
+                nav.damage(displayPanelRect(), Waveform::Ui);
+                return true;
+            }
     if (reader_.landscape() && showsTextOptions() && orientationRect(2).contains(p)) {
         reader_.setTwoColumns(!reader_.twoColumns(), nav);
         nav.damage(displayPanelRect(), Waveform::Ui);
@@ -156,6 +168,10 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
     } else {
         centredText(cr, "Page margins", label, {kMargin, trimRect(0).y, 220, 90}, Align::Left);
         for (int i = 0; i < 2; ++i) drawButton(cr, trimRect(i), i ? "Trim" : "Keep", l.trimMargins == (i == 1));
+    }
+    if (showsPenOptions()) {  // PDF: in the row EPUB uses for spacing
+        centredText(cr, "Pen", label, {kMargin, penRect(0).y, 220, 90}, Align::Left);
+        for (int i = 0; i < 2; ++i) drawButton(cr, penRect(i), i ? "Tap" : "Write", reader_.penWrites() == (i == 0));
     }
     centredText(cr, "Orientation", label, {kMargin, orientationRect(0).y, 220, 90}, Align::Left);
     for (int i = 0; i < 2; ++i) drawButton(cr, orientationRect(i), i ? "Landscape" : "Portrait", landscape_ == (i == 1));

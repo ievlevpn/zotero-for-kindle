@@ -209,6 +209,7 @@ Rect boundsOf(const std::vector<Rect>& rects) {
 }
 
 constexpr const char* kColourKey = "annotationColour";
+constexpr const char* kPenModeKey = "penMode";  // "tap": the pen taps instead of writing
 
 // What the page shows: not conflict copies (they sit over Zotero's version and are resolved in Notes).
 std::vector<AnnotationRecord> pageAnnotations(Library& lib, const std::string& attachmentKey) {
@@ -240,6 +241,7 @@ void ReaderScreen::onShow(Nav& nav) {
     twoColumnsSetting_ = loadSettings(nav.library()).twoColumns;
     layout_ = loadLayout(nav.library(), row_.key, type_, twoColumnsSetting_);
     if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
+    penWrites_ = nav.library().metaValue(kPenModeKey) != "tap";
     DocPosition start;
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
     worker_ = makeWorker_();
@@ -253,7 +255,7 @@ void ReaderScreen::onShow(Nav& nav) {
 }
 
 void ReaderScreen::onTick(Nav& nav) {
-    if (nav.systemInk()) nav.setSystemInk(type_ == DocType::Pdf && penAllowed() && !eraserNear_);
+    if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     if (!inkPending_.empty() && !inkDown_ && nav.nowMs() - inkLastMs_ >= kInkCommitMs) commitInk();
     pumpEvents(nav, true);
 }
@@ -715,11 +717,24 @@ bool ReaderScreen::penAllowed() const {
            !layoutPending_ && !turning_;
 }
 
+bool ReaderScreen::wantsSystemInk() const {
+    return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_;
+}
+
+void ReaderScreen::setPenWrites(bool on, Nav& nav) {
+    penWrites_ = on;
+    nav.library().setMetaValue(kPenModeKey, on ? "" : "tap");
+    if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+}
+
 bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
+    penSeen_ = true;
     const bool eraserNear = p.eraser && p.type != PenEvent::Type::Leave;
-    if (eraserNear != eraserNear_) {
+    const bool buttonHeld = p.button && p.type != PenEvent::Type::Leave;
+    if (eraserNear != eraserNear_ || buttonHeld != buttonHeld_) {
         eraserNear_ = eraserNear;
-        if (nav.systemInk()) nav.setSystemInk(type_ == DocType::Pdf && penAllowed() && !eraserNear_);
+        buttonHeld_ = buttonHeld;
+        if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     }
     const bool lift = p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave;
     if (lift && wipeFrom_) {
@@ -742,8 +757,9 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     }
     if (p.type == PenEvent::Type::Near) return false;
     if (p.type == PenEvent::Type::Down) {
-        // EPUB (Zotero has no ink there), menus, selection, the footer: the pen is a finger.
-        if (type_ != DocType::Pdf || !penAllowed() || !pageArea().contains(p.pos)) {
+        // EPUB (Zotero has no ink there), menus, selection, the footer, the pen set to tap or its
+        // side button held: the pen is a finger.
+        if (type_ != DocType::Pdf || !penWrites_ || p.button || !penAllowed() || !pageArea().contains(p.pos)) {
             if (nav.systemInk()) wipeFrom_ = p.pos;  // the system may have inked it: repaint on lift
             return false;
         }

@@ -7,6 +7,9 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
 - Strokes made within 1.5 s of each other are one annotation; a page turn, a jump or the menus save
   at once. Ink is black, 7 px wide on the screen (`ReaderScreen::kInkWidthPx`), stored in PDF points.
 - The eraser end deletes the ink annotations it crosses (and strokes not saved yet).
+- Display panel, PDF, once the pen was used: "Pen: Write | Tap" (kept in the library). Tap makes the
+  pen a finger on PDF pages too (turn pages, select text); holding the side button (Premium Pen) does
+  the same for one stroke.
 - While the pen is near the screen (and 0.7 s after it leaves), touches are taken for the palm and
   ignored (`App::kPalmMs`).
 - The line under the pen is drawn by the firmware's own "wet ink" (below), as in the Scribe's

@@ -37,6 +37,7 @@ PenEvent PenDecoder::make(PenEvent::Type t, int64_t t_ms) const {
     e.pressure = pressure_;
     e.maxPressure = map_.maxPressure;
     e.eraser = rubber_;
+    e.button = button_;
     e.t_ms = t_ms;
     return e;
 }
@@ -53,6 +54,7 @@ std::vector<PenEvent> PenDecoder::feed(int type, int code, int value, int64_t t_
         if (code == ev::BTN_TOOL_PEN) pen_ = value != 0;
         else if (code == ev::BTN_TOOL_RUBBER) rubber_ = value != 0;
         else if (code == ev::BTN_TOUCH) touch_ = value != 0;
+        else if (code == ev::BTN_STYLUS) button_ = value != 0;
         return out;
     }
     if (type != ev::SYN || code != ev::SYN_REPORT) return out;

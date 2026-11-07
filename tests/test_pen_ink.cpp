@@ -352,3 +352,29 @@ TEST_CASE("pen ink: a pen stroke the screen doesn't write with is a tap") {
     }
     CHECK(screen->gestures == 1);
 }
+
+TEST_CASE("pen ink: set to tap, or with the side button held, the pen is a finger; the choice is kept") {
+    InkRig rig;
+    rig.nav.hasSystemInk = true;
+    rig.reader->onTick(rig.nav);
+    REQUIRE(rig.nav.systemInkOn);
+
+    PenEvent b = pen(PenEvent::Type::Down, {300, 400});
+    b.button = true;  // side button: this stroke taps
+    CHECK_FALSE(rig.reader->onPen(b, rig.nav));
+    rig.reader->onPen(pen(PenEvent::Type::Up, {300, 400}), rig.nav);
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+
+    rig.reader->setPenWrites(false, rig.nav);
+    CHECK_FALSE(rig.nav.systemInkOn);  // no wet ink while the pen taps
+    CHECK_FALSE(rig.reader->onPen(pen(PenEvent::Type::Down, {300, 400}), rig.nav));
+
+    // Another book opens with the same choice.
+    auto other = std::make_unique<ReaderScreen>(rig.row, "book.pdf", DocType::Pdf, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::make_unique<FakeEngine>(); });
+    }, 6);
+    other->onShow(rig.nav);
+    CHECK_FALSE(other->penWrites());
+    other->setPenWrites(true, rig.nav);
+    CHECK(other->penWrites());
+}

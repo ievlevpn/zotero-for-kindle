@@ -26,6 +26,7 @@ struct PenEvent {
     int pressure = 0;     // 0..maxPressure
     int maxPressure = 0;  // 0 if the digitizer doesn't report pressure
     bool eraser = false;  // the eraser end, not the tip
+    bool button = false;  // the side button held (Premium Pen)
     int64_t t_ms = 0;
 };
 

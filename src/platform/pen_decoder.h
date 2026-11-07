@@ -15,7 +15,7 @@ namespace ev {
 constexpr int SYN = 0x00, KEY = 0x01, ABS = 0x03;
 constexpr int SYN_REPORT = 0x00;
 constexpr int ABS_X = 0x00, ABS_Y = 0x01, ABS_PRESSURE = 0x18;
-constexpr int BTN_TOOL_PEN = 0x140, BTN_TOOL_RUBBER = 0x141, BTN_TOUCH = 0x14a;
+constexpr int BTN_TOOL_PEN = 0x140, BTN_TOOL_RUBBER = 0x141, BTN_TOUCH = 0x14a, BTN_STYLUS = 0x14b;
 }  // namespace ev
 
 // From the digitizer's axes to the window. The digitizer reports in its own range and
@@ -50,7 +50,7 @@ private:
 
     PenMapping map_;
     int x_ = 0, y_ = 0, pressure_ = 0;
-    bool pen_ = false, rubber_ = false, touch_ = false;          // as reported so far
+    bool pen_ = false, rubber_ = false, touch_ = false, button_ = false;  // as reported so far
     bool inRange_ = false, touching_ = false, eraser_ = false;   // as last emitted
     Point last_{-1, -1};
 };
