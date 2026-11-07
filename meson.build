@@ -119,7 +119,7 @@ update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], includ
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 
-ui_incs = [inc]
+ui_incs = [inc, include_directories('third_party', is_system : true)]  # nlohmann/json.hpp
 if backend == 'kindle'
   # kindle-sdk ships no fontconfig headers; the firmware has fontconfig 2.8.
   ui_incs += include_directories('third_party/fontconfig-2.8-headers', is_system : true)

@@ -12,6 +12,8 @@
 #include "fixture_library.h"
 #include "screens/reader.h"
 #include "store/db.h"
+#include "ui/canvas.h"
+#include "ui/widgets.h"
 
 #include <nlohmann/json.hpp>
 
@@ -377,4 +379,22 @@ TEST_CASE("pen ink: set to tap, or with the side button held, the pen is a finge
     CHECK_FALSE(other->penWrites());
     other->setPenWrites(true, rig.nav);
     CHECK(other->penWrites());
+}
+
+TEST_CASE("notes: an ink annotation's card shows its strokes") {
+    AnnotationRecord a;
+    a.key = "INKCARD1";
+    a.type = "ink";
+    a.color = "#000000";
+    a.pageLabel = "7";
+    a.position = R"({"pageIndex":6,"width":2,"paths":[[100,700,200,650,300,700],[100,600,300,600]]})";
+    Canvas c(1236, kNoteRowH);
+    drawNoteRow(c.cr(), {0, 0, 1236, kNoteRowH}, a);
+    cairo_surface_flush(c.surface());
+    const unsigned char* data = cairo_image_surface_get_data(c.surface());
+    const int stride = cairo_image_surface_get_stride(c.surface());
+    int ink = 0;  // dark pixels where the text would go (right of the shade bar, left of the page label)
+    for (int y = 10; y < kNoteRowH - 10; ++y)
+        for (int x = 40; x < 1000; ++x) ink += (data[y * stride + 4 * x] < 80);
+    CHECK(ink > 200);
 }
