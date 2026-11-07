@@ -255,7 +255,7 @@ executable('zotero', 'src/app/main.cpp',
 
 executable('zk-sync', 'src/app/zk_sync.cpp',
   include_directories : include_directories('third_party', is_system : true),
-  dependencies : [sync_dep],
+  dependencies : [sync_dep, docs_dep],
   install : true)
 
 if get_option('tests')
