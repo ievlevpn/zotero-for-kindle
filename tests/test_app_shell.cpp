@@ -130,11 +130,12 @@ TEST_CASE("app shell: every 6th full-screen change flashes; returning from backg
     CHECK(rig.display.presents.back().waveform == Waveform::Full);
 }
 
-TEST_CASE("app shell: a long press on the header quits") {
+TEST_CASE("app shell: a long press at the top goes to the screen (it used to quit; text there is selectable)") {
     Rig rig;
     rig.display.touch(TouchEvent::Type::Down, {600, 60}, rig.now);
     rig.run(12);  // > 500 ms of fake time
-    CHECK(rig.app.quitting());
+    CHECK_FALSE(rig.app.quitting());
+    CHECK(has(rig.log, "home:gesture"));
     rig.display.closed = true;
     CHECK(rig.app.run() == 0);
 }

@@ -156,11 +156,6 @@ void App::handle(const Gesture& g) {
         static const char* names[] = {"tap", "long press", "drag start", "drag move", "drag end", "swipe", "lift"};
         log(LogLevel::Info, "%s at %d,%d", names[static_cast<int>(g.type)], g.pos.x, g.pos.y);
     }
-    if (g.type == GestureType::LongPress && g.pos.y < kHeaderH) {
-        log(LogLevel::Info, "long press on header: exit");
-        quit_ = true;
-        return;
-    }
     Screen* s = visibleTop();
     if (!s) return;
     if (s->showsTabBar() && tabBar().contains(g.pos)) {
