@@ -1,7 +1,8 @@
 // zk-sync: the storage and sync layer without a UI, for real runs on the Mac and the Kindle.
 //   zk-sync [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND
 //   commands: pull | status | search <words> | collections | annotations <attachmentKey>
-//             | fetch <attachmentKey> <dir>
+//             | fetch <attachmentKey> <dir> | highlights-offline on|off
+//   `annotations` downloads that book's annotations first, as opening a book in the app will.
 // Reads only: there is deliberately no push command yet, and every request goes through the
 // additive-only WriteGuard anyway. Credentials are never printed.
 
@@ -44,7 +45,7 @@ int usage() {
     std::fprintf(stderr,
                  "usage: zk-sync [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND\n"
                  "  pull | status | search <words> | collections | annotations <attachmentKey>\n"
-                 "  | fetch <attachmentKey> <dir>\n");
+                 "  | fetch <attachmentKey> <dir> | highlights-offline on|off\n");
     return 2;
 }
 
@@ -156,6 +157,8 @@ int main(int argc, char** argv) {
             }
         } else if (cmd == "status") {
             LibraryStats s = lib.stats();
+            std::printf("highlights: %s (%zu books opened)\n",
+                        lib.allAnnotationsOffline() ? "all offline" : "on demand", lib.trackedAttachments().size());
             std::printf("library version %lld\nitems %lld (incl. child items)\nattachments %lld\nannotations %lld\n"
                         "collections %lld\nconflicts %lld\nunsent %lld\n",
                         static_cast<long long>(lib.libraryVersion()), static_cast<long long>(s.items),
@@ -168,7 +171,16 @@ int main(int argc, char** argv) {
             printItems(lib.search(q, 25));
         } else if (cmd == "collections") {
             printCollections(lib.collections(), "", 0);
+        } else if (cmd == "highlights-offline" && args.size() == 2 && (args[1] == "on" || args[1] == "off")) {
+            SyncEngine(api, lib).setAllHighlightsOffline(args[1] == "on");
+            std::printf("highlights: %s%s\n", args[1] == "on" ? "all offline" : "on demand",
+                        args[1] == "on" ? " (downloaded at the next pull)" : "");
         } else if (cmd == "annotations" && args.size() == 2) {
+            const auto t0 = std::chrono::steady_clock::now();
+            SyncReport rep = SyncEngine(api, lib).pullAnnotationsFor(args[1], nullptr);
+            std::printf("synced %d annotation(s) in %.1f s\n", rep.annotations,
+                        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+            if (rep.error) printError(*rep.error);
             for (const auto& a : lib.annotationsFor(args[1]))
                 std::printf("%s  %-9s %s  %s%s%s\n", a.key.c_str(), a.type.c_str(), a.sortIndex.c_str(),
                             a.text.substr(0, 80).c_str(), a.comment.empty() ? "" : "  // ", a.comment.substr(0, 60).c_str());

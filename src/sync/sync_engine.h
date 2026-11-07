@@ -30,9 +30,19 @@ public:
     SyncEngine(ZoteroApi&, Library&);
     SyncReport pull(std::function<void(const SyncProgress&)> progress);
     SyncReport push();
+    // On-demand annotations: called when a book is opened. Downloads the attachment's
+    // annotations and keeps them in sync from then on.
+    SyncReport pullAnnotationsFor(const std::string& attachmentKey, std::function<void(const SyncProgress&)> progress);
+    // The "Keep all highlights offline" setting. Off drops the downloaded annotations of books
+    // not opened on the Kindle (never local edits or conflicts); on syncs all at the next pull.
+    void setAllHighlightsOffline(bool on);
 
 private:
     void pullInto(SyncReport&, const std::function<void(const SyncProgress&)>&);
+    // Fetches `keys` in batches of 50, one transaction per batch. `accept` filters objects.
+    bool fetchAndApply(const std::string& kind, const std::string& phase, const std::vector<std::string>& keys,
+                       SyncReport&, const std::function<void(const SyncProgress&)>&,
+                       const std::function<bool(const nlohmann::json&)>& accept = nullptr);
     void apply(const nlohmann::json& obj, SyncReport&);
     void removeKey(const std::string& key, SyncReport&);
     int conflictUnsynced(const std::string& attachmentKey);

@@ -132,6 +132,21 @@ std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t s
     return out;
 }
 
+std::optional<VersionMap> ZoteroApi::annotationVersions(const std::string& parentKey, int64_t since, UserError* err) {
+    HttpRequest req;
+    req.url = userUrl("/items/" + parentKey + "/children?format=versions&itemType=annotation&includeTrashed=1" +
+                      (since > 0 ? "&since=" + std::to_string(since) : ""));
+    HttpResponse r = send(req, err);
+    if (r.curlCode || r.status != 200) return std::nullopt;
+    auto j = json::parse(r.body, nullptr, false);
+    if (!j.is_object()) return setError(err, badBody("children versions: not an object")), std::nullopt;
+    VersionMap out;
+    out.libraryVersion = libraryVersionOf(r);
+    for (auto it = j.begin(); it != j.end(); ++it)
+        if (it.value().is_number_integer()) out.versions[it.key()] = it.value().get<int64_t>();
+    return out;
+}
+
 std::optional<std::vector<json>> ZoteroApi::fetch(const std::string& kind, const std::vector<std::string>& keys,
                                                   UserError* err) {
     if (keys.empty()) return std::vector<json>{};

@@ -37,6 +37,7 @@ CREATE TABLE annotations (
   createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}');
 CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
+CREATE TABLE tracked_attachments (key TEXT PRIMARY KEY);
 CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags, notes,
   tokenize='unicode61 remove_diacritics 2');
@@ -346,18 +347,93 @@ void Library::removeObject(const std::string& type, const std::string& key) {
     });
 }
 
+std::string Library::meta(const std::string& key) {
+    Stmt st = db_.prepare("SELECT value FROM meta WHERE key = ?");
+    st.bind(1, key);
+    return st.step() ? st.text(0) : std::string{};
+}
+
+void Library::setMeta(const std::string& key, const std::string& value) {
+    Stmt st = db_.prepare("INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    st.bind(1, key).bind(2, value).step();
+}
+
 int64_t Library::libraryVersion() {
     return guarded([&] {
-        Stmt st = db_.prepare("SELECT value FROM meta WHERE key = 'libraryVersion'");
-        return st.step() ? std::stoll(st.text(0)) : int64_t{0};
+        const std::string v = meta("libraryVersion");
+        return v.empty() ? int64_t{0} : std::stoll(v);
     });
 }
 
 void Library::setLibraryVersion(int64_t v) {
+    guarded([&] { setMeta("libraryVersion", std::to_string(v)); });
+}
+
+bool Library::allAnnotationsOffline() {
+    return guarded([&] { return meta("allAnnotationsOffline") == "1"; });
+}
+
+void Library::setAllAnnotationsOffline(bool on) {
     guarded([&] {
+        setMeta("allAnnotationsOffline", on ? "1" : "0");
+        if (!on) setMeta("annotationsVersion", "0");
+    });
+}
+
+int64_t Library::annotationsVersion() {
+    return guarded([&] {
+        const std::string v = meta("annotationsVersion");
+        return v.empty() ? int64_t{0} : std::stoll(v);
+    });
+}
+
+void Library::setAnnotationsVersion(int64_t v) {
+    guarded([&] { setMeta("annotationsVersion", std::to_string(v)); });
+}
+
+void Library::trackAttachment(const std::string& key) {
+    guarded([&] {
+        Stmt st = db_.prepare("INSERT OR IGNORE INTO tracked_attachments (key) VALUES (?)");
+        st.bind(1, key).step();
+    });
+}
+
+bool Library::isTracked(const std::string& key) {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT 1 FROM tracked_attachments WHERE key = ?");
+        st.bind(1, key);
+        return st.step();
+    });
+}
+
+std::vector<std::string> Library::trackedAttachments() {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT key FROM tracked_attachments ORDER BY key");
+        std::vector<std::string> out;
+        while (st.step()) out.push_back(st.text(0));
+        return out;
+    });
+}
+
+void Library::dropUntrackedAnnotations() {
+    guarded([&] {
+        Stmt keys = db_.prepare(
+            "SELECT key FROM annotations WHERE dirty = 0 AND conflict = 0 "
+            "AND parentKey NOT IN (SELECT key FROM tracked_attachments)");
+        std::vector<std::string> drop;
+        while (keys.step()) drop.push_back(keys.text(0));
+        for (const auto& k : drop) removeObject("annotation", k);
+    });
+}
+
+LibraryStats Library::stats() {
+    return guarded([&] {
         Stmt st = db_.prepare(
-            "INSERT INTO meta (key, value) VALUES ('libraryVersion', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
-        st.bind(1, std::to_string(v)).step();
+            "SELECT (SELECT count(*) FROM items), (SELECT count(*) FROM attachments), (SELECT count(*) FROM annotations), "
+            "(SELECT count(*) FROM collections), (SELECT count(*) FROM annotations WHERE conflict = 1), "
+            "(SELECT count(*) FROM annotations WHERE dirty = 1 AND conflict = 0)");
+        st.step();
+        return LibraryStats{st.integer(0), st.integer(1), st.integer(2), st.integer(3), st.integer(4), st.integer(5)};
     });
 }
 

@@ -71,6 +71,18 @@ public:
         std::map<std::string, std::string> q = query(rest);
         r.headers["last-modified-version"] = std::to_string(libraryVersion);
 
+        // /items/<parent>/children?format=versions[&since=N][&itemType=annotation]
+        if (req.method == "GET" && path.rfind("items/", 0) == 0 && path.size() > 15 &&
+            path.compare(path.size() - 9, 9, "/children") == 0) {
+            const std::string parent = path.substr(6, path.size() - 15);
+            const int64_t since = q.count("since") ? std::stoll(q["since"]) : 0;
+            json out = json::object();
+            for (const auto& [k, o] : items)
+                if (o["data"].value("parentItem", "") == parent && o["version"].get<int64_t>() > since &&
+                    (!q.count("itemType") || o["data"].value("itemType", "") == q["itemType"]))
+                    out[k] = o["version"];
+            return ok(r, out);
+        }
         if (req.method == "GET" && q.count("format") && q["format"] == "versions") {
             const auto& objs = path == "items" ? items : collections;
             const int64_t since = std::stoll(q["since"]);

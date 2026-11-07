@@ -26,7 +26,11 @@ struct Rig {
     Db db{Db::open(":memory:")};
     Library lib{db};
     SyncEngine engine{api, lib};
-    Rig() { api.setSleeper([](int) {}); }
+    // Most tests exercise the full sync ("Keep all highlights offline"); on-demand tests pass false.
+    explicit Rig(bool allOffline = true) {
+        api.setSleeper([](int) {});
+        lib.setAllAnnotationsOffline(allOffline);
+    }
 
     SyncReport pull() {
         return engine.pull([](const SyncProgress&) {});
@@ -319,4 +323,92 @@ TEST_CASE("sync: items and attachments are fetched before annotations, so the li
     CHECK(fetched[1] == "ZEPUB001");
     CHECK(phases == std::vector<std::string>{"collections", "items", "annotations", "deletions"});
     CHECK(rig.lib.annotationsFor("ZEPUB001").size() == 60);
+}
+
+namespace {
+
+// A server with two books, each with an EPUB and annotations; the Kindle syncs on demand.
+struct OnDemandRig : Rig {
+    OnDemandRig() : Rig(false) {
+        server.put(FakeZotero::item("BOOK0001", "Opened book"));
+        server.put(FakeZotero::attachment("EPUB0001", "BOOK0001"));
+        server.put(FakeZotero::item("BOOK0002", "Never opened"));
+        server.put(FakeZotero::attachment("EPUB0002", "BOOK0002"));
+        for (int i = 0; i < 70; ++i) server.put(FakeZotero::annotation("A1" + key(i).substr(2), "EPUB0001", "first book"));
+        for (int i = 0; i < 30; ++i) server.put(FakeZotero::annotation("A2" + key(i).substr(2), "EPUB0002", "second book"));
+    }
+};
+
+}  // namespace
+
+TEST_CASE("sync on demand: the first pull brings the library list but no annotations") {
+    OnDemandRig rig;
+    SyncReport rep = rig.pull();
+    CHECK_FALSE(rep.error);
+    CHECK(rig.lib.recentItems(10).size() == 2);
+    CHECK(rig.lib.readableAttachments("BOOK0001").size() == 1);
+    CHECK(rig.lib.stats().annotations == 0);
+    CHECK(rig.server.fetchedItemKeys().size() == 4);
+    CHECK(rig.server.count("GET", "itemType=annotation") == 0);
+    CHECK(rig.lib.libraryVersion() == rig.server.libraryVersion);
+}
+
+TEST_CASE("sync on demand: opening a book downloads its annotations and tracks it") {
+    OnDemandRig rig;
+    REQUIRE_FALSE(rig.pull().error);
+    rig.server.sent.clear();
+    SyncReport rep = rig.engine.pullAnnotationsFor("EPUB0001", nullptr);
+    CHECK_FALSE(rep.error);
+    CHECK(rep.annotations == 70);
+    CHECK(rig.lib.annotationsFor("EPUB0001").size() == 70);
+    CHECK(rig.lib.annotationsFor("EPUB0002").empty());
+    CHECK(rig.lib.isTracked("EPUB0001"));
+    CHECK(rig.server.count("GET", "items/EPUB0001/children") == 1);
+    CHECK(rig.server.fetchedItemKeys().size() == 70);  // 2 batches of 50 + 20
+    CHECK(rig.lib.search("first", 10).size() == 1);
+
+    rig.server.sent.clear();
+    CHECK(rig.engine.pullAnnotationsFor("EPUB0001", nullptr).annotations == 0);  // nothing new: no fetch
+    CHECK(rig.server.fetchedItemKeys().empty());
+}
+
+TEST_CASE("sync on demand: later pulls keep tracked books in sync and ignore the others") {
+    OnDemandRig rig;
+    REQUIRE_FALSE(rig.pull().error);
+    REQUIRE_FALSE(rig.engine.pullAnnotationsFor("EPUB0001", nullptr).error);
+    rig.server.put(FakeZotero::annotation("A1000000", "EPUB0001", "edited on the desktop"));
+    rig.server.put(FakeZotero::annotation("NEWW0001", "EPUB0001", "new on the desktop"));
+    rig.server.put(FakeZotero::annotation("NEWW0002", "EPUB0002", "new in the unopened book"));
+    SyncReport rep = rig.pull();
+    CHECK_FALSE(rep.error);
+    CHECK(rig.lib.annotationsFor("EPUB0001").size() == 71);
+    CHECK(rig.lib.annotation("A1000000")->text == "edited on the desktop");
+    CHECK(rig.lib.annotationsFor("EPUB0002").empty());
+    rig.server.remove("A1000001");
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.lib.annotationsFor("EPUB0001").size() == 70);
+}
+
+TEST_CASE("sync: switching 'Keep all highlights offline' on downloads everything; off drops untracked") {
+    OnDemandRig rig;
+    REQUIRE_FALSE(rig.pull().error);
+    REQUIRE_FALSE(rig.engine.pullAnnotationsFor("EPUB0001", nullptr).error);
+    AnnotationRecord mine;
+    mine.key = "LOCAL001";
+    mine.parentKey = "EPUB0002";
+    mine.createdHere = true;
+    mine.dirty = true;
+    rig.lib.upsertAnnotation(mine);
+
+    rig.engine.setAllHighlightsOffline(true);
+    rig.server.sent.clear();
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.lib.annotationsFor("EPUB0002").size() == 31);
+    CHECK(rig.server.fetchedItemKeys().size() == 30);  // the opened book's 70 are not fetched again
+
+    rig.engine.setAllHighlightsOffline(false);
+    CHECK(rig.lib.annotationsFor("EPUB0001").size() == 70);
+    auto left = rig.lib.annotationsFor("EPUB0002");
+    REQUIRE(left.size() == 1);
+    CHECK(left[0].key == "LOCAL001");  // the Kindle's own unsent highlight is never dropped
 }

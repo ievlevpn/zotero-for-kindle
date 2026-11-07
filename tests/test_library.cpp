@@ -291,3 +291,66 @@ TEST_CASE("library: per-object versions and single-object lookups") {
     CHECK(ann->comment == "c");
     CHECK(ann->conflict);
 }
+
+TEST_CASE("library: stats count items, attachments, annotations, collections, conflicts and unsent") {
+    Rig rig;
+    rig.lib.upsertItem(item("ITEM0001", "a", "2020-01-01"));
+    rig.lib.upsertItem(item("ITEM0002", "b", "2020-01-02"));
+    rig.lib.upsertCollection({"COLL0001", "c", "", 1});
+    rig.lib.upsertAttachment({"ATTACH01", "ITEM0001", "application/pdf", "x.pdf", "m", "imported_file", 0, "",
+                              AttachmentRecord::State::Remote});
+    AnnotationRecord a;
+    a.key = "ANNOT001";
+    a.parentKey = "ATTACH01";
+    rig.lib.upsertAnnotation(a);
+    a.key = "ANNOT002";
+    a.conflict = true;
+    rig.lib.upsertAnnotation(a);
+    a.key = "ANNOT003";
+    a.conflict = false;
+    a.dirty = true;
+    rig.lib.upsertAnnotation(a);
+    LibraryStats s = rig.lib.stats();
+    CHECK(s.items == 2);
+    CHECK(s.attachments == 1);
+    CHECK(s.annotations == 3);
+    CHECK(s.collections == 1);
+    CHECK(s.conflicts == 1);
+    CHECK(s.unsent == 1);
+}
+
+TEST_CASE("library: annotation mode defaults to on demand and is stored") {
+    Rig rig;
+    CHECK_FALSE(rig.lib.allAnnotationsOffline());
+    rig.lib.setAllAnnotationsOffline(true);
+    CHECK(rig.lib.allAnnotationsOffline());
+    rig.lib.setAllAnnotationsOffline(false);
+    CHECK_FALSE(rig.lib.allAnnotationsOffline());
+}
+
+TEST_CASE("library: tracked attachments and dropping untracked annotations") {
+    Rig rig;
+    CHECK_FALSE(rig.lib.isTracked("ATTACH01"));
+    rig.lib.trackAttachment("ATTACH01");
+    CHECK(rig.lib.isTracked("ATTACH01"));
+    CHECK(rig.lib.trackedAttachments() == std::vector<std::string>{"ATTACH01"});
+
+    auto put = [&](const std::string& key, const std::string& att, bool dirty, bool conflict) {
+        AnnotationRecord a;
+        a.key = key;
+        a.parentKey = att;
+        a.dirty = dirty;
+        a.conflict = conflict;
+        rig.lib.upsertAnnotation(a);
+    };
+    put("KEEPTRK1", "ATTACH01", false, false);  // tracked book
+    put("DROPME01", "ATTACH02", false, false);  // untracked, clean -> dropped
+    put("EDITED01", "ATTACH02", true, false);   // untracked but edited here -> kept
+    put("CONFLT01", "ATTACH02", false, true);   // conflict -> kept
+    rig.lib.setObjectVersion("DROPME01", 5);
+    rig.lib.dropUntrackedAnnotations();
+    CHECK(rig.lib.annotationsFor("ATTACH01").size() == 1);
+    CHECK(rig.lib.annotationsFor("ATTACH02").size() == 2);
+    CHECK_FALSE(rig.lib.annotation("DROPME01"));
+    CHECK(rig.lib.objectVersion("DROPME01") == 0);
+}

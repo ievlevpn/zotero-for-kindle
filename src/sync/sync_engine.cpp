@@ -70,40 +70,35 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     // The first listing fixes the version this pull brings us to. Anything changed later has a
     // higher version and is listed again next time; objects already stored at their listed
     // version are skipped, which is what makes an interrupted first sync resumable.
-    // Items and attachments before annotations, so the library is usable before the ~33,000
-    // annotations of a first sync are in.
+    // Items and attachments before annotations, so the library is usable before annotations
+    // are in. Annotations: all of them with "Keep all highlights offline" (listed since the
+    // version the full annotation sync reached), otherwise only changes to tracked books.
+    const bool allOffline = lib_.allAnnotationsOffline();
     struct Phase {
         const char* name;
         const char* kind;
         const char* itemType;
+        int64_t since;
     };
-    for (const Phase& phase : {Phase{"collections", "collections", ""}, Phase{"items", "items", "-annotation"},
-                               Phase{"annotations", "items", "annotation"}}) {
+    std::vector<Phase> phases = {{"collections", "collections", "", from}, {"items", "items", "-annotation", from}};
+    if (allOffline) phases.push_back({"annotations", "items", "annotation", lib_.annotationsVersion()});
+    else if (from > 0) phases.push_back({"annotations", "items", "annotation", from});
+    for (const Phase& phase : phases) {
         const std::string kind = phase.kind;
-        auto listing = api_.versions(kind, from, &err, phase.itemType);
+        auto listing = api_.versions(kind, phase.since, &err, phase.itemType);
         if (!listing) return void(rep.error = err);
         if (kind == "collections") rep.toVersion = listing->libraryVersion;
         std::vector<std::string> changed;
         for (const auto& [key, version] : listing->versions)
             if (lib_.objectVersion(key) < version) changed.push_back(key);
-        progress({phase.name, 0, static_cast<int>(changed.size())});
-        for (size_t i = 0; i < changed.size(); i += kBatch) {
-            std::vector<std::string> batch(changed.begin() + i, changed.begin() + std::min(changed.size(), i + kBatch));
-            auto objects = api_.fetch(kind, batch, &err);
-            if (!objects) return void(rep.error = err);
-            auto tx = lib_.begin();
-            for (const auto& obj : *objects) {
-                if (kind == "collections") {
-                    if (trashed(obj)) lib_.removeObject("collection", parseCollection(obj).key);
-                    else lib_.upsertCollection(parseCollection(obj));
-                    lib_.setObjectVersion(obj.value("key", ""), versionOf(obj));
-                } else {
-                    apply(obj, rep);
-                }
-            }
-            tx.commit();
-            progress({phase.name, static_cast<int>(std::min(changed.size(), i + kBatch)), static_cast<int>(changed.size())});
-        }
+        std::function<bool(const json&)> accept;
+        if (std::string(phase.name) == "annotations" && !allOffline)
+            accept = [&](const json& obj) {
+                const json& d = obj.contains("data") ? obj["data"] : json::object();
+                const std::string parent = d.is_object() ? d.value("parentItem", "") : "";
+                return lib_.isTracked(parent) || lib_.annotation(obj.value("key", "")).has_value();
+            };
+        if (!fetchAndApply(kind, phase.name, changed, rep, progress, accept)) return;
     }
 
     auto gone = api_.deleted(from, &err);
@@ -118,6 +113,66 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     progress({"deletions", static_cast<int>(gone->items.size() + gone->collections.size()),
               static_cast<int>(gone->items.size() + gone->collections.size())});
     lib_.setLibraryVersion(rep.toVersion);
+    if (allOffline) lib_.setAnnotationsVersion(rep.toVersion);
+}
+
+bool SyncEngine::fetchAndApply(const std::string& kind, const std::string& phase, const std::vector<std::string>& keys,
+                               SyncReport& rep, const std::function<void(const SyncProgress&)>& progress,
+                               const std::function<bool(const json&)>& accept) {
+    UserError err;
+    progress({phase, 0, static_cast<int>(keys.size())});
+    for (size_t i = 0; i < keys.size(); i += kBatch) {
+        std::vector<std::string> batch(keys.begin() + i, keys.begin() + std::min(keys.size(), i + kBatch));
+        auto objects = api_.fetch(kind, batch, &err);
+        if (!objects) {
+            rep.error = err;
+            return false;
+        }
+        auto tx = lib_.begin();
+        for (const auto& obj : *objects) {
+            if (accept && !accept(obj)) continue;
+            if (kind == "collections") {
+                if (trashed(obj)) lib_.removeObject("collection", parseCollection(obj).key);
+                else lib_.upsertCollection(parseCollection(obj));
+                lib_.setObjectVersion(obj.value("key", ""), versionOf(obj));
+            } else {
+                apply(obj, rep);
+            }
+        }
+        tx.commit();
+        progress({phase, static_cast<int>(std::min(keys.size(), i + kBatch)), static_cast<int>(keys.size())});
+    }
+    return true;
+}
+
+SyncReport SyncEngine::pullAnnotationsFor(const std::string& attachmentKey,
+                                          std::function<void(const SyncProgress&)> progress) {
+    SyncReport rep;
+    rep.fromVersion = rep.toVersion = lib_.libraryVersion();
+    try {
+        lib_.trackAttachment(attachmentKey);
+        UserError err;
+        auto listing = api_.annotationVersions(attachmentKey, 0, &err);
+        if (!listing) {
+            rep.error = err;
+        } else {
+            std::vector<std::string> changed;
+            for (const auto& [key, version] : listing->versions)
+                if (lib_.objectVersion(key) < version) changed.push_back(key);
+            fetchAndApply("items", "annotations", changed, rep, progress ? progress : [](const SyncProgress&) {});
+        }
+    } catch (const DbError&) {
+        rep.error = lib_.lastError();
+    }
+    if (rep.error) log(LogLevel::Warn, "sync: annotations for %s: %s", attachmentKey.c_str(), rep.error->message.c_str());
+    return rep;
+}
+
+void SyncEngine::setAllHighlightsOffline(bool on) {
+    auto tx = lib_.begin();
+    lib_.setAllAnnotationsOffline(on);
+    if (!on) lib_.dropUntrackedAnnotations();
+    tx.commit();
 }
 
 void SyncEngine::apply(const json& obj, SyncReport& rep) {

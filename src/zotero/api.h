@@ -51,6 +51,8 @@ public:
     // itemType narrows an items listing, e.g. "annotation" or "-annotation".
     std::optional<VersionMap> versions(const std::string& kind, int64_t since, UserError*,
                                        const std::string& itemType = "");
+    // Versions of one item's annotation children (e.g. an EPUB attachment's highlights).
+    std::optional<VersionMap> annotationVersions(const std::string& parentKey, int64_t since, UserError*);
     std::optional<std::vector<nlohmann::json>> fetch(const std::string& kind, const std::vector<std::string>& keys /* ≤50 */,
                                                      UserError*);
     std::optional<Deleted> deleted(int64_t since, UserError*);
