@@ -42,6 +42,9 @@ public:
     bool showsTabBar() const override { return false; }
     bool isReading() const override { return true; }
     void onResize(Nav&) override;  // turned: the book is laid out for the new page area
+    bool landscape() const { return pageArea().w > pageArea().h; }
+    bool twoColumns() const { return layout_.columns == 2; }
+    void setTwoColumns(bool on, Nav&);  // the Display panel's choice (kept in the settings)
     bool wantsKeyboard() const override;
 
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
@@ -124,6 +127,7 @@ private:
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
+    int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
 };
 
 }  // namespace zk

@@ -64,7 +64,7 @@ Rect ReaderMenus::trimRect(int i) {
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
 }
 Rect ReaderMenus::orientationRect(int i) {
-    const int w = (W() - 2 * kMargin - 240) / 2;
+    const int w = (W() - 2 * kMargin - 240) / 3;
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 464, w - 12, 90};
 }
 Rect ReaderMenus::spacingRect(int i) {
@@ -95,6 +95,11 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
         if (sizePlusRect().contains(p)) l.sizePt = std::min(kMaxSize, l.sizePt + kSizeStep);
         for (int i = 0; i < 3; ++i)
             if (spacingRect(i).contains(p)) l.lineSpacingPct = kSpacings[i];
+    }
+    if (reader_.landscape() && showsTextOptions() && orientationRect(2).contains(p)) {
+        reader_.setTwoColumns(!reader_.twoColumns(), nav);
+        nav.damage(displayPanelRect(), Waveform::Ui);
+        return true;
     }
     for (int i = 0; i < 2; ++i)
         if (orientationRect(i).contains(p)) {
@@ -154,6 +159,7 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
     }
     centredText(cr, "Orientation", label, {kMargin, orientationRect(0).y, 220, 90}, Align::Left);
     for (int i = 0; i < 2; ++i) drawButton(cr, orientationRect(i), i ? "Landscape" : "Portrait", landscape_ == (i == 1));
+    if (reader_.landscape() && showsTextOptions()) drawButton(cr, orientationRect(2), "Two columns", reader_.twoColumns());
 }
 
 void ReaderMenus::open(Nav& nav) {

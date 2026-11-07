@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "app/settings_store.h"
 #include "screens/annotation_bar.h"
 #include "screens/reader_menus.h"
 #include "ui/metrics.h"
@@ -28,14 +29,16 @@ std::string layoutKey(const std::string& itemKey) { return "layout:" + itemKey; 
 
 // What follows from the window and the book: the page is the window above the footer; an EPUB
 // in landscape gets two columns; margins are a share of a column's width.
-void fitLayout(Layout& l, DocType type) {
+void fitLayout(Layout& l, DocType type, int twoColumns) {
     l.width = ReaderScreen::pageArea().w;
     l.height = ReaderScreen::pageArea().h;
-    l.columns = type == DocType::Epub && l.width > l.height ? 2 : 1;
+    // Two columns: EPUBs in landscape, by default only on big screens (Pavel), or as chosen.
+    const bool wantTwo = twoColumns < 0 ? l.width >= 2000 : twoColumns == 1;
+    l.columns = type == DocType::Epub && l.width > l.height && wantTwo ? 2 : 1;
     l.marginPx = marginPxFor(l.marginLevel, l.width / l.columns);
 }
 
-Layout loadLayout(Library& lib, const std::string& itemKey, DocType type) {
+Layout loadLayout(Library& lib, const std::string& itemKey, DocType type, int twoColumns) {
     Layout l;
     auto j = nlohmann::json::parse(lib.metaValue(layoutKey(itemKey)), nullptr, false);
     if (j.is_object()) {
@@ -47,7 +50,7 @@ Layout loadLayout(Library& lib, const std::string& itemKey, DocType type) {
             l.marginLevel = marginLevelFor(j["marginPx"].get<int>(), 1236);
         l.trimMargins = j.value("trimMargins", false);
     }
-    fitLayout(l, type);
+    fitLayout(l, type, twoColumns);
     return l;
 }
 
@@ -151,7 +154,8 @@ void ReaderScreen::onShow(Nav& nav) {
         refreshHighlights(nav);
         return;
     }
-    layout_ = loadLayout(nav.library(), row_.key, type_);
+    twoColumnsSetting_ = loadSettings(nav.library()).twoColumns;
+    layout_ = loadLayout(nav.library(), row_.key, type_, twoColumnsSetting_);
     if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
     DocPosition start;
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
@@ -260,7 +264,7 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
 }
 
 void ReaderScreen::onResize(Nav& nav) {
-    fitLayout(layout_, type_);
+    fitLayout(layout_, type_, twoColumnsSetting_);
     bar_.reset();  // anchored to the old page
     if (editor_) closeEditor(nav);
     if (!worker_) return;
@@ -268,9 +272,16 @@ void ReaderScreen::onResize(Nav& nav) {
     worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
 }
 
+void ReaderScreen::setTwoColumns(bool on, Nav& nav) {
+    AppSettings s = loadSettings(nav.library());
+    s.twoColumns = twoColumnsSetting_ = on ? 1 : 0;
+    saveSettings(nav.library(), s);
+    applyLayout(layout_, nav);
+}
+
 void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     Layout l = wanted;
-    fitLayout(l, type_);  // the margin size in pixels, the columns
+    fitLayout(l, type_, twoColumnsSetting_);  // the margin size in pixels, the columns
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;
     layout_ = l;

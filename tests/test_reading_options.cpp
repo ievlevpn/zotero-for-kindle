@@ -106,6 +106,7 @@ TEST_CASE("epub: two columns show two pages side by side; pages are spreads") {
 #include "fixture_library.h"
 #include "screens/reader.h"
 #include "screens/reader_menus.h"
+#include "app/settings_store.h"
 #include "store/db.h"
 #include "ui/metrics.h"
 
@@ -170,20 +171,44 @@ TEST_CASE("reader: a book's old margin setting in pixels becomes the nearest siz
     CHECK(rig.engineLayout().marginPx == 100);
 }
 
-TEST_CASE("reader: an EPUB turned to landscape gets two columns; back in portrait one") {
-    ReaderRig rig;
-    CHECK(rig.engineLayout().columns == 1);
-    Metrics turned = kPw5;
-    std::swap(turned.width, turned.height);
+TEST_CASE("reader: two columns in landscape by default on a big screen, not on a small one") {
+    Metrics pw5Land = kPw5, scribeLand = kScribe;
+    std::swap(pw5Land.width, pw5Land.height);
+    std::swap(scribeLand.width, scribeLand.height);
     {
-        ScopedMetrics land(turned);
+        ReaderRig rig;  // PW5
+        ScopedMetrics land(pw5Land);
         rig.reader->onResize(rig.nav);
-        REQUIRE(rig.waitFor([&] { return rig.engineLayout().columns == 2; }));
-        CHECK(rig.engineLayout().width == 1547);
-        CHECK(rig.engineLayout().marginPx == marginPxFor(1, 1547 / 2));  // margins suit a column
+        REQUIRE(rig.waitFor([&] { return rig.engineLayout().width == 1547; }));
+        CHECK(rig.engineLayout().columns == 1);
     }
+    {
+        ReaderRig rig;
+        ScopedMetrics land(scribeLand);
+        rig.reader->onResize(rig.nav);
+        REQUIRE(rig.waitFor([&] { return rig.engineLayout().width == 2379; }));
+        CHECK(rig.engineLayout().columns == 2);
+        CHECK(rig.engineLayout().marginPx == marginPxFor(1, 2379 / 2));  // margins suit a column
+        ScopedMetrics portrait(kScribe);
+        rig.reader->onResize(rig.nav);
+        REQUIRE(rig.waitFor([&] { return rig.engineLayout().columns == 1; }));
+    }
+}
+
+TEST_CASE("reader: in landscape the Two columns button switches columns, and the choice is kept") {
+    ReaderRig rig;  // PW5: one column by default
+    Metrics land = kPw5;
+    std::swap(land.width, land.height);
+    ScopedMetrics l(land);
     rig.reader->onResize(rig.nav);
+    REQUIRE(rig.waitFor([&] { return rig.engineLayout().width == 1547; }));
+    rig.openDisplay();
+    rig.reader->onGesture(test::tapAt(ReaderMenus::orientationRect(2).center()), rig.nav);  // Two columns
+    REQUIRE(rig.waitFor([&] { return rig.engineLayout().columns == 2; }));
+    CHECK(loadSettings(rig.lib).twoColumns == 1);
+    rig.reader->onGesture(test::tapAt(ReaderMenus::orientationRect(2).center()), rig.nav);  // off again
     REQUIRE(rig.waitFor([&] { return rig.engineLayout().columns == 1; }));
+    CHECK(loadSettings(rig.lib).twoColumns == 0);
 }
 
 TEST_CASE("reader: a PDF never gets columns; its Display panel trims page margins instead") {

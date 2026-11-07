@@ -12,13 +12,14 @@ AppSettings loadSettings(Library& lib) {
         s.syncIntervalMinutes = j["syncIntervalMinutes"].get<int>();
     if (j.contains("flashEvery") && j["flashEvery"].is_number_integer()) s.flashEvery = j["flashEvery"].get<int>();
     if (j.contains("landscapeReading") && j["landscapeReading"].is_boolean()) s.landscapeReading = j["landscapeReading"].get<bool>();
+    if (j.contains("twoColumns") && j["twoColumns"].is_number_integer()) s.twoColumns = j["twoColumns"].get<int>();
     return s;
 }
 
 void saveSettings(Library& lib, const AppSettings& s) {
     lib.setMetaValue("settings",
                      nlohmann::json{{"syncIntervalMinutes", s.syncIntervalMinutes}, {"flashEvery", s.flashEvery},
-                                    {"landscapeReading", s.landscapeReading}}
+                                    {"landscapeReading", s.landscapeReading}, {"twoColumns", s.twoColumns}}
                          .dump());
 }
 

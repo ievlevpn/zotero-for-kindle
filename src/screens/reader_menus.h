@@ -46,7 +46,7 @@ public:
     static Rect marginRect(int i);   // EPUB: Narrow, Normal, Wide, Extra wide (a share of the page width)
     static Rect trimRect(int i);     // PDF, same row: 0 Keep the page's margins, 1 Trim them
     static Rect spacingRect(int i);  // 100, 120, 140 %
-    static Rect orientationRect(int i);  // 0 Portrait, 1 Landscape (landscape is for reading only)
+    static Rect orientationRect(int i);  // 0 Portrait, 1 Landscape, 2 Two columns (EPUB in landscape)
 
     bool displayOpen() const { return displayOpen_; }
     bool showsTextOptions() const;
