@@ -57,6 +57,8 @@ public:
                                                      UserError*);
     std::optional<Deleted> deleted(int64_t since, UserError*);
     std::optional<WriteResult> createItems(const nlohmann::json& array /* ≤50 */, int64_t ifUnmodifiedSince, UserError*);
+    // DELETE /items?itemKey=… (≤50 keys). Success carries the new library version; 412 sets preconditionFailed.
+    std::optional<WriteResult> deleteItems(const std::vector<std::string>& keys, int64_t ifUnmodifiedSince, UserError*);
 
 private:
     HttpResponse send(HttpRequest req, UserError* err);

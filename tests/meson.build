@@ -16,6 +16,7 @@ test_sources = files(
   'test_parse.cpp',
   'test_api.cpp',
   'test_sync_engine.cpp',
+  'test_annotation_sync.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',

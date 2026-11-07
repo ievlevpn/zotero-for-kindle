@@ -2,8 +2,9 @@
 // Two-way metadata sync between the local Library and zotero.org (spec §7.4).
 // Pull: collections, then items/attachments/annotations changed since the stored library
 // version, then deletions; each batch of 50 is one transaction, and the library version only
-// advances once everything is in. Push: annotations created on the Kindle, additive only.
-// Conflicts never upload or delete anything: the Kindle's side is kept locally, marked conflict.
+// advances once everything is in. Push: the Kindle's annotation deletions, then its creations
+// and edits (spec §7.4). Conflicts never upload or delete anything: Zotero's copy wins and the
+// Kindle's side is kept locally, marked conflict.
 
 #include "store/library.h"
 #include "zotero/api.h"
@@ -47,6 +48,7 @@ private:
     void removeKey(const std::string& key, SyncReport&);
     int conflictUnsynced(const std::string& attachmentKey);
     bool pushOnce(SyncReport&, bool& preconditionFailed);
+    bool pushDeletions(SyncReport&, bool& preconditionFailed);
 
     ZoteroApi& api_;
     Library& lib_;

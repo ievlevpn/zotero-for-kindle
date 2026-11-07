@@ -217,7 +217,7 @@ TEST_CASE("library rows: 6,000 items page fast") {
     CHECK(ms(t0) < 50);
 }
 
-TEST_CASE("library: a version-1 database is rebuilt as version 2") {
+TEST_CASE("library: a version-1 database is rebuilt at the current version") {
     char tmpl[] = "/tmp/zk-v1-XXXXXX";
     std::filesystem::path dir = mkdtemp(tmpl);
     const std::string path = (dir / "z.db").string();
@@ -229,7 +229,7 @@ TEST_CASE("library: a version-1 database is rebuilt as version 2") {
     {
         Db db = Db::open(path);
         Library lib(db);
-        CHECK(db.userVersion() == 2);
+        CHECK(db.userVersion() == 3);
         CHECK(lib.recentItems(10).empty());
         CHECK(lib.libraryVersion() == 0);
     }

@@ -13,19 +13,6 @@ namespace {
 
 constexpr size_t kBatch = 50;
 
-// A fresh local-only key in Zotero's alphabet, for the Kindle's copy of a conflicted annotation.
-std::string newLocalKey() {
-    static std::mt19937 rng{std::random_device{}()};
-    static const char* alphabet = "23456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
-    std::string k(8, '2');
-    for (auto& c : k) c = alphabet[rng() % 33];
-    return k;
-}
-
-bool isZoteroKey(const std::string& k) {
-    return k.size() == 8 && k.find_first_not_of("23456789ABCDEFGHIJKLMNPQRSTUVWXYZ") == std::string::npos;
-}
-
 bool sameContent(const AnnotationRecord& a, const AnnotationRecord& b) {
     return a.type == b.type && a.text == b.text && a.comment == b.comment && a.color == b.color &&
            a.position == b.position && a.sortIndex == b.sortIndex && a.tags == b.tags;
@@ -225,6 +212,14 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
             AnnotationRecord incoming = parseAnnotation(obj);
             if (auto local = lib_.annotation(key)) {
                 incoming.createdHere = local->createdHere;
+                if (local->deletedHere && version <= local->version) break;  // our DELETE is still to be sent
+                // (a newer server version over a tombstone: edited on the desktop, so the Kindle
+                // deletion is dropped and the annotation comes back with that edit — below)
+                if (local->deletedHere) {
+                    lib_.upsertAnnotation(incoming);
+                    ++rep.annotations;
+                    break;
+                }
                 if (local->createdHere && local->dirty && local->version == 0) {
                     // Our own upload landed although its answer was lost: it is not a conflict.
                     if (sameContent(*local, incoming)) {
@@ -245,6 +240,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                     mine.dirty = false;
                     mine.conflict = true;
                     mine.createdHere = true;
+                    mine.conflictOf = key;
                     lib_.upsertAnnotation(mine);
                     ++rep.conflicts;
                 } else if (local->dirty) {
@@ -276,7 +272,9 @@ int SyncEngine::conflictUnsynced(const std::string& attachmentKey) {
 
 void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
     if (auto a = lib_.annotation(key)) {
-        if (a->dirty) {
+        if (a->deletedHere) {
+            lib_.removeObject("annotation", key);  // deleted on both sides
+        } else if (a->dirty) {
             // Deleted on the desktop, edited here: the deletion stands on the server; the Kindle
             // edit stays as a local conflict under a key of its own, so the server's key coming
             // back (restored from the trash) can't overwrite it.
@@ -286,6 +284,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
             mine.conflict = true;
             mine.createdHere = true;
             mine.version = 0;
+            mine.conflictOf = key;
             lib_.removeObject("annotation", key);
             lib_.upsertAnnotation(mine);
             ++rep.conflicts;
@@ -298,6 +297,8 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         rep.conflicts += conflictUnsynced(key);
         for (const auto& a : lib_.annotationsFor(key))
             if (!a.conflict) lib_.removeObject("annotation", a.key);
+        for (const auto& a : lib_.pendingDeletions())  // Zotero deleted them with the file
+            if (a.parentKey == key) lib_.removeObject("annotation", a.key);
         lib_.removeObject("attachment", key);
         if (att->parentKey.empty()) {  // a standalone file's list entry
             lib_.removeObject("item", key);
@@ -315,7 +316,7 @@ SyncReport SyncEngine::push() {
     try {
         bool precondition = false;
         if (!pushOnce(rep, precondition) && precondition && !rep.error) {
-            // The library changed on the server: pull first, then send our additions again.
+            // The library changed on the server: pull first, then send our changes again.
             SyncReport pulled = pull(nullptr);
             rep.conflicts += pulled.conflicts;
             if (pulled.error) rep.error = pulled.error;
@@ -330,12 +331,14 @@ SyncReport SyncEngine::push() {
     return rep;
 }
 
-// Sends every unsent annotation created on the Kindle. False if a batch hit a 412 or failed.
+// Sends the Kindle's deletions, then every unsent creation and edit (conflict copies and
+// annotations that can't be placed exactly stay local). False if a batch hit a 412 or failed.
 bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
     preconditionFailed = false;
+    if (!pushDeletions(rep, preconditionFailed)) return false;
     std::vector<AnnotationRecord> pending;
     for (auto& a : lib_.dirtyAnnotations())
-        if (a.createdHere && !a.conflict) pending.push_back(std::move(a));
+        if (!a.conflict && !a.localOnly) pending.push_back(std::move(a));
     {
         // New annotations are sent with a key made here (committed before sending), so if the
         // answer is lost, the next pull recognises the object as our own write.
@@ -383,6 +386,33 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
                                   res->failed.begin()->second};
             return false;
         }
+    }
+    return true;
+}
+
+bool SyncEngine::pushDeletions(SyncReport& rep, bool& preconditionFailed) {
+    std::vector<std::string> keys;
+    for (const auto& a : lib_.pendingDeletions()) keys.push_back(a.key);
+    for (size_t i = 0; i < keys.size(); i += kBatch) {
+        std::vector<std::string> batch(keys.begin() + i, keys.begin() + std::min(keys.size(), i + kBatch));
+        UserError err;
+        auto res = api_.deleteItems(batch, lib_.libraryVersion(), &err);
+        if (!res) {
+            rep.error = err;
+            return false;
+        }
+        if (res->preconditionFailed) {
+            preconditionFailed = true;
+            return false;
+        }
+        auto tx = lib_.begin();
+        for (const auto& k : batch) {
+            lib_.removeObject("annotation", k);
+            lib_.setObjectVersion(k, res->libraryVersion);
+            ++rep.annotations;
+        }
+        lib_.setLibraryVersion(res->libraryVersion);  // our deletion was the only change since (else 412)
+        tx.commit();
     }
     return true;
 }
