@@ -870,7 +870,8 @@ void Library::markOpened(const std::string& itemKey, const std::string& attachme
 std::optional<ReadingState> Library::lastOpened() {
     return guarded([&]() -> std::optional<ReadingState> {
         Stmt st = db_.prepare(
-            "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state ORDER BY openedMs DESC LIMIT 1");
+            "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state WHERE openedMs > 0 "
+            "ORDER BY openedMs DESC LIMIT 1");
         if (!st.step()) return std::nullopt;
         return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
     });

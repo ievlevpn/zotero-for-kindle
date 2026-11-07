@@ -196,3 +196,14 @@ TEST_CASE("reader: asked to show a highlight before the book has opened, it open
     reader->onShow(nav);
     CHECK(tick(*reader, nav, [&] { return reader->ready() && reader->page() == 7; }));
 }
+
+TEST_CASE("home: a reading place saved without the book being opened doesn't make it the last opened") {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    fillFixtureLibrary(lib, 10);
+    lib.saveReading("IT000003", "pos:12", 0.13);  // e.g. a screenshot run of the reader
+    CHECK_FALSE(lib.lastOpened());
+    lib.markOpened("IT000006", "EP000006", 5000);
+    REQUIRE(lib.lastOpened());
+    CHECK(lib.lastOpened()->itemKey == "IT000006");
+}
