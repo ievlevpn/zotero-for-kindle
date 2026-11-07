@@ -44,7 +44,8 @@ struct Rig {
         return false;
     }
     void openDisplay(ReaderScreen& r) {
-        r.onGesture(tapAt({618, 700}), nav);
+        r.onGesture(tapAt({metrics().width / 2, metrics().height / 2}), nav);  // the menus
+        REQUIRE(r.menusOpen());
         r.onGesture(tapAt(ReaderMenus::buttonRect(2).center()), nav);
     }
 };
@@ -227,4 +228,110 @@ TEST_CASE("font pop-up matches the reviewed golden") {
     r->onGesture(tapAt(r->menus()->fontPickerNextRect().center()), rig.nav);
     r->draw(c);
     test::checkGolden(c, "tests/golden/font-picker-fast.png");
+}
+
+TEST_CASE("font pop-up: the Fast fonts as found are in the order Serif, Sans, Mono") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    const auto& all = r->menus()->fonts();
+    const auto serif = std::find(all.begin(), all.end(), "Fast Serif");
+    REQUIRE(serif != all.end());
+    REQUIRE(serif + 2 < all.end());
+    CHECK(*(serif + 1) == "Fast Sans");
+    CHECK(*(serif + 2) == "Fast Mono");
+}
+
+TEST_CASE("fonts: only the bundled Fast fonts count as Fast") {
+    CHECK(isFastFont("Fast Serif"));
+    CHECK(isFastFont("Fast Mono"));
+    CHECK_FALSE(isFastFont("Fast Hand"));  // a user's own font with a similar name
+    CHECK_FALSE(isFastFont("Bookerly"));
+}
+
+TEST_CASE("font pop-up: the Fast group isn't split across pages where a page can hold it (Scribe landscape)") {
+    Metrics landscape = kScribe;
+    landscape.width = 2480;
+    landscape.height = 1759;
+    ScopedMetrics s(landscape);
+    KindleFonts kindle;
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    ReaderMenus& m = *r->menus();
+    REQUIRE(m.fontPickerOpen());
+    for (int page = 0; page < 6; ++page) {
+        const auto rows = m.fontPickerRows();
+        if (rowFor(rows, "Fast Serif")) {
+            CHECK(rowFor(rows, "Fast Sans"));
+            CHECK(rowFor(rows, "Fast Mono"));
+            return;
+        }
+        REQUIRE_FALSE(m.fontPickerNextRect().empty());
+        r->onGesture(tapAt(m.fontPickerNextRect().center()), rig.nav);
+    }
+    FAIL("no page with Fast Serif");
+}
+
+TEST_CASE("font pop-up: a tap inside it that misses a row or an arrow keeps it open") {
+    KindleFonts kindle;
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    ReaderMenus& m = *r->menus();
+    const Rect box = m.fontPickerRect();
+    r->onGesture(tapAt({box.x + box.w / 2, box.y + 40}), rig.nav);  // the title
+    CHECK(m.fontPickerOpen());
+    r->onGesture(tapAt({box.x + box.w / 2, box.y + box.h - 50}), rig.nav);  // "1 / 2"
+    REQUIRE(m.fontPickerOpen());
+    REQUIRE_FALSE(m.fontPickerRows().empty());
+    CHECK(m.fontPickerRows().front().first == "Bookerly");  // still the first page
+}
+
+TEST_CASE("font pop-up: a screen that grows while it is open shows a page that exists") {
+    KindleFonts kindle;
+    std::optional<ScopedMetrics> small(std::in_place, kKt4);
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    ReaderMenus& m = *r->menus();
+    while (!m.fontPickerNextRect().empty()) r->onGesture(tapAt(m.fontPickerNextRect().center()), rig.nav);
+    small.reset();
+    ScopedMetrics big(kScribe);  // everything fits on one page now
+    CHECK(m.fontPickerPrevRect().empty());
+    CHECK(m.fontPickerNextRect().empty());
+    CHECK(m.fontPickerRows().size() == m.fonts().size());
+}
+
+TEST_CASE("font pop-up: where the Fast group can't fit on a page, its heading comes again (KT4 landscape)") {
+    Metrics landscape = kKt4;
+    std::swap(landscape.width, landscape.height);
+    ScopedMetrics s(landscape);
+    KindleFonts kindle;
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.openDisplay(*r);
+    r->onGesture(tapAt(ReaderMenus::fontRowRect().center()), rig.nav);
+    ReaderMenus& m = *r->menus();
+    int fastPages = 0;
+    for (int page = 0; page < 8; ++page) {
+        const auto rows = m.fontPickerRows();
+        const bool fast = std::any_of(rows.begin(), rows.end(), [](const auto& row) { return isFastFont(row.first); });
+        if (fast) {
+            ++fastPages;
+            CHECK(m.fontPickerHeadingShown());
+        }
+        for (const auto& [f, rect] : rows) CHECK(rect.y + rect.h <= m.fontPickerRect().y + m.fontPickerRect().h - 100);
+        if (m.fontPickerNextRect().empty()) break;
+        r->onGesture(tapAt(m.fontPickerNextRect().center()), rig.nav);
+    }
+    CHECK(fastPages >= 2);
 }

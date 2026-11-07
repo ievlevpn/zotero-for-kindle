@@ -130,3 +130,32 @@ TEST_CASE("pins: the Collections tab with pins matches the reviewed golden") {
     drawTabBar(c.cr(), {0, 1547 - kTabBarH, 1236, kTabBarH}, {"Home", "Library", "Collections", "Notes"}, 2);
     checkGolden(c, "tests/golden/collection-pin-sheet.png");
 }
+
+TEST_CASE("pins: the sheet is gone when the Collections tab is shown again") {
+    Rig rig;
+    CollectionsScreen screen(nullptr);
+    screen.onShow(rig.nav);
+    screen.onGesture(longPressAt(screen.entryRects()[1].center()), rig.nav);
+    REQUIRE(screen.pinSheetLabel());
+    screen.onShow(rig.nav);  // another tab, then back
+    CHECK_FALSE(screen.pinSheetLabel());
+}
+
+TEST_CASE("pins: pinning from a later page goes to the first, where the collection now is") {
+    Rig rig;
+    for (int i = 0; i < 30; ++i) {
+        char key[16];
+        std::snprintf(key, sizeof key, "COLLX%03d", i);
+        char name[16];
+        std::snprintf(name, sizeof name, "Topic %02d", i);
+        rig.lib.upsertCollection({key, name, "", 1});
+    }
+    CollectionsScreen screen(nullptr);
+    screen.onShow(rig.nav);
+    screen.onGesture(swipe(Direction::Up), rig.nav);
+    const std::string name = screen.entries()[0].collection.name;
+    screen.onGesture(longPressAt(screen.entryRects()[0].center()), rig.nav);
+    screen.onGesture(tapAt(screen.pinButtonRect().center()), rig.nav);
+    CHECK(screen.entries()[0].collection.name == name);
+    CHECK(screen.entries()[0].pinned);
+}

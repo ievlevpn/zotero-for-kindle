@@ -53,3 +53,44 @@ TEST_CASE("fast fonts: word beginnings are bold (the font's calt feature is shap
     CHECK(mono > 0.068);
     CHECK(ink(*epub, "Bookerly") == doctest::Approx(plain));  // and back: other fonts as before
 }
+
+#include <atomic>
+#include <thread>
+
+TEST_CASE("fast fonts: two books on two threads, one switching shaping, don't corrupt each other") {
+    if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
+    // A book closing on its worker thread while the next one opens with another font: crengine's
+    // fonts are process-wide, and switching shaping clears them.
+    std::atomic<bool> stop{false};
+    std::atomic<int> renders{0};
+    std::thread other([&] {
+        UserError err;
+        auto b = loadEngine(DocType::Epub, env(), &err);
+        REQUIRE(b);
+        REQUIRE(b->open("tests/data/epub/frankenstein-epub2-ncx.epub", &err));
+        Layout l;
+        l.width = 1236;
+        l.height = 1487;
+        b->setLayout(l);
+        for (int p = 2; !stop; p = p % 30 + 2) {
+            const PageImage img = b->render(p);
+            CHECK(img.width == 1236);
+            ++renders;
+        }
+    });
+    UserError err;
+    auto a = loadEngine(DocType::Epub, env(), &err);
+    REQUIRE(a);
+    REQUIRE(a->open("tests/data/epub/alice-gutenberg-epub3.epub", &err));
+    while (renders == 0) std::this_thread::yield();  // both books open and rendering
+    for (int i = 0; i < 24; ++i) {
+        Layout l;
+        l.width = 1236;
+        l.height = 1487;
+        l.font = i % 2 ? "Fast Serif" : "Bookerly";
+        a->setLayout(l);
+        CHECK(a->render(3).width == 1236);
+    }
+    stop = true;
+    other.join();
+}

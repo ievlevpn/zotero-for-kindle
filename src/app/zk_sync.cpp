@@ -14,6 +14,7 @@
 // of the library's own files, and nothing else.
 // Credentials are never printed.
 
+#include "docs/fonts.h"
 #include "core/log.h"
 #include "docs/engine_factory.h"
 #include "net/http.h"
@@ -46,14 +47,13 @@ const char* kDefaultConfigDir = "/var/local/zotero";
 const char* kDefaultDb = "/mnt/us/zotero/zotero.db";  // see research/spikes/s6-sqlite-fuse.md
 const char* kDefaultCa = "/mnt/us/zotero/share/cacert.pem";
 const char* kDroppedConfig = "/mnt/us/zotero/config.json";
-const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", {"/usr/java/lib/fonts", "/mnt/us/zotero/fonts"},
-                           "/mnt/us/zotero/cache/cre"};
+const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", readingFontDirs(), "/mnt/us/zotero/cache/cre"};
 #else
 const char* kDefaultConfigDir = "local";
 const char* kDefaultDb = "local/zk.sqlite";
 const char* kDefaultCa = "";
 const char* kDroppedConfig = "";
-const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device", "local/fonts"}, "local/cache/cre"};
+const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", readingFontDirs(), "local/cache/cre"};
 #endif
 
 constexpr const char* kTestTag = "zk-test";

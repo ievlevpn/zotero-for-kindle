@@ -1,4 +1,5 @@
 #include "docs/epub/epub_engine.h"
+#include "docs/fonts.h"
 
 #include <crengine.h>
 
@@ -24,6 +25,14 @@ namespace {
 constexpr double kDpi = 300.0;
 
 std::string utf8(const lString32& s) { return UnicodeToUtf8(s).c_str(); }
+
+// crengine is built without its own locking (crlocks.h is off) and its fonts are process-wide:
+// two books on two render workers (one closing, the next opening) must take turns, or one's
+// shaping switch frees glyphs the other is drawing with.
+std::recursive_mutex& crengineMutex() {
+    static std::recursive_mutex m;
+    return m;
+}
 
 // crengine's font manager and hyphenation are process-wide: set them up once. Font folders are
 // registered the first time an engine names them.
@@ -94,17 +103,24 @@ bool looksLikeZip(const std::string& path) {
 
 }  // namespace
 
-EpubEngine::EpubEngine(const EngineEnv& env) : env_(env) { initCrengine(env_); }
+EpubEngine::EpubEngine(const EngineEnv& env) : env_(env) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+    initCrengine(env_);
+}
 
 EpubEngine::~EpubEngine() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     dom_.reset();  // holds pointers into the view's document
+    links_.clear();
+    view_.reset();  // the document and its fonts go inside the lock, not after it
 }
 
 void EpubEngine::applyLayout() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_) return;
     // Fast Font bolds word beginnings with an OpenType feature: it needs HarfBuzz shaping, which
     // costs time, so only while one is chosen.
-    const kerning_mode_t kerning = layout_.font.rfind("Fast ", 0) == 0 ? KERNING_MODE_HARFBUZZ : KERNING_MODE_DISABLED;
+    const kerning_mode_t kerning = isFastFont(layout_.font) ? KERNING_MODE_HARFBUZZ : KERNING_MODE_DISABLED;
     if (fontMan->GetKerningMode() != kerning) fontMan->SetKerningMode(kerning);
     view_->setDefaultFontFace(lString8(layout_.font.c_str()));
     view_->setFontSize(static_cast<int>(layout_.sizePt * kDpi / 72.0 + 0.5));
@@ -117,12 +133,14 @@ void EpubEngine::applyLayout() {
 
 // crengine settles its position lazily (back to page 0) on the first query after a render.
 void EpubEngine::settle() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     view_->checkRender();
     view_->getCurPage();
     toc_.clear();
 }
 
 bool EpubEngine::open(const std::string& path, UserError* err) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     auto fail = [&](const char* msg, const char* detail) {
         view_.reset();
         if (err) *err = UserError{ErrorKind::Other, msg, detail};
@@ -148,6 +166,7 @@ bool EpubEngine::open(const std::string& path, UserError* err) {
 }
 
 void EpubEngine::setLayout(const Layout& l) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     linksPage_ = -1;  // laid out again: the cached links' boxes are gone
     if (l == layout_ && view_) return;
     layout_ = l;
@@ -155,9 +174,13 @@ void EpubEngine::setLayout(const Layout& l) {
     if (view_) settle();
 }
 
-int EpubEngine::pageCount() { return view_ ? (view_->getPageCount() + cols() - 1) / cols() : 0; }
+int EpubEngine::pageCount() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+    return view_ ? (view_->getPageCount() + cols() - 1) / cols() : 0;
+}
 
 PageImage EpubEngine::render(int page) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     PageImage img;
     if (!view_) return img;
     view_->goToPage(crPage(page));
@@ -172,12 +195,14 @@ PageImage EpubEngine::render(int page) {
 }
 
 DocPosition EpubEngine::positionOfPage(int page) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_) return {};
     ldomXPointer p = view_->getPageBookmark(crPage(page));
     return p.isNull() ? DocPosition{} : DocPosition{utf8(p.toString())};
 }
 
 const std::vector<EpubEngine::PageLink>& EpubEngine::pageLinks(int page) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (page == linksPage_) return links_;
     links_.clear();
     linksPage_ = page;
@@ -218,6 +243,7 @@ const std::vector<EpubEngine::PageLink>& EpubEngine::pageLinks(int page) {
 }
 
 std::vector<LinkBox> EpubEngine::links(int page) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     std::vector<LinkBox> out;
     const auto& links = pageLinks(page);
     for (size_t i = 0; i < links.size(); ++i)
@@ -328,6 +354,7 @@ bool startsNote(ldomNode* b) {
 }  // namespace
 
 std::optional<LinkInfo> EpubEngine::link(int page, int index) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     const auto& links = pageLinks(page);
     if (!view_ || index < 0 || index >= static_cast<int>(links.size())) return std::nullopt;
     const PageLink& l = links[static_cast<size_t>(index)];
@@ -385,6 +412,7 @@ std::optional<LinkInfo> EpubEngine::link(int page, int index) {
 }
 
 int EpubEngine::pageOfPlaced(const DocPosition& pos) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || pos.value.empty()) return -1;
     ldomXPointer p = view_->getDocument()->createXPointer(Utf8ToUnicode(lString8(pos.value.c_str())));
     if (p.isNull()) return -1;
@@ -393,6 +421,7 @@ int EpubEngine::pageOfPlaced(const DocPosition& pos) {
 }
 
 int EpubEngine::pageOf(const DocPosition& pos) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || pos.value.empty()) return 0;
     ldomXPointer p = view_->getDocument()->createXPointer(Utf8ToUnicode(lString8(pos.value.c_str())));
     if (p.isNull()) return 0;
@@ -401,6 +430,7 @@ int EpubEngine::pageOf(const DocPosition& pos) {
 }
 
 std::vector<TocEntry> EpubEngine::toc() {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_) return {};
     if (!toc_.empty()) return toc_;
     LVTocItem* root = view_->getToc();
@@ -420,6 +450,7 @@ std::vector<TocEntry> EpubEngine::toc() {
 }
 
 std::string EpubEngine::chapterAt(int page) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     std::string title;
     for (const auto& t : toc())
         if (t.page <= page) title = t.title;
@@ -427,6 +458,7 @@ std::string EpubEngine::chapterAt(int page) {
 }
 
 std::vector<SearchHit> EpubEngine::search(const std::string& query, int maxHits) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     std::vector<SearchHit> out;
     if (!view_ || query.empty()) return out;
     ldomXRangeList ranges;
@@ -463,6 +495,7 @@ std::string cfiOf(const AnnotationRecord& a) {
 // Zotero's lastPageIndex for an EPUB: a point CFI at the start of what is shown, without the
 // "epubcfi(...)" wrapper. Made from the CFI of the page's first character.
 std::string EpubEngine::zoteroPosition(int page) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || !dom_ || page < 0 || page >= pageCount()) return "";
     LVRef<ldomXRange> range = view_->getPageDocumentRange(crPage(page));
     if (range.isNull()) return "";
@@ -485,6 +518,7 @@ std::string EpubEngine::zoteroPosition(int page) {
 }
 
 int EpubEngine::pageOfZoteroPosition(const std::string& v) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || !dom_) return -1;
     const auto j = nlohmann::json::parse(v, nullptr, false);
     if (!j.is_string()) return -1;
@@ -495,6 +529,7 @@ int EpubEngine::pageOfZoteroPosition(const std::string& v) {
 }
 
 int EpubEngine::pageOfAnnotation(const AnnotationRecord& a) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || !dom_) return -1;
     auto r = dom_->resolve(cfiOf(a));
     if (!r) return -1;
@@ -502,6 +537,7 @@ int EpubEngine::pageOfAnnotation(const AnnotationRecord& a) {
 }
 
 std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<AnnotationRecord>& anns) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     std::vector<HighlightBox> out;
     if (!view_ || !dom_) return out;
     view_->goToPage(crPage(page));
@@ -523,6 +559,7 @@ std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<Ann
 }
 
 int64_t EpubEngine::wordsBetween(int fromPage, int toPage) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || toPage <= fromPage) return 0;
     ldomXPointer a = view_->getPageBookmark(crPage(fromPage)),
                  b = view_->getPageBookmark(std::min(crPage(toPage), view_->getPageCount() - 1));
@@ -571,6 +608,7 @@ ldomXPointer wordEnd(ldomXPointer p) {
 }  // namespace
 
 std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
+    std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     if (!view_ || !dom_ || page < 0 || page >= pageCount()) return std::nullopt;
     view_->goToPage(crPage(page));
     // The drag stays on this page: a finger over the footer means the page's last line.

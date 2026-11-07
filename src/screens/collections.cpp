@@ -67,6 +67,7 @@ void CollectionsScreen::showPage() {
 }
 
 void CollectionsScreen::onShow(Nav& nav) {
+    sheet_.reset();  // a long press's sheet doesn't outlast a visit to another tab
     const int64_t offset = pager_.offset();
     load(nav.library());
     while (pager_.offset() < offset && pager_.next()) {
@@ -105,8 +106,9 @@ void CollectionsScreen::draw(Canvas& canvas) {
 void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
     if (sheet_) {  // any tap closes it; its button pins or unpins
         if (g.type != GestureType::Tap) return;
+        const bool pinning = sheet_->label() == "Pin to top" && PinSheet::buttonRect().contains(g.pos);
         sheet_->tap(g.pos, nav.library());
-        sheet_.reset();
+        if (pinning) pager_ = Pager(0, 1);  // to the first page, where it now is
         onShow(nav);
         nav.damage(contentArea(), Waveform::Quality);
         return;
@@ -175,7 +177,10 @@ void CollectionScreen::load(Library& lib) {
     }
 }
 
-void CollectionScreen::onShow(Nav& nav) { load(nav.library()); }
+void CollectionScreen::onShow(Nav& nav) {
+    sheet_.reset();
+    load(nav.library());
+}
 
 std::vector<Rect> CollectionScreen::lineRects() const {
     std::vector<Rect> out;

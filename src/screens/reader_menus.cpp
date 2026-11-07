@@ -87,7 +87,10 @@ const std::vector<std::string>& ReaderMenus::fonts() {
     // Scanning fonts reads every file with FreeType: once per process, not per menu.
     static const std::vector<std::string> all = [] {
         auto f = readingFonts(readingFontDirs());
-        std::stable_partition(f.begin(), f.end(), [](const std::string& n) { return !isFastFont(n); });
+        f.erase(std::remove_if(f.begin(), f.end(), isFastFont), f.end());
+        const auto found = readingFonts(readingFontDirs());
+        for (const char* fast : kFastFonts)  // last, Serif, Sans, Mono
+            if (std::find(found.begin(), found.end(), fast) != found.end()) f.push_back(fast);
         return f;
     }();
     return all;
@@ -106,19 +109,30 @@ Rect ReaderMenus::fontPickerRect() const {
     return {(W() - w) / 2, kPickerGap, w, maxH};
 }
 
+bool ReaderMenus::headingAbove(size_t i, size_t from) {
+    const auto& f = fonts();
+    return isFastFont(f[i]) && (i == from || i == 0 || !isFastFont(f[i - 1]));
+}
+
 std::vector<ReaderMenus::PickerPage> ReaderMenus::pickerPages() {
     const auto& f = fonts();
-    auto height = [&](size_t i) {
-        const bool heading = isFastFont(f[i]) && (i == 0 || !isFastFont(f[i - 1]));
-        return kPickerRowH + (heading ? kPickerHeadingH : 0);
-    };
+    auto height = [&](size_t i, size_t from) { return kPickerRowH + (headingAbove(i, from) ? kPickerHeadingH : 0); };
     int all = 0;
-    for (size_t i = 0; i < f.size(); ++i) all += height(i);
+    for (size_t i = 0; i < f.size(); ++i) all += height(i, 0);
     const int room = fontPickerRect().h - kPickerTitleH - (all + kPickerTitleH + 30 <= fontPickerRect().h ? 0 : kPickerFooterH);
+    // The Fast group (heading and fonts) starts a page of its own if it doesn't fit where it begins
+    // but would on a page.
+    int fastH = 0;
+    for (size_t i = 0; i < f.size(); ++i)
+        if (isFastFont(f[i])) fastH += height(i, 0);
     std::vector<PickerPage> pages;
     for (size_t i = 0; i < f.size();) {
         PickerPage p{i, i};
-        for (int used = 0; p.to < f.size() && (p.to == p.from || used + height(p.to) <= room); ++p.to) used += height(p.to);
+        for (int used = 0; p.to < f.size() && (p.to == p.from || used + height(p.to, p.from) <= room); ++p.to) {
+            const bool groupStarts = isFastFont(f[p.to]) && (p.to == 0 || !isFastFont(f[p.to - 1]));
+            if (groupStarts && p.to > p.from && used + fastH > room && fastH <= room) break;
+            used += height(p.to, p.from);
+        }
         pages.push_back(p);
         i = p.to;
     }
@@ -126,35 +140,59 @@ std::vector<ReaderMenus::PickerPage> ReaderMenus::pickerPages() {
     return pages;
 }
 
+size_t ReaderMenus::pickerPage() {
+    // The screen may have changed size since the page was chosen: a page that still exists.
+    const size_t pages = pickerPages().size();
+    if (picker_ && *picker_ >= pages) picker_ = pages - 1;
+    return picker_.value_or(0);
+}
+
+Rect ReaderMenus::shownPickerRect() {
+    const Rect box = fontPickerRect();
+    if (pickerPages().size() > 1) return box;
+    const auto rows = fontPickerRows();
+    const int bottom = (rows.empty() ? box.y + kPickerTitleH : rows.back().second.y + kPickerRowH) + 30;
+    return {box.x, box.y, box.w, bottom - box.y};
+}
+
 std::vector<std::pair<std::string, Rect>> ReaderMenus::fontPickerRows() {
     std::vector<std::pair<std::string, Rect>> rows;
     if (!picker_) return rows;
     const auto pages = pickerPages();
-    const PickerPage p = pages[std::min(*picker_, pages.size() - 1)];
+    const PickerPage p = pages[pickerPage()];
     const Rect box = fontPickerRect();
     int y = box.y + kPickerTitleH;
     for (size_t i = p.from; i < p.to; ++i) {
-        if (isFastFont(fonts()[i]) && (i == 0 || !isFastFont(fonts()[i - 1]))) y += kPickerHeadingH;
+        if (headingAbove(i, p.from)) y += kPickerHeadingH;
         rows.push_back({fonts()[i], {box.x, y, box.w, kPickerRowH}});
         y += kPickerRowH;
     }
     return rows;
 }
 
+bool ReaderMenus::fontPickerHeadingShown() {
+    if (!picker_) return false;
+    const PickerPage p = pickerPages()[pickerPage()];
+    for (size_t i = p.from; i < p.to; ++i)
+        if (headingAbove(i, p.from)) return true;
+    return false;
+}
+
 Rect ReaderMenus::fontPickerPrevRect() {
-    if (!picker_ || *picker_ == 0) return {};
+    if (!picker_ || pickerPage() == 0) return {};
     const Rect box = fontPickerRect();
     return {box.x, box.y + box.h - kPickerFooterH, box.w / 3, kPickerFooterH};
 }
 
 Rect ReaderMenus::fontPickerNextRect() {
-    if (!picker_ || *picker_ + 1 >= pickerPages().size()) return {};
+    if (!picker_ || pickerPage() + 1 >= pickerPages().size()) return {};
     const Rect box = fontPickerRect();
     return {box.x + box.w - box.w / 3, box.y + box.h - kPickerFooterH, box.w / 3, kPickerFooterH};
 }
 
 void ReaderMenus::onPickerTap(Point p, Nav& nav) {
     const Rect box = fontPickerRect();
+    pickerPage();
     if (fontPickerPrevRect().contains(p) || fontPickerNextRect().contains(p)) {
         picker_ = *picker_ + (fontPickerNextRect().contains(p) ? 1 : -1);
         nav.damage(box, Waveform::Ui);
@@ -163,6 +201,7 @@ void ReaderMenus::onPickerTap(Point p, Nav& nav) {
     std::string chosen;
     for (const auto& [font, r] : fontPickerRows())
         if (r.contains(p)) chosen = font;
+    if (chosen.empty() && shownPickerRect().contains(p)) return;  // its title, padding or page number: a near miss
     picker_.reset();
     nav.damage(box, Waveform::Quality);  // the page under it, without ghosts
     nav.damage(displayPanelRect(), Waveform::Ui);
@@ -177,10 +216,7 @@ void ReaderMenus::drawPicker(cairo_t* cr) {
     const auto rows = fontPickerRows();
     const auto pages = pickerPages();
     const bool paged = pages.size() > 1;
-    // As tall as this page's rows (the box's own height is the most it may take).
-    const int contentBottom = rows.empty() ? box.y + kPickerTitleH : rows.back().second.y + kPickerRowH;
-    const int bottom = paged ? box.y + box.h : contentBottom + 30;
-    const Rect shown{box.x, box.y, box.w, bottom - box.y};
+    const Rect shown = shownPickerRect();  // as tall as this page's rows, or the whole box when paged
     gray(cr, 255);
     roundedRect(cr, shown.x + 1.5, shown.y + 1.5, shown.w - 3, shown.h - 3, 18);
     cairo_fill_preserve(cr);
@@ -189,17 +225,18 @@ void ReaderMenus::drawPicker(cairo_t* cr) {
     cairo_stroke(cr);
     drawText(cr, "Font", {kSans, 9, 700}, {box.x + 50, box.y + 36, box.w - 100, 60}, 1);
     const std::string current = reader_.layout().font;
+    const size_t from = pickerPages()[pickerPage()].from;
     for (const auto& [font, r] : rows) {
         const auto it = std::find(fonts().begin(), fonts().end(), font);
         const size_t i = static_cast<size_t>(it - fonts().begin());
-        if (isFastFont(font) && (i == 0 || !isFastFont(fonts()[i - 1])))
+        if (headingAbove(i, from))
             drawText(cr, "FAST READING", {kSans, 6.5, 700, false, kSecondary}, {r.x + 50, r.y - kPickerHeadingH + 20, r.w - 100, 44}, 1);
         hRule(cr, r.y, r.x + 30, r.x + r.w - 30, 220);
         centredText(cr, font, {font.c_str(), 9, 400}, {r.x + 50, r.y, r.w - 180, r.h}, Align::Left);
         if (font == current) centredText(cr, "✓", {kSans, 10, 700}, {r.x + r.w - 120, r.y, 70, r.h});
     }
     if (paged) {
-        const std::string where = std::to_string(*picker_ + 1) + " / " + std::to_string(pages.size());
+        const std::string where = std::to_string(pickerPage() + 1) + " / " + std::to_string(pages.size());
         const int fy = box.y + box.h - kPickerFooterH;
         centredText(cr, where, {kSans, 7.5, 400, false, kSecondary}, {box.x, fy, box.w, kPickerFooterH});
         if (!fontPickerPrevRect().empty()) centredText(cr, "‹", {kSans, 14, 400}, fontPickerPrevRect());

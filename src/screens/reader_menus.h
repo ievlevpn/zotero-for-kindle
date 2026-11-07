@@ -61,6 +61,7 @@ public:
     std::vector<std::pair<std::string, Rect>> fontPickerRows();  // this page's fonts
     Rect fontPickerPrevRect();  // empty on the first page
     Rect fontPickerNextRect();  // empty on the last
+    bool fontPickerHeadingShown();  // "FAST READING" on this page
 
     std::string notesLabel() const { return "Notes (" + std::to_string(notes_) + ")"; }
     bool lightOpen() const { return lightOpen_; }
@@ -78,11 +79,16 @@ private:
     bool lightOpen_ = false;
     bool displayOpen_ = false;
     std::optional<size_t> picker_;  // the font pop-up's page
-    // A page of the pop-up: its fonts (from fonts()) and whether it starts the Fast ones.
+    // A page of the pop-up: its fonts, fonts()[from, to).
     struct PickerPage {
         size_t from = 0, to = 0;
     };
     std::vector<PickerPage> pickerPages();
+    size_t pickerPage();     // picker_, clamped to the pages there are now
+    // The "FAST READING" heading goes above fonts()[i] on a page starting at `from`: the group's
+    // first, or its first on a continuation page.
+    bool headingAbove(size_t i, size_t from);
+    Rect shownPickerRect();  // the box as drawn
     void onPickerTap(Point, Nav&);
     void drawPicker(cairo_t*);
     bool onDisplayTap(Point, Nav&);

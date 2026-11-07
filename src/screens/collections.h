@@ -20,7 +20,7 @@ public:
     static Rect buttonRect();
     std::string label() const { return pinned_ ? "Unpin" : "Pin to top"; }
     void draw(cairo_t*) const;
-    // A tap: true when it closes the sheet (always); on the button, pins or unpins.
+    // A tap closes the sheet (the caller's part); one on the button pins or unpins.
     void tap(Point, Library&) const;
 
 private:

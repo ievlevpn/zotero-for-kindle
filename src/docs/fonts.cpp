@@ -8,14 +8,6 @@
 
 namespace zk {
 
-std::vector<std::string> readingFontDirs() {
-#ifdef ZK_KINDLE
-    // The Kindle's own, the app's (Fast Font; replaced by updates), the user's own.
-    return {"/usr/java/lib/fonts", "/mnt/us/zotero/share/fonts", "/mnt/us/zotero/fonts"};
-#else
-    return {"assets/fonts-device", "assets/fonts-fast", "local/fonts"};
-#endif
-}
 
 bool offeredFamily(const std::string& family, bool systemFont) {
     if (!systemFont) return true;

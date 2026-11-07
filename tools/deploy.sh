@@ -14,12 +14,13 @@ D=build-kindle/dist  # stripped by tools/build-kindle.sh
 [ -d "$D" ] || D=build-kindle
 scp $OPTS -q "$D/zotero" "$D/zk-sync" "$@" "$KINDLE:/mnt/us/zotero/bin/"
 ls "$D"/libzk-*.so >/dev/null 2>&1 && scp $OPTS -q "$D"/libzk-*.so "$KINDLE:/mnt/us/zotero/lib/"
-ssh $OPTS "$KINDLE" 'mkdir -p /mnt/us/zotero/cache /mnt/us/zotero/fonts /mnt/us/zotero/share/crengine'
+ssh $OPTS "$KINDLE" 'mkdir -p /mnt/us/zotero/cache /mnt/us/zotero/fonts /mnt/us/zotero/share/crengine /mnt/us/zotero/share/fonts'
 # crengine's hyphenation dictionaries and CSS (scp: the Kindle has no rsync).
 scp $OPTS -q -r third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gui/data/epub.css \
     third_party/crengine/cr3gui/data/html5.css "$KINDLE:/mnt/us/zotero/share/crengine/"
 ssh $OPTS "$KINDLE" '[ -f /mnt/us/zotero/share/crengine/hyph/English_US.pattern ] || { echo "error: crengine data not installed" >&2; exit 1; }'
 scp $OPTS -q assets/launcher/icon.png "$KINDLE:/mnt/us/zotero/share/icon.png"
+scp $OPTS -q assets/fonts-fast/* "$KINDLE:/mnt/us/zotero/share/fonts/"  # Fast Font, as the release has it
 scp $OPTS -q assets/launcher/Zotero.sh "$KINDLE:/mnt/us/documents/Zotero.sh"
 # The CA bundle for HTTPS (tools/build-net-deps.sh fetches it), if the device has none yet.
 if ! ssh $OPTS "$KINDLE" '[ -f /mnt/us/zotero/share/cacert.pem ]'; then
