@@ -4,6 +4,7 @@
 //                                                  render a screen to a PNG and exit
 
 #include <chrono>
+#include <fstream>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -43,11 +44,15 @@
 #include "store/library.h"
 #include "sync/config.h"
 #include "sync/null_sync.h"
+#include "screens/update_screen.h"
 #include "sync/sync_service.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
 #include "ui/widgets.h"
+#include "update/install.h"
+#include "update/release_key.h"
+#include "update/updater.h"
 
 using namespace zk;
 
@@ -256,6 +261,23 @@ int main(int argc, char** argv) {
     std::unique_ptr<SyncService> service;
     SyncStatus status;
     OpenFlow flow(wallMs);
+    // Updates (Plan 7): only when the user asks, from Settings. <appDir>/update-feed (one URL)
+    // points at a test feed instead of GitHub.
+    const InstallPaths installPaths{paths.appDir, paths.launcherPath, paths.configFile(), paths.dbPath};
+    UpdaterConfig updaterConfig;
+    updaterConfig.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
+    updaterConfig.publicKey = kReleasePublicKey;
+    updaterConfig.paths = installPaths;
+    updaterConfig.current = appVersion();
+    if (!paths.appDir.empty()) {
+        std::ifstream feed(paths.appDir + "/update-feed");
+        std::string url;
+        if (feed >> url) {
+            updaterConfig.feedUrl = url;
+            log(LogLevel::Warn, "update: test feed %s", url.c_str());
+        }
+    }
+    Updater updater(updaterConfig);
     auto startService = [&](const Config& c) {
         if (service) service->stop();
         app.setSync(nullSync);
@@ -294,7 +316,16 @@ int main(int argc, char** argv) {
         HomeActions home;
         home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
         home.openSettings = [&] {
-            app.push(std::make_unique<SettingsScreen>(*config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }));
+            app.push(std::make_unique<SettingsScreen>(
+                *config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }, &updater, [&](Nav& nav) {
+                    nav.push(std::make_unique<UpdateScreen>(
+                        updater,
+                        [&] {  // installing backs up the library: no sync writing to it meanwhile
+                            if (service) service->stop();
+                            app.setSync(nullSync);
+                        },
+                        &keepAwake));
+                }));
         };
         home.openItem = openItem;
         home.status = flow.statusFn();
@@ -343,6 +374,13 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    switch (const Confirmed c = confirmStartup(installPaths); c.note) {
+        case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;
+        case StartupNote::RolledBack:
+            app.toast("The update to " + c.to.str() + " didn't start, so Zotero went back to " + c.from.str() + ".");
+            break;
+        case StartupNote::None: break;
+    }
     if (std::getenv("ZK_DEBUG_STALL")) {  // proves the escape path on the device: freeze the UI on purpose
         const int64_t at = app.nowMs() + 5000;
         app.setWatchdog([at, &app] {

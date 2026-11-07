@@ -6,16 +6,21 @@
 
 #include "screens/screen.h"
 #include "sync/config.h"
+#include "update/updater.h"
 
 namespace zk {
 
 class SettingsScreen final : public Screen {
 public:
-    SettingsScreen(Config, std::function<void(Nav&)> changeAccount);
+    // `updater` (may be null): the About row's Check for updates; `openUpdate` pushes the update
+    // screen when the check finds a newer release.
+    SettingsScreen(Config, std::function<void(Nav&)> changeAccount, Updater* updater = nullptr,
+                   std::function<void(Nav&)> openUpdate = nullptr);
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
+    void onTick(Nav&) override;
     bool showsTabBar() const override { return false; }
 
     Rect intervalRect(int i) const;  // Off, 5, 10, 30 min
@@ -24,11 +29,17 @@ public:
     Rect accountRect() const;
     Rect flashMinusRect() const;  // "Full refresh every N pages" (reader), 1–12
     Rect flashPlusRect() const;
+    Rect updateRect() const;
+    std::string updateLine() const;  // the About row's second line: version, or the last check's result
 
 private:
     void load(Library&);
     Config config_;
     std::function<void(Nav&)> changeAccount_;
+    Updater* updater_ = nullptr;
+    std::function<void(Nav&)> openUpdate_;
+    bool checking_ = false;
+    std::string updateResult_;
     int interval_ = 10;
     int flashEvery_ = 6;
     bool allOffline_ = false;
