@@ -11,3 +11,4 @@ spikes/s1-cfi/harness/reader/
 spikes/s1-cfi/harness/node_modules/
 spikes/s1-cfi/harness/out/
 local/
+dist/

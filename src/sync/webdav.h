@@ -20,7 +20,7 @@ struct PropInfo {
 
 class WebDav {
 public:
-    WebDav(Http&, std::string baseUrl /* ends with /zotero/ */, std::string user, std::string password);
+    WebDav(Http&, std::string baseUrl /* zotero/ added if missing */, std::string user, std::string password);
 
     std::optional<PropInfo> prop(const std::string& key, UserError*);
     // Can we log in and list the folder? (PROPFIND, Depth 0.) For the Setup screen.

@@ -181,3 +181,24 @@ TEST_CASE("webdav: a failed write during the download is DiskFull when the disk 
     CHECK(err.kind == ErrorKind::DiskFull);
     CHECK(rig.destEmpty());
 }
+
+TEST_CASE("webdav: the address as Zotero desktop takes it gets its zotero/ folder") {
+    // Zotero desktop's setting is the server address; it adds zotero/ itself.
+    for (const std::string url : {"https://dav.example.com/files", "https://dav.example.com/files/"}) {
+        FakeHttp http;
+        WebDav dav{http, url, "u", "p"};
+        http.expect("GET", "https://dav.example.com/files/zotero/ABCD1234.prop", FakeHttp::status(404));
+        UserError err;
+        CHECK_FALSE(dav.prop("ABCD1234", &err));
+        CHECK(err.kind == ErrorKind::NotOnServer);
+    }
+    // Already naming the folder: used as it is.
+    for (const std::string url : {"https://dav.example.com/zotero", "https://dav.example.com/zotero/"}) {
+        FakeHttp http;
+        WebDav dav{http, url, "u", "p"};
+        http.expect("GET", "https://dav.example.com/zotero/ABCD1234.prop", FakeHttp::status(404));
+        UserError err;
+        CHECK_FALSE(dav.prop("ABCD1234", &err));
+        CHECK(err.kind == ErrorKind::NotOnServer);
+    }
+}

@@ -83,7 +83,12 @@ std::string md5OfFile(const std::string& path) {
 WebDav::WebDav(Http& http, std::string baseUrl, std::string user, std::string password)
     : http_(http), base_(std::move(baseUrl)), user_(std::move(user)), password_(std::move(password)), host_(hostOf(base_)),
       freeSpace_(statvfsFree) {
-    if (!base_.empty() && base_.back() != '/') base_ += '/';
+    if (base_.empty()) return;
+    if (base_.back() != '/') base_ += '/';
+    // Zotero desktop takes the server's address and adds zotero/ itself; accept that address too.
+    const std::string folder = "/zotero/";
+    if (base_.size() < folder.size() || base_.compare(base_.size() - folder.size(), folder.size(), folder) != 0)
+        base_ += "zotero/";
 }
 
 HttpRequest WebDav::get(const std::string& name) const {

@@ -1,6 +1,6 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
-//   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe]
+//   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe] [--landscape]
 //                                                  render a screen to a PNG and exit
 
 #include <chrono>
@@ -180,20 +180,32 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     Canvas c(metrics().width, metrics().height);
     s->draw(c);
     drawTabBar(c.cr(), {0, metrics().height - kTabBarH, metrics().width, kTabBarH}, {"Home", "Library", "Collections", "Notes"},
-               0);
+               screen == "library" ? 1 : screen == "collections" ? 2 : screen == "notes" ? 3 : 0);
     return cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
-    log(LogLevel::Info, "zotero starting (backend=%s)", ZK_BACKEND);
+    log(LogLevel::Info, "zotero %s starting (backend=%s)", ZK_VERSION, ZK_BACKEND);
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
-    if (argc > 1 && !std::strcmp(argv[1], "--version")) return 0;
+    if (argc > 1 && !std::strcmp(argv[1], "--version")) {
+        std::printf("zotero-for-kindle %s (%s)\n", ZK_VERSION, ZK_BACKEND);
+        return 0;
+    }
     // --device pw5|scribe: the window to imitate (the desktop; and --screenshot on any build).
     for (int i = 1; i + 1 < argc; ++i)
         if (!std::strcmp(argv[i], "--device")) setMetrics(!std::strcmp(argv[i + 1], "scribe") ? kScribe : kPw5);
+    // --landscape (with --screenshot): the device's window turned, as measured on it.
+    for (int i = 1; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--landscape")) {
+            Metrics m = metrics();
+            const bool scribe = m.device == kScribe.device;
+            m.width = scribe ? 2480 : 1648;
+            m.height = scribe ? 1759 : 1135;
+            setMetrics(m);
+        }
     if (argc > 1 && !std::strcmp(argv[1], "--list-fonts")) {  // what Display offers, and how long finding it takes
         const auto t0 = std::chrono::steady_clock::now();
         const auto fonts = readingFonts(readingFontDirs());

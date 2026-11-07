@@ -5,7 +5,8 @@ project('zotero-kindle', 'c', 'cpp',
 
 backend = get_option('platform')
 
-add_project_arguments('-DZK_BACKEND="' + backend + '"', language : 'cpp')
+add_project_arguments('-DZK_BACKEND="' + backend + '"', '-DZK_VERSION="' + meson.project_version() + '"',
+  language : 'cpp')
 if backend == 'kindle'
   add_project_arguments('-DZK_KINDLE=1', language : 'cpp')
   # GCC's notes about the GCC 7.1 ARM parameter-passing change; harmless with static libstdc++.
@@ -261,6 +262,12 @@ executable('zk-sync', 'src/app/zk_sync.cpp',
   include_directories : include_directories('third_party', is_system : true),
   dependencies : [sync_dep, docs_dep],
   install : true)
+
+# The README's demo library (public-domain books only): tools/screenshots.sh.
+executable('zk-demo-library', 'tools/demo_library.cpp',
+  include_directories : include_directories('third_party', is_system : true),
+  dependencies : [store_dep],
+  build_by_default : false)
 
 if get_option('tests')
   subdir('tests')
