@@ -49,6 +49,13 @@ size_t onHeader(char* data, size_t size, size_t n, void* user) {
     return len;
 }
 
+int onXfer(void* user, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_off_t) {
+    const auto* req = static_cast<const HttpRequest*>(user);
+    if (req->cancel && *req->cancel) return 1;  // aborts with CURLE_ABORTED_BY_CALLBACK
+    if (req->onProgress) req->onProgress(static_cast<int64_t>(dlnow), static_cast<int64_t>(dltotal));
+    return 0;
+}
+
 void globalInit() {
     static std::once_flag once;
     std::call_once(once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
@@ -102,6 +109,11 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, onHeader);
     curl_easy_setopt(h, CURLOPT_HEADERDATA, &resp);
     if (!caBundle_.empty()) curl_easy_setopt(h, CURLOPT_CAINFO, caBundle_.c_str());
+    if (req.onProgress || req.cancel) {
+        curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, onXfer);
+        curl_easy_setopt(h, CURLOPT_XFERINFODATA, &req);
+    }
 
     if (req.method == "HEAD") {
         curl_easy_setopt(h, CURLOPT_NOBODY, 1L);

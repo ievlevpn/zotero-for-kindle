@@ -79,15 +79,6 @@ zotero_lib = static_library('zk-zotero',
   dependencies : [store_dep])
 zotero_dep = declare_dependency(link_with : zotero_lib, dependencies : [store_dep])
 
-sync_lib = static_library('zk-sync',
-  'src/sync/sync_engine.cpp',
-  'src/sync/webdav.cpp',
-  'src/sync/config.cpp',
-  'third_party/pugixml/pugixml.cpp',
-  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
-  dependencies : [zotero_dep, miniz_dep, md5_dep])
-sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep])
-
 # Device services shared by the app and its tests: lipc, keep-awake, storage watch, paths.
 services_lib = static_library('zk-services',
   'src/platform/power.cpp',
@@ -98,6 +89,17 @@ services_lib = static_library('zk-services',
   include_directories : inc,
   dependencies : [core_dep])
 services_dep = declare_dependency(link_with : services_lib, dependencies : [core_dep])
+
+sync_lib = static_library('zk-sync',
+  'src/sync/sync_engine.cpp',
+  'src/sync/webdav.cpp',
+  'src/sync/config.cpp',
+  'src/sync/sync_service.cpp',
+  'third_party/pugixml/pugixml.cpp',
+  include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
+  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep])
+sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep])
+
 
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
