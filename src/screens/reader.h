@@ -104,10 +104,11 @@ public:
     void setPenWrites(bool on, Nav&);
     bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
-    // commitInk, then waits (at most kInkFlushMs) until every stroke is an annotation: before
-    // the book closes. Back in the menus and onClose call it.
-    void flushInk(Nav&);
-    static constexpr int64_t kInkFlushMs = 3000;
+    // commitInk, then waits (at most `timeoutMs`) until every stroke is an annotation: before
+    // the book closes. Back in the menus and onClose call it; after one wait has given up, the
+    // next doesn't wait again (the UI would freeze twice for the same strokes).
+    void flushInk(Nav&, int64_t timeoutMs = kInkFlushMs);
+    static constexpr int64_t kInkFlushMs = 6000;
     // One annotation holds at most this much: steady writing doesn't become one huge annotation
     // that a touch of the eraser deletes whole (and that Zotero might refuse).
     static constexpr size_t kMaxInkStrokes = 24, kMaxInkPoints = 2000;
@@ -185,8 +186,9 @@ private:
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
     bool buttonHeld_ = false;  // the side button: the pen taps, no ink
     bool penWrites_ = true, penSeen_ = false;
-    bool wantsSystemInk() const;
+    bool wantsSystemInk() const override;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
+    bool inkFlushGaveUp_ = false;
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
     std::vector<std::vector<Point>> inkPending_;  // drawn, not yet sent

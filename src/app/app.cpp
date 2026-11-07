@@ -237,6 +237,7 @@ void App::presentInk(bool force) {
 // stroke used as a finger is lifted.
 void App::penReset(std::vector<Gesture>& gestures) {
     penNear_ = false;
+    penDown_ = false;
     if (penAsTouch_) {
         penAsTouch_ = false;
         auto g = gestures_.feed(TouchEvent{TouchEvent::Type::Up, kPenFinger, penTouchAt_, clock_()});
@@ -246,6 +247,8 @@ void App::penReset(std::vector<Gesture>& gestures) {
 
 void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     penLastMs_ = clock_();
+    if (p.type == PenEvent::Type::Down) penDown_ = true;
+    if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) penDown_ = false;
     if (p.type == PenEvent::Type::Leave) {
         penNear_ = false;
         penLeftMs_ = p.t_ms ? p.t_ms : clock_();
@@ -277,7 +280,7 @@ bool App::palmBlocked(const TouchEvent& t) {
     auto it = std::find(palmFingers_.begin(), palmFingers_.end(), t.id);
     if (t.type == TouchEvent::Type::Down) {
         // Near only while it keeps reporting: a Leave that never came must not block touch forever.
-        const bool near = penNear_ && clock_() - penLastMs_ < kPenStaleMs;
+        const bool near = penNear_ && clock_() - penLastMs_ < (penDown_ ? kPenDownStaleMs : kPenStaleMs);
         const bool palm = near || (penLeftMs_ >= 0 && t.t_ms - penLeftMs_ < kPalmMs);
         if (palm && it == palmFingers_.end()) palmFingers_.push_back(t.id);
         if (!palm && it != palmFingers_.end()) palmFingers_.erase(it);
@@ -337,6 +340,12 @@ void App::beat(const char* doing) {
 
 void App::step(int timeout_ms) {
     beat("idle");
+    // Wet ink on where no screen takes handwriting (a pause that failed, e.g. the handler was
+    // busy): ask again, whichever screen is showing.
+    if (systemInkOn_) {
+        const Screen* top = visibleTop();
+        if (background_ || !top || !top->wantsSystemInk()) setSystemInk(false);
+    }
     std::vector<InputEvent> events;
     if (!inkDirty_.empty()) timeout_ms = std::min<int>(timeout_ms, static_cast<int>(kInkFrameMs));
     if (!display_.pollEvents(events, timeout_ms)) {
@@ -377,7 +386,7 @@ void App::step(int timeout_ms) {
                 break;
             case InputEvent::Kind::Pen:
                 if (!background_) handlePen(e.pen, gestures);
-                else if (e.pen.type == PenEvent::Type::Leave) penNear_ = false;
+                else if (e.pen.type == PenEvent::Type::Leave) penNear_ = penDown_ = false;
                 break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");

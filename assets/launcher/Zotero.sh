@@ -16,6 +16,7 @@ ZK_HOME=${ZK_HOME:-/mnt/us/zotero}
 ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
 ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
 ZK_DISPLAY=${ZK_DISPLAY:-:0}
+ZK_INK_MARK=${ZK_INK_MARK:-/tmp/zk-wet-ink-session}  # left by the app while the Scribe's wet ink is on
 cd "$ZK_HOME" || exit 1
 mkdir -p log
 U=update
@@ -81,8 +82,9 @@ while [ "$starts" -lt 5 ]; do
     break
 done
 # An end that skipped the app's own clean-up (killed, out of memory): the Scribe's wet ink may be
-# left on over a window that's gone. Turn it off.
-if [ "$code" != 0 ] && [ "$code" != 75 ]; then
+# left on over a window that's gone. Turn it off, only if the app left its session open (an older
+# app, after a rollback, would take the flag for a normal start).
+if [ "$code" != 0 ] && [ "$code" != 75 ] && [ -e "$ZK_INK_MARK" ]; then
     DISPLAY=$ZK_DISPLAY ./bin/zotero --reset-system-ink >> log/zotero.log 2>&1
 fi
 # Whatever happened to the app, let the Kindle sleep again.

@@ -555,3 +555,85 @@ TEST_CASE("pen ink: PDF ink lands where it was drawn on a rotated page, and up i
         }
     }
 }
+
+TEST_CASE("pen ink fix: a failed pause is retried whatever screen is showing") {
+    // Pen PR review I2: only the reader asked again, so wet ink could stay on over Notes or Home.
+    struct Writer : Screen {
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+        void onTick(Nav& nav) override { nav.setSystemInk(true); }
+        bool wantsSystemInk() const override { return true; }
+    };
+    struct Plain : Screen {
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+    };
+    FakeDisplay display;
+    display.hasInk = true;
+    FakeSync sync;
+    FakeKeyboard keyboard;
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    App app(display, lib, sync, keyboard, [] { return int64_t{0}; });
+    app.setRoot(0, std::make_unique<Writer>());
+    for (int i = 1; i < 4; ++i) app.setRoot(i, std::make_unique<Plain>());
+    app.start();
+    app.step(0);
+    REQUIRE(display.inkOn);
+    display.failInk = true;
+    app.push(std::make_unique<Plain>());  // the pause fails
+    app.step(0);
+    CHECK(display.inkOn);
+    display.failInk = false;
+    app.step(0);  // asked again
+    CHECK_FALSE(display.inkOn);
+}
+
+TEST_CASE("pen ink fix: closing the book waits for handwriting once, not twice") {
+    // Pen PR review I3: Back flushed, then the reader's close flushed again (up to twice the wait).
+    InkRig rig(DocType::Pdf, 2000);  // a slow page render holds the ink request up
+    rig.reader->onTick(rig.nav);
+    rig.stroke({{300, 400}, {340, 410}, {380, 430}});
+    rig.reader->turnTo(5);  // a render the ink waits behind
+    rig.reader->flushInk(rig.nav, 100);  // gives up
+    const auto t0 = std::chrono::steady_clock::now();
+    rig.reader->flushInk(rig.nav);  // the close: no second wait
+    CHECK(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(200));
+}
+
+TEST_CASE("pen ink fix: a pen resting on the glass keeps blocking the palm") {
+    // Pen PR review I5: a still pen sends nothing, and "near" lapsed after 2 s.
+    FakeDisplay display;
+    FakeSync sync;
+    NoKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    struct Writing : TouchCounter {  // takes the pen: only the palm's touches could count
+        bool onPen(const PenEvent&, Nav&) override { return true; }
+    };
+    auto s = std::make_unique<Writing>();
+    Writing* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    auto run = [&](int steps) {
+        for (int i = 0; i < steps; ++i) {
+            app.step(0);
+            now += 70;
+        }
+    };
+    display.pen(PenEvent::Type::Near, {600, 700}, now);
+    display.pen(PenEvent::Type::Down, {600, 700}, now);  // resting mid-word
+    run(2);
+    now += 5000;
+    display.tap({200, 900}, now);  // the palm
+    run(6);
+    CHECK(screen->gestures == 0);
+    display.pen(PenEvent::Type::Up, {600, 700}, now);  // lifted, hovering still
+    run(2);
+    now += 5000;
+    display.tap({200, 900}, now);
+    run(6);
+    CHECK(screen->gestures == 0);
+}

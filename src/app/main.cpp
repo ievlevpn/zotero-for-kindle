@@ -405,6 +405,7 @@ int main(int argc, char** argv) {
     log(LogLevel::Info, "zotero exiting");
     if (service) service->stop();
     keyboard->hide();
+    watchdog.beat("closing books");  // a reader may wait for its handwriting (ReaderScreen::kInkFlushMs)
     app.closeAll();                  // readers go first, so their render workers stop...
     RenderWorker::waitForAll(3000);  // ...and their engines close before static destructors run
     return rc;

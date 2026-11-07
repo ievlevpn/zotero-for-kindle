@@ -15,6 +15,14 @@ public:
         Waveform waveform;
     };
 
+    // The Scribe's wet ink: `failInk` makes the next requests fail (the handler didn't answer).
+    bool hasInk = false, inkOn = false, failInk = false;
+    bool systemInk() const override { return hasInk; }
+    bool setSystemInk(bool on) override {
+        if (failInk) return false;
+        inkOn = on;
+        return true;
+    }
     int width() const override { return w; }
     int height() const override { return h; }
     int w = 1236, h = 1547;  // set before the App is made (its canvas takes this size)

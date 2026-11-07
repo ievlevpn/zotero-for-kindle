@@ -913,9 +913,11 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     }
     if (p.type == PenEvent::Type::Near) return false;
     if (p.type == PenEvent::Type::Down) {
-        // EPUB (Zotero has no ink there), menus, selection, the footer, the pen set to tap or its
-        // side button held: the pen is a finger.
-        if (type_ != DocType::Pdf || !penWrites_ || p.button || !penAllowed() || !pageArea().contains(p.pos)) {
+        // EPUB (Zotero has no ink there), menus, selection, the footer, the reading-position
+        // question's banner, the pen set to tap or its side button held: the pen is a finger.
+        const bool onBanner = question_ && positionBannerRect().contains(p.pos);
+        if (type_ != DocType::Pdf || !penWrites_ || p.button || !penAllowed() || !pageArea().contains(p.pos) ||
+            onBanner) {
             if (nav.systemInk()) wipeFrom_ = p.pos;  // the system may have inked it: repaint on lift
             return false;
         }
@@ -961,15 +963,20 @@ void ReaderScreen::commitInk() {
     inkPending_.clear();
 }
 
-void ReaderScreen::flushInk(Nav& nav) {
+void ReaderScreen::flushInk(Nav& nav, int64_t timeoutMs) {
     commitInk();
+    if (inkFlushGaveUp_) timeoutMs = 0;
     using clock = std::chrono::steady_clock;
-    const auto deadline = clock::now() + std::chrono::milliseconds(kInkFlushMs);
+    const auto deadline = clock::now() + std::chrono::milliseconds(timeoutMs);
+    pumpEvents(nav, false);
     while (!inkSent_.empty() && clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
         pumpEvents(nav, false);  // the Ink answers make the annotations
-        if (!inkSent_.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
-    if (!inkSent_.empty()) log(LogLevel::Warn, "reader: handwriting not placed in time, %zu request(s) lost", inkSent_.size());
+    if (!inkSent_.empty()) {
+        inkFlushGaveUp_ = true;
+        log(LogLevel::Warn, "reader: handwriting not placed in time, %zu request(s) lost", inkSent_.size());
+    }
 }
 
 void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {

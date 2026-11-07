@@ -26,8 +26,8 @@ struct Rig {
         fillFixtureLibrary(lib, 10);
         row = *lib.rowFor("IT000003");  // attachment EP000003
     }
-    std::unique_ptr<ReaderScreen> reader() {
-        auto r = std::make_unique<ReaderScreen>(row, "book.epub", DocType::Epub, [] {
+    std::unique_ptr<ReaderScreen> reader(DocType type = DocType::Epub) {
+        auto r = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [] {
             return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
         }, 6);
         nav.visible = r.get();
@@ -223,4 +223,23 @@ TEST_CASE("reader position fix: opening the menus with the question up doesn't a
     r->onGesture(tapAt({600, 900}), rig.nav);  // the middle: menus
     CHECK(r->positionQuestion());
     CHECK(rig.lib.readingPosition("EP000003")->remoteNew);
+}
+
+TEST_CASE("reader position fix: the pen on the question's banner is a finger, not ink") {
+    // Pen PR review I4: writing over the banner hid ink under it and swallowed taps on Go/Stay.
+    Rig rig;
+    rig.readHereTo(12);
+    rig.lib.applyRemotePosition("EP000003", "70", 9);
+    auto r = rig.reader(DocType::Pdf);
+    r->onShow(rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    PenEvent down;
+    down.type = PenEvent::Type::Down;
+    down.pos = ReaderScreen::positionBannerRect().center();
+    CHECK_FALSE(r->onPen(down, rig.nav));  // not taken as ink: it goes on as a touch
+    PenEvent up = down;
+    up.type = PenEvent::Type::Up;
+    r->onPen(up, rig.nav);
+    down.pos = {600, 900};  // the page below the banner still takes handwriting
+    CHECK(r->onPen(down, rig.nav));
 }

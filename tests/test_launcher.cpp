@@ -82,7 +82,8 @@ struct Kindle {
         const std::string cmd = "cd '" + fs::current_path().string() + "' && PATH='" + (root / "fakebin").string() +
                                 ":'\"$PATH\" ZK_HOME='" + home.string() +
                                 "' ZK_LAUNCHER='" + (root / "documents/Zotero.sh").string() + "' ZK_CONFIG='" +
-                                (root / "var/config.json").string() + "' ZK_DISPLAY=none sh '" +
+                                (root / "var/config.json").string() + "' ZK_DISPLAY=none ZK_INK_MARK='" +
+                                (root / "ink-session").string() + "' sh '" +
                                 (root / "documents/Zotero.sh.src").string() + "'";
         return std::system(cmd.c_str());
     }
@@ -183,10 +184,19 @@ TEST_CASE("launcher: an interrupted rollback finishes on the next start") {
 
 TEST_CASE("launcher: after an unclean exit it resets the system ink, not after a normal one") {
     {
-        Kindle k(app("0.2.0", 137));  // killed (SIGKILL)
+        Kindle k(app("0.2.0", 137));  // killed (SIGKILL) with a wet-ink session open
+        writeFile(k.root / "ink-session", "");
         k.launch();
         CHECK(k.runs() == "0.2.0 137\n");
         CHECK(readFile(k.home / "resets") == "reset\n");
+    }
+    {
+        // No session was open (any Kindle without the pen, or an older app after a rollback,
+        // which would take the flag for a normal start): the app isn't started again.
+        Kindle k(app("0.2.0", 137));
+        k.launch();
+        CHECK_FALSE(fs::exists(k.home / "resets"));
+        CHECK(k.runs() == "0.2.0 137\n");
     }
     {
         Kindle k;

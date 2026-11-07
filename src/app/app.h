@@ -41,7 +41,10 @@ public:
     void setSystemInk(bool on) override;
     // Palm rejection: touches are ignored while the pen is in range and this long after it left.
     static constexpr int64_t kPalmMs = 700;
-    static constexpr int64_t kPenStaleMs = 2000;  // no pen event this long: not near any more
+    // No pen event this long: not near any more (a Leave may have been lost). A pen held still
+    // sends nothing, so this is long; on the glass, longer still.
+    static constexpr int64_t kPenStaleMs = 10'000;
+    static constexpr int64_t kPenDownStaleMs = 30'000;
     // Ink reaches the screen at most once per frame, as one update for everything drawn since:
     // an e-ink update per pen sample queues hundreds of them and the line lags in pieces.
     static constexpr int64_t kInkFrameMs = 25;
@@ -136,6 +139,7 @@ private:
     Screen* lastVisible_ = nullptr;          // for onHide
     bool palmBlocked(const TouchEvent&);
     bool penNear_ = false;
+    bool penDown_ = false;  // on the glass
     int64_t penLeftMs_ = -1;
     std::vector<int> palmFingers_;  // fingers that went down while the pen was near
     void presentInk(bool force);

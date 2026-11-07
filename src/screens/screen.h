@@ -61,6 +61,8 @@ public:
     virtual void onSyncEvent(const SyncEvent&, Nav&) {}
     virtual void onShow(Nav&) {}
     virtual void onTick(Nav&) {}  // every loop iteration while visible (timers)
+    // The Scribe's wet ink may draw over this screen (the reader on a PDF page taking handwriting).
+    virtual bool wantsSystemInk() const { return false; }
     // Another screen now shows over this one (or another tab): it stays alive, but gets no ticks.
     virtual void onHide(Nav&) {}
     // The app went to the background (a system dialog, the screensaver), this screen visible.
