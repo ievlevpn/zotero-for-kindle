@@ -21,6 +21,8 @@ def filler(n):
     return out[:n]
 
 
+# Also: a contents entry "Section 2.3" at page 2, right column, line 30 (x and y), and on page 1
+# a link (left column, line 5) to page 3, left column, line 40, given by its height only (FitH).
 c = canvas.Canvas("tests/data/pdf/columns.pdf", pagesize=letter)
 for page in range(1, 5):
     c.setFont("Helvetica", 7)
@@ -31,6 +33,13 @@ for page in range(1, 5):
         for line in range(1, 61):
             label = f"{side}{page}-{line:02d} "
             c.drawString(x, H - 72 - line * LEAD, label + filler(48 - len(label)))
+    if page == 2:
+        c.bookmarkPage("sec23", fit="XYZ", left=318, top=H - 72 - 30 * LEAD + 8)
+        c.addOutlineEntry("Section 2.3", "sec23", level=0)
+    if page == 3:
+        c.bookmarkPage("l40", fit="FitH", top=H - 72 - 40 * LEAD + 8)
+    if page == 1:
+        c.linkAbsolute("to L3-40", "l40", (54, H - 72 - 5 * LEAD - 2, 284, H - 72 - 5 * LEAD + 8))
     c.showPage()
 c.save()
 

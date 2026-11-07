@@ -347,8 +347,8 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     unplaced_ = true;
                     break;
                 }
-                remotePage_ = e.page;
-                if (e.page / views_ == page_ / views_) {  // the page we're on: agreed, nothing to ask
+                remotePage_ = e.page / std::max(1, e.viewsPerPage);  // a PDF page, whatever the View
+                if (remotePage_ == page_ / views_) {  // the page we're on: agreed, nothing to ask
                     nav.library().answerRemotePosition(row_.attachmentKey, true, remoteVersion_);
                     break;
                 }
@@ -356,7 +356,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 std::string text = type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(shownPage(e.page)) + "."
                                                          : "Your computer is at " + std::to_string(pct) + "%" +
                                                                (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".";
-                question_ = PositionQuestion{e.page, text + "\nGo there?"};
+                question_ = PositionQuestion{remotePage_, text + "\nGo there?"};
                 if (visible) nav.damage(positionBannerRect(), Waveform::Ui);
                 break;
             }
@@ -406,7 +406,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 // On Zotero's page, Zotero's exact place (not this page's start) stays the Kindle's.
                 if (!e.zoteroPosition.empty())
                     nav.library().setLocalPosition(row_.attachmentKey,
-                                                   page_ == remotePage_ ? remoteValue_ : e.zoteroPosition);
+                                                   page_ / views_ == remotePage_ ? remoteValue_ : e.zoteroPosition);
                 if (!placeAfterFirstPage_.empty()) {
                     placeId_ = worker_->placeZotero(std::move(placeAfterFirstPage_));
                     placeAfterFirstPage_.clear();
@@ -482,6 +482,8 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
 
 void ReaderScreen::onResize(Nav& nav) {
     commitInk();  // its points belong to the old layout
+    linkPopup_.reset();  // its target is counted in the old layout's pages
+    linkId_ = 0;
     fitLayout(layout_, type_, twoColumnsSetting_);
     bar_.reset();  // anchored to the old page
     if (editor_) closeEditor(nav);
@@ -500,6 +502,11 @@ void ReaderScreen::setTwoColumns(bool on, Nav& nav) {
 
 void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     commitInk();
+    if (linkPopup_ && !(wanted == layout_)) {  // its target is counted in the old layout's pages
+        nav.damage(linkPopupRect(), Waveform::Quality);
+        linkPopup_.reset();
+    }
+    linkId_ = 0;
     Layout l = wanted;
     fitLayout(l, type_, twoColumnsSetting_);  // the margin size in pixels, the columns
     if (l == layout_ || !worker_ || !ready()) return;
@@ -898,8 +905,7 @@ void ReaderScreen::draw(Canvas& canvas) {
         else
             drawText(cr, l.text, {kSerif, 8.5, 400}, {kMargin, p.y + 88, w, textBottom - p.y - 88}, 12);
         if (!button.empty())
-            drawButton(cr, button, l.kind == LinkInfo::Kind::Note ? "Go to note" : "Go to page " + std::to_string(l.targetPage + 1),
-                       false);
+            drawButton(cr, button, linkButtonLabel(), false);
     }
     if (menus_) menus_->draw(canvas);
 }
@@ -931,7 +937,9 @@ void ReaderScreen::back(Nav& nav) {
     turnsSinceJump_ = 0;
     commitInk();
     turning_ = true;
-    worker_->showPosition(to.pos);
+    // The page (the view, in PDF column view) while its layout lasts; else the position.
+    if (to.page >= 0) worker_->show(to.page);
+    else worker_->showPosition(to.pos);
     nav.damage(footerArea(), Waveform::Ui);
 }
 
@@ -987,6 +995,18 @@ void ReaderScreen::goToPage(int page) {
 }
 
 int ReaderScreen::shownPage(int page) const { return page / views_ + 1; }
+
+void ReaderScreen::jumpToHit(const SearchHit& h) {
+    // A PDF hit knows its view (column view); its position only the page.
+    if (type_ != DocType::Pdf || h.page < 0 || (pageCount_ > 0 && h.page >= pageCount_)) return jumpTo(h.pos);
+    menus_.reset();
+    if (!worker_) return;
+    linkId_ = 0;
+    markJumpOrigin();
+    commitInk();
+    turning_ = true;
+    worker_->show(h.page);
+}
 int ReaderScreen::shownPageCount() const { return (pageCount_ + views_ - 1) / views_; }
 
 // --- Links ---------------------------------------------------------------------------------
@@ -1036,6 +1056,11 @@ Rect ReaderScreen::linkPopupRect() const {
     return {0, page.y + page.h - h, page.w, h};
 }
 
+std::string ReaderScreen::linkButtonLabel() const {
+    if (!linkPopup_) return "";
+    return linkPopup_->kind == LinkInfo::Kind::Note ? "Go to note" : "Go to page " + std::to_string(shownPage(linkPopup_->targetPage));
+}
+
 Rect ReaderScreen::linkButtonRect() const {
     if (!linkPopup_ || linkPopup_->kind == LinkInfo::Kind::Web || linkPopup_->targetPage < 0) return {};
     const Rect p = linkPopupRect();
@@ -1063,7 +1088,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (go && worker_) {
         markJumpOrigin();
         turning_ = true;
-        worker_->show(question_->page);
+        worker_->show(question_->page * views_);  // its first view (PDF column view)
     }
     question_.reset();
     nav.damage(positionBannerRect(), Waveform::Ui);

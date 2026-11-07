@@ -141,3 +141,88 @@ TEST_CASE("pdf columns, reader: Contents shows PDF page numbers") {
     chapter2.page = 30;  // FakeEngine: a chapter every 10 pages, so page 11's first view
     CHECK(contents->pageNumberText(chapter2) == "11");
 }
+
+TEST_CASE("pdf columns, reader: Back returns to the view you left, not its page's first") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.columns(*r);
+    r->turnTo(13);  // page 5's second view, with links
+    REQUIRE(rig.waitPage(*r, 13));
+    REQUIRE(rig.until(*r, [&] { return !r->links().empty(); }));
+    r->onGesture(tapAt({560, 420}), rig.nav);  // the jump
+    REQUIRE(rig.waitPage(*r, 33));
+    r->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
+    CHECK(rig.waitPage(*r, 13));
+}
+
+TEST_CASE("pdf columns, reader: a search hit opens on its view") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.columns(*r);
+    SearchHit hit;
+    hit.page = 26;  // page 9's third view
+    hit.pos = {"pos:720"};
+    r->jumpToHit(hit);
+    CHECK(rig.waitPage(*r, 26));
+}
+
+TEST_CASE("pdf columns, reader: a reference's Go to page names the PDF page") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.columns(*r);
+    r->turnTo(13);
+    REQUIRE(rig.waitPage(*r, 13));
+    REQUIRE(rig.until(*r, [&] { return !r->links().empty(); }));
+    r->onGesture(tapAt({650, 1020}), rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->linkPopup().has_value(); }));
+    CHECK(r->linkButtonLabel() == "Go to page 15");  // view 43: page 15's second view
+}
+
+TEST_CASE("pdf columns, reader: a link pop-up closes when the view changes") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    r->turnTo(3);
+    REQUIRE(rig.waitPage(*r, 3));
+    REQUIRE(rig.until(*r, [&] { return !r->links().empty(); }));
+    r->onGesture(tapAt({650, 1020}), rig.nav);
+    REQUIRE(rig.until(*r, [&] { return r->linkPopup().has_value(); }));
+    Layout l = r->layout();
+    l.columnView = true;
+    r->applyLayout(l, rig.nav);
+    CHECK_FALSE(r->linkPopup());
+}
+
+TEST_CASE("pdf columns, reader: the slider lands at a page's first view") {
+    Rig rig;
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 0));
+    rig.columns(*r);
+    r->onGesture(tapAt({618, 700}), rig.nav);
+    REQUIRE(r->menusOpen());
+    const Rect s = ReaderMenus::sliderRect();
+    for (int x : {s.x + s.w / 3 + 1, s.x + s.w / 2 + 2, s.x + s.w * 2 / 3 + 3}) {
+        r->onGesture(tapAt({x, s.y + s.h / 2}), rig.nav);
+        REQUIRE(rig.until(*r, [&] { return !r->turning(); }));
+        CHECK(r->page() % 3 == 0);
+    }
+}
+
+TEST_CASE("pdf columns, reader: the computer's page is still that page after the View changes") {
+    Rig rig;
+    FakeEngine probe;
+    rig.lib.saveReading("IT000003", probe.positionOfPage(12).value, 0.1);
+    rig.lib.setLocalPosition("EP000003", "12");
+    rig.lib.markPositionSent("EP000003", "12", 5);
+    rig.lib.applyRemotePosition("EP000003", "70", 9);
+    auto r = rig.open();
+    REQUIRE(rig.waitPage(*r, 12));
+    REQUIRE(rig.until(*r, [&] { return r->positionQuestion().has_value(); }));
+    rig.columns(*r);  // the question stays
+    REQUIRE(r->positionQuestion());
+    r->onGesture(tapAt(ReaderScreen::positionGoRect().center()), rig.nav);
+    CHECK(rig.waitPage(*r, 210));  // page 71's first view
+}

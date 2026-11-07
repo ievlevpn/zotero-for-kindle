@@ -106,15 +106,23 @@ public:
         return page >= 0 && page < pageCount() ? page : -1;
     }
     // Links on every page ending in 3: a note, a jump (20 pages on), a web address, a note on a
-    // dagger 4 px wide, and a web address running into the right edge.
+    // dagger 4 px wide, a web address running into the right edge, and a PDF-style reference
+    // (30 pages on, shown in a pop-up with Go to page).
     std::vector<LinkBox> links(int page) override {
         if (page % 10 != 3) return {};
         return {{{200, 400, 60, 40}, 0}, {{500, 400, 120, 40}, 1}, {{800, 400, 120, 40}, 2},
-                {{300, 900, 4, 10}, 3},  {{900, 1200, 330, 40}, 4}};
+                {{300, 900, 4, 10}, 3},  {{900, 1200, 330, 40}, 4},  {{600, 1000, 100, 40}, 5}};
     }
     std::optional<LinkInfo> link(int page, int index) override {
-        if (page % 10 != 3 || index < 0 || index > 4) return std::nullopt;
+        if (page % 10 != 3 || index < 0 || index > 5) return std::nullopt;
         LinkInfo l;
+        if (index == 5) {
+            l.kind = LinkInfo::Kind::Reference;
+            l.targetPage = page + 30;
+            l.label = "Page " + std::to_string(l.targetPage / viewsPerPage() + 1);
+            l.text = "[12] A reference.";
+            return l;
+        }
         if (index == 0 || index == 3) {
             l.kind = LinkInfo::Kind::Note;
             l.label = "Footnote 3";

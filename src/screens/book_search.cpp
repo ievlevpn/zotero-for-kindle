@@ -119,10 +119,10 @@ void BookSearchScreen::onGesture(const Gesture& g, Nav& nav) {
     auto rects = hitRects();
     for (size_t i = 0; i < rects.size(); ++i)
         if (rects[i].contains(g.pos)) {
-            const DocPosition pos = hits_[i].pos;
+            const SearchHit hit = hits_[i];
             ReaderScreen& r = reader_;
             leave(nav);
-            r.jumpTo(pos);
+            r.jumpToHit(hit);
             return;
         }
 }

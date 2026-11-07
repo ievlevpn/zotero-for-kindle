@@ -67,6 +67,9 @@ public:
     // pages are views of them.
     int shownPage(int page) const;
     int shownPageCount() const;
+    int viewsPerPage() const { return views_; }
+    void jumpToHit(const SearchHit&);    // in-book search: to the hit's page (its view, in a PDF)
+    std::string linkButtonLabel() const;  // the link pop-up's button: Go to note / Go to page N
     std::vector<TocEntry> bookmarks() const;  // by page, for Contents
     void goToPage(int page);                  // Go to… (a jump)
     // Links: a tap on one asks the worker what it is; a note, a PDF reference or a web address

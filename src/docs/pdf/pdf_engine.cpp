@@ -420,8 +420,11 @@ int PdfEngine::pageOf(const DocPosition& pos) {
 }
 
 std::vector<TocEntry> PdfEngine::tocInViews() {
-    std::vector<TocEntry> out = toc_;  // toc_ counts PDF pages
-    for (auto& t : out) t.page *= viewsPerPage();
+    std::vector<TocEntry> out = toc_;  // toc_ counts PDF pages: each to the view with its heading
+    for (size_t i = 0; i < out.size(); ++i) {
+        const auto [x, y] = tocPlaces_[i];
+        out[i].page = std::isnan(y) ? out[i].page * viewsPerPage() : viewAt(out[i].page, std::isnan(x) ? 0 : x, y);
+    }
     return out;
 }
 
@@ -436,7 +439,10 @@ std::vector<TocEntry> PdfEngine::toc() {
             int page = -1;
             fz_try(ctx_) { page = fz_page_number_from_location(ctx_, doc_, o->page); }
             fz_catch(ctx_) { page = -1; }
-            if (o->title && page >= 0) toc_.push_back({o->title, level, {"p:" + std::to_string(page)}, page});
+            if (o->title && page >= 0) {
+                toc_.push_back({o->title, level, {"p:" + std::to_string(page)}, page});
+                tocPlaces_.push_back({o->x, o->y});
+            }
             walk(o->down, level + 1);
         }
     };
@@ -603,7 +609,8 @@ std::optional<LinkInfo> PdfEngine::link(int page, int index) {
     fz_catch(ctx_) { target = -1; }
     if (target < 0 || target >= pdfPages()) return std::nullopt;
     info.kind = LinkInfo::Kind::Reference;
-    info.targetPage = std::isnan(x) || std::isnan(y) ? target * viewsPerPage() : viewAt(target, x, y);
+    // The view with the target; a height alone (FitH) picks the slice, in the first column.
+    info.targetPage = std::isnan(y) ? target * viewsPerPage() : viewAt(target, std::isnan(x) ? 0 : x, y);
     info.target = {};  // the view is what to show (a position would open the page's first)
     info.label = "Page " + std::to_string(target + 1);
     info.text = textAt(target, x, y);

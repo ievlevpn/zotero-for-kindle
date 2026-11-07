@@ -409,7 +409,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type == GestureType::DragEnd) {
-        if (dragPage_) reader_.turnTo(sliderPage(g.pos.x));
+        if (dragPage_) reader_.turnTo(sliderPage(g.pos.x) / reader_.viewsPerPage() * reader_.viewsPerPage());
         dragPage_.reset();
         nav.damage(panelRect(), Waveform::Ui);  // the grays back after the fast drag
         return;
@@ -457,7 +457,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (s.contains(g.pos)) {
-        reader_.turnTo(sliderPage(g.pos.x));
+        reader_.turnTo(sliderPage(g.pos.x) / reader_.viewsPerPage() * reader_.viewsPerPage());  // a page's start
         return;
     }
     if (!topBarRect().contains(g.pos) && !panelRect().contains(g.pos) && !(displayOpen_ && displayPanelRect().contains(g.pos)))

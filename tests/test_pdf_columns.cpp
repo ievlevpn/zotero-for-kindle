@@ -178,3 +178,23 @@ TEST_CASE("pdf columns: every line is whole on some view of its page, mirrored m
         }
     }
 }
+
+TEST_CASE("pdf columns: a contents entry lands on the view with its heading") {
+    auto e = openPdf("columns.pdf", true);
+    const int views = e->viewsPerPage();
+    const auto toc = e->toc();
+    REQUIRE(toc.size() == 1);
+    CHECK(toc[0].page / views == 1);
+    CHECK(has(textOf(*e, toc[0].page), "R2-30"));
+}
+
+TEST_CASE("pdf columns: a link to a height only (FitH) lands on the slice with it") {
+    auto e = openPdf("columns.pdf", true);
+    const int views = e->viewsPerPage();
+    const auto boxes = e->links(0);
+    REQUIRE_FALSE(boxes.empty());
+    auto l = e->link(0, boxes[0].index);
+    REQUIRE(l);
+    CHECK(l->targetPage / views == 2);
+    CHECK(has(textOf(*e, l->targetPage), "L3-40"));
+}

@@ -89,6 +89,7 @@ private:
     fz_document* doc_ = nullptr;
     Layout layout_;
     std::vector<TocEntry> toc_;  // in PDF pages
+    std::vector<std::array<float, 2>> tocPlaces_;  // each entry's x, y on its page (NaN: unknown)
     std::vector<TocEntry> tocInViews();
     bool tocLoaded_ = false;
     std::map<int, std::array<float, 4>> contentBoxes_;
