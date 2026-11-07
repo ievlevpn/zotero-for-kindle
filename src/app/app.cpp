@@ -42,7 +42,7 @@ void App::setRoot(int tab, std::unique_ptr<Screen> s) {
 Screen* App::visibleTop() const { return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get(); }
 
 namespace {
-Rect toastRect() { return {kMargin, 1547 - kTabBarH - 130, 1236 - 2 * kMargin, 100}; }
+
 }  // namespace
 
 void App::toast(const std::string& text) {
@@ -51,6 +51,8 @@ void App::toast(const std::string& text) {
     toastUntil_ = clock_() + 3000;
     pending_.push_back({toastRect(), Waveform::Ui});
 }
+
+Rect App::toastRect() const { return {kMargin, canvas_.height() - kTabBarH - 130, canvas_.width() - 2 * kMargin, 100}; }
 
 Rect App::tabBar() const { return {0, canvas_.height() - kTabBarH, canvas_.width(), kTabBarH}; }
 

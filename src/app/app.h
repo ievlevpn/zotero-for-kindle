@@ -27,6 +27,8 @@ public:
     int run();                  // until quit or the window closes; returns the exit code
     bool quitting() const { return quit_; }
     const std::string& lastToast() const { return lastToast_; }
+    Rect tabBarRect() const { return tabBar(); }
+    Rect toastRect() const;  // above the tab bar, centred
 
     // Nav
     void push(std::unique_ptr<Screen>) override;

@@ -124,9 +124,10 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         const Screen* top() const override { return nullptr; }
     } nav(lib, sync);
     s->onShow(nav);
-    Canvas c(1236, 1547);
+    Canvas c(metrics().width, metrics().height);
     s->draw(c);
-    drawTabBar(c.cr(), {0, 1547 - kTabBarH, 1236, kTabBarH}, {"Home", "Library", "Collections", "Notes"}, 0);
+    drawTabBar(c.cr(), {0, metrics().height - kTabBarH, metrics().width, kTabBarH}, {"Home", "Library", "Collections", "Notes"},
+               0);
     return cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 

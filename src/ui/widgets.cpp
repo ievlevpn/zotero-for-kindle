@@ -1,5 +1,7 @@
 #include "ui/widgets.h"
 
+#include "ui/metrics.h"
+
 #include <algorithm>
 
 #include "ui/paint.h"
@@ -200,7 +202,7 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
 Rect headerBackRect() { return {0, 0, 150, kHeaderH}; }
 
 void drawHeader(cairo_t* cr, const std::string& title, bool back) {
-    fillRect(cr, {0, 0, 1236, kHeaderH}, 255);
+    fillRect(cr, {0, 0, metrics().width, kHeaderH}, 255);
     int x = kMargin;
     if (back) {
         gray(cr, kInk);
@@ -212,7 +214,7 @@ void drawHeader(cairo_t* cr, const std::string& title, bool back) {
         cairo_stroke(cr);
         x = kMargin + 64;
     }
-    drawText(cr, title, {kSans, back ? 13.0 : 17.0, 700}, {x, back ? 40 : 18, 1236 - x - kMargin, 100}, 1);
+    drawText(cr, title, {kSans, back ? 13.0 : 17.0, 700}, {x, back ? 40 : 18, metrics().width - x - kMargin, 100}, 1);
 }
 
 void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren) {
