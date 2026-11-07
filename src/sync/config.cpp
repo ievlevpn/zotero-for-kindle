@@ -59,6 +59,10 @@ bool saveConfig(const std::string& dir, const Config& c) {
     const json j = {{"userId", c.userId}, {"apiKey", c.apiKey}, {"webdavUrl", c.webdavUrl},
                     {"webdavUser", c.webdavUser}, {"webdavPassword", c.webdavPassword}};
     const std::string text = j.dump(2) + "\n";
+    if (::mkdir(dir.c_str(), 0700) != 0 && errno != EEXIST) {
+        log(LogLevel::Error, "config: can't create %s: %s", dir.c_str(), std::strerror(errno));
+        return false;
+    }
     const std::string path = dir + "/config.json";
     const std::string tmp = path + ".tmp";
     int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);

@@ -26,7 +26,8 @@ bool isZoteroApi(const std::string& url) { return url.rfind("https://api.zotero.
 // Why the request must not go out, or empty if it may.
 std::string refusal(const HttpRequest& req, const std::function<bool(const std::string&)>& ours) {
     const std::string& m = req.method;
-    if (m == "GET" || m == "HEAD" || m == "PROPFIND") return {};
+    if (m == "GET" || m == "HEAD" || m == "PROPFIND")
+        return req.body.empty() ? std::string{} : m + " with a body";  // curl would send it as a POST
     if (m == "DELETE") return "DELETE is never sent";
     if (!isZoteroApi(req.url)) return m + " outside the Zotero API";
 

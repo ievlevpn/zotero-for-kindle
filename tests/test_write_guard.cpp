@@ -99,3 +99,10 @@ TEST_CASE("write guard passes reads") {
     CHECK(rig.send("PROPFIND", "https://dav.example.org/zotero/").status == 207);
     CHECK(rig.inner.sent.size() == 3);
 }
+
+TEST_CASE("write guard blocks a read method that carries a body (curl would send it as POST)") {
+    Rig rig;
+    CHECK(blocked(rig.send("GET", "https://api.zotero.org/users/1/items", R"([{"key":"ABCD1234"}])")));
+    CHECK(blocked(rig.send("PROPFIND", "https://dav.example.org/zotero/", "<x/>")));
+    CHECK(rig.inner.sent.empty());
+}

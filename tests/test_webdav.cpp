@@ -132,3 +132,52 @@ TEST_CASE("webdav: a missing .zip after the .prop is NotOnServer") {
     CHECK(err.kind == ErrorKind::NotOnServer);
     CHECK(rig.destEmpty());
 }
+
+TEST_CASE("webdav: a hostile or odd filename never leaves the attachment's folder") {
+    for (const std::string name : {"../../escape.epub", "/tmp/zk-abs-escape.epub", "", "..", "sub/dir.epub"}) {
+        Rig rig;
+        rig.serveFixture();
+        AttachmentRecord a = rig.attachment();
+        a.filename = name;
+        UserError err;
+        INFO("filename: " << name);
+        REQUIRE(rig.dav.download(a, rig.dest.string(), &err));
+        const fs::path saved = rig.dest / "ABCD1234" / localFileName(a);
+        CHECK(fs::exists(saved));
+        CHECK(saved.parent_path() == rig.dest / "ABCD1234");
+        CHECK(std::distance(fs::directory_iterator(rig.dest), fs::directory_iterator()) == 1);
+        CHECK_FALSE(fs::exists(rig.dest.parent_path() / "escape.epub"));
+        CHECK_FALSE(fs::exists("/tmp/zk-abs-escape.epub"));
+    }
+    AttachmentRecord a;
+    a.key = "ABCD1234";
+    a.contentType = "application/epub+zip";
+    CHECK(localFileName(a) == "ABCD1234.epub");
+    a.filename = "../x/Book.epub";
+    CHECK(localFileName(a) == "Book.epub");
+}
+
+TEST_CASE("webdav: not enough space is reported as DiskFull before unpacking") {
+    Rig rig;
+    rig.serveFixture();
+    rig.dav.setFreeSpaceProbe([](const std::string&) { return uint64_t{1000}; });  // 1 KB free
+    UserError err;
+    CHECK_FALSE(rig.dav.download(rig.attachment(), rig.dest.string(), &err));
+    CHECK(err.kind == ErrorKind::DiskFull);
+    CHECK(err.message == "Not enough space for book.epub.");
+    CHECK(rig.destEmpty());
+}
+
+TEST_CASE("webdav: a failed write during the download is DiskFull when the disk is full") {
+    Rig rig;
+    rig.http.expect("GET", kBase + "ABCD1234.prop", FakeHttp::ok(slurp("tests/data/webdav/ABCD1234.prop")));
+    HttpResponse writeFailed;
+    writeFailed.curlCode = 23;
+    writeFailed.curlError = "Failure writing output to destination";
+    rig.http.expect("GET", kBase + "ABCD1234.zip", writeFailed);
+    rig.dav.setFreeSpaceProbe([](const std::string&) { return uint64_t{0}; });
+    UserError err;
+    CHECK_FALSE(rig.dav.download(rig.attachment(), rig.dest.string(), &err));
+    CHECK(err.kind == ErrorKind::DiskFull);
+    CHECK(rig.destEmpty());
+}

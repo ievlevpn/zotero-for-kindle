@@ -11,6 +11,7 @@ extern "C" {
 #include <cstdio>
 #include <filesystem>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <utime.h>
 
 namespace zk {
@@ -29,6 +30,12 @@ struct Cleanup {
     }
 };
 
+uint64_t statvfsFree(const std::string& path) {
+    struct statvfs st {};
+    if (::statvfs(path.c_str(), &st) != 0) return UINT64_MAX;  // unknown: don't block on it
+    return static_cast<uint64_t>(st.f_bavail) * st.f_frsize;
+}
+
 UserError fileError(ErrorKind kind, std::string message, std::string details) {
     return UserError{kind, std::move(message), std::move(details)};
 }
@@ -39,6 +46,21 @@ void setError(UserError* err, UserError e) {
 }
 
 }  // namespace
+
+std::string localFileName(const AttachmentRecord& a) {
+    // The filename comes from server data: never let it name a path outside <destDir>/<key>/.
+    std::string name = a.filename;
+    if (size_t slash = name.find_last_of("/\\"); slash != std::string::npos) name = name.substr(slash + 1);
+    if (name.empty() || name == "." || name == "..") {
+        const std::string ext = a.contentType == "application/pdf"        ? ".pdf"
+                                : a.contentType == "application/epub+zip" ? ".epub"
+                                                                          : "";
+        name = a.key + ext;
+    }
+    return name;
+}
+
+void WebDav::setFreeSpaceProbe(std::function<uint64_t(const std::string&)> f) { freeSpace_ = std::move(f); }
 
 std::string md5OfFile(const std::string& path) {
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -59,7 +81,8 @@ std::string md5OfFile(const std::string& path) {
 }
 
 WebDav::WebDav(Http& http, std::string baseUrl, std::string user, std::string password)
-    : http_(http), base_(std::move(baseUrl)), user_(std::move(user)), password_(std::move(password)), host_(hostOf(base_)) {
+    : http_(http), base_(std::move(baseUrl)), user_(std::move(user)), password_(std::move(password)), host_(hostOf(base_)),
+      freeSpace_(statvfsFree) {
     if (!base_.empty() && base_.back() != '/') base_ += '/';
 }
 
@@ -103,7 +126,13 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
     HttpRequest req = get(a.key + ".zip");
     req.outFile = zipPath.string();
     req.timeoutS = 600;
+    const std::string name = localFileName(a);
+    auto noSpace = [&](const std::string& details) {
+        return fileError(ErrorKind::DiskFull, "Not enough space for " + name + ".", details);
+    };
     HttpResponse r = http_.send(req);
+    if (r.curlCode == 23 /* CURLE_WRITE_ERROR */ && freeSpace_(destDir) < (1u << 20))
+        return setError(err, noSpace("curl 23: " + r.curlError)), false;
     if (r.curlCode || r.status != 200) return setError(err, fail(r)), false;
 
     mz_zip_archive zip{};
@@ -113,11 +142,20 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
                false;
     int index = mz_zip_reader_locate_file(&zip, a.filename.c_str(), nullptr, 0);
     if (index < 0 && mz_zip_reader_get_num_files(&zip) == 1) index = 0;  // name stored differently
+    if (index >= 0) {
+        mz_zip_archive_file_stat st;
+        if (mz_zip_reader_file_stat(&zip, static_cast<mz_uint>(index), &st) && st.m_uncomp_size > freeSpace_(destDir)) {
+            mz_zip_reader_end(&zip);
+            return setError(err, noSpace(std::to_string(st.m_uncomp_size) + " bytes needed")), false;
+        }
+    }
     fs::create_directories(stage, ec);
-    const fs::path staged = stage / a.filename;
+    const fs::path staged = stage / name;
     const bool extracted = index >= 0 && mz_zip_reader_extract_to_file(&zip, static_cast<mz_uint>(index), staged.c_str(), 0);
+    const bool outOfSpace = !extracted && index >= 0 && freeSpace_(destDir) < (1u << 20);
     const std::string zipErr = mz_zip_get_error_string(mz_zip_get_last_error(&zip));
     mz_zip_reader_end(&zip);
+    if (outOfSpace) return setError(err, noSpace("zip: " + zipErr)), false;
     if (!extracted)
         return setError(err, fileError(index < 0 ? ErrorKind::NotOnServer : ErrorKind::Other,
                                        index < 0 ? a.filename + " isn't in the server's copy." : "Can't unpack " + a.filename + ".",
@@ -127,7 +165,7 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
     const std::string md5 = md5OfFile(staged.string());
     if (md5.empty() || md5 != a.md5)
         return setError(err, fileError(ErrorKind::Checksum,
-                                       a.filename + " doesn't match Zotero's copy (checksum). Sync it again from your computer.",
+                                       name + " doesn't match Zotero's copy (checksum). Sync it again from your computer.",
                                        "md5 " + md5 + " != " + a.md5)),
                false;
 
@@ -139,10 +177,8 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
     }
     const fs::path finalDir = fs::path(destDir) / a.key;
     fs::create_directories(finalDir, ec);
-    fs::rename(staged, finalDir / a.filename, ec);
-    if (ec)
-        return setError(err, fileError(ErrorKind::DiskFull, "Can't save " + a.filename + ": " + ec.message() + ".", ec.message())),
-               false;
+    fs::rename(staged, finalDir / name, ec);
+    if (ec) return setError(err, fileError(ErrorKind::Other, "Can't save " + name + ": " + ec.message() + ".", ec.message())), false;
     return true;
 }
 

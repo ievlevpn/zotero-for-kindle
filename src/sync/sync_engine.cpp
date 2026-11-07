@@ -22,6 +22,15 @@ std::string newLocalKey() {
     return k;
 }
 
+bool isZoteroKey(const std::string& k) {
+    return k.size() == 8 && k.find_first_not_of("23456789ABCDEFGHIJKLMNPQRSTUVWXYZ") == std::string::npos;
+}
+
+bool sameContent(const AnnotationRecord& a, const AnnotationRecord& b) {
+    return a.type == b.type && a.text == b.text && a.comment == b.comment && a.color == b.color &&
+           a.position == b.position && a.sortIndex == b.sortIndex && a.tags == b.tags;
+}
+
 bool trashed(const json& obj) {
     const json& d = obj.contains("data") ? obj["data"] : json::object();
     if (!d.is_object() || !d.contains("deleted")) return false;
@@ -40,10 +49,8 @@ json annotationJson(const AnnotationRecord& a) {
               {"annotationComment", a.comment},   {"annotationColor", a.color},    {"annotationPageLabel", a.pageLabel},
               {"annotationSortIndex", a.sortIndex}, {"annotationPosition", a.position}, {"tags", tags}};
     if (a.type == "highlight" || a.type == "underline") j["annotationText"] = a.text;
-    if (a.version > 0) {
-        j["key"] = a.key;
-        j["version"] = a.version;
-    }
+    j["key"] = a.key;  // client-made for new ones, so a lost response can't create a duplicate
+    if (a.version > 0) j["version"] = a.version;
     return j;
 }
 
@@ -150,7 +157,6 @@ SyncReport SyncEngine::pullAnnotationsFor(const std::string& attachmentKey,
     SyncReport rep;
     rep.fromVersion = rep.toVersion = lib_.libraryVersion();
     try {
-        lib_.trackAttachment(attachmentKey);
         UserError err;
         auto listing = api_.annotationVersions(attachmentKey, 0, &err);
         if (!listing) {
@@ -159,7 +165,10 @@ SyncReport SyncEngine::pullAnnotationsFor(const std::string& attachmentKey,
             std::vector<std::string> changed;
             for (const auto& [key, version] : listing->versions)
                 if (lib_.objectVersion(key) < version) changed.push_back(key);
-            fetchAndApply("items", "annotations", changed, rep, progress ? progress : [](const SyncProgress&) {});
+            // Tracked only once complete: regular pulls only bring later changes, so a book
+            // tracked after a partial download would stay incomplete for good.
+            if (fetchAndApply("items", "annotations", changed, rep, progress ? progress : [](const SyncProgress&) {}))
+                lib_.trackAttachment(attachmentKey);
         }
     } catch (const DbError&) {
         rep.error = lib_.lastError();
@@ -204,12 +213,30 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                 }
             }
             lib_.upsertAttachment(incoming);
+            if (incoming.parentKey.empty()) {
+                // A file without a parent item is a top-level entry in Zotero: list and index it.
+                const bool known = lib_.objectVersion(key) > 0;
+                lib_.upsertItem(parseItem(obj));
+                ++(known ? rep.itemsUpdated : rep.itemsAdded);
+            }
             break;
         }
         case ObjectKind::Annotation: {
             AnnotationRecord incoming = parseAnnotation(obj);
             if (auto local = lib_.annotation(key)) {
                 incoming.createdHere = local->createdHere;
+                if (local->createdHere && local->dirty && local->version == 0) {
+                    // Our own upload landed although its answer was lost: it is not a conflict.
+                    if (sameContent(*local, incoming)) {
+                        lib_.upsertAnnotation(incoming);
+                    } else {  // edited again since: keep the edit, now based on the server version
+                        AnnotationRecord mine = *local;
+                        mine.version = version;
+                        lib_.upsertAnnotation(mine);
+                    }
+                    ++rep.annotations;
+                    break;
+                }
                 if (local->dirty && version > local->version) {
                     // Edited on both sides: Zotero's version wins, the Kindle edit is kept as a conflict.
                     AnnotationRecord mine = *local;
@@ -251,23 +278,31 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
     if (auto a = lib_.annotation(key)) {
         if (a->dirty) {
             // Deleted on the desktop, edited here: the deletion stands on the server; the Kindle
-            // edit stays as a local conflict (re-applying it later creates a new annotation).
-            a->dirty = false;
-            a->conflict = true;
-            a->version = 0;
-            lib_.upsertAnnotation(*a);
-            lib_.setObjectVersion(key, 0);
+            // edit stays as a local conflict under a key of its own, so the server's key coming
+            // back (restored from the trash) can't overwrite it.
+            AnnotationRecord mine = *a;
+            mine.key = newLocalKey();
+            mine.dirty = false;
+            mine.conflict = true;
+            mine.createdHere = true;
+            mine.version = 0;
+            lib_.removeObject("annotation", key);
+            lib_.upsertAnnotation(mine);
             ++rep.conflicts;
         } else if (!a->conflict) {
             lib_.removeObject("annotation", key);
         }
         return;
     }
-    if (lib_.attachment(key)) {
+    if (auto att = lib_.attachment(key)) {
         rep.conflicts += conflictUnsynced(key);
         for (const auto& a : lib_.annotationsFor(key))
             if (!a.conflict) lib_.removeObject("annotation", a.key);
         lib_.removeObject("attachment", key);
+        if (att->parentKey.empty()) {  // a standalone file's list entry
+            lib_.removeObject("item", key);
+            ++rep.itemsRemoved;
+        }
         return;
     }
     if (lib_.objectVersion(key) > 0) ++rep.itemsRemoved;  // notes count too; they share the key space
@@ -301,6 +336,18 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
     std::vector<AnnotationRecord> pending;
     for (auto& a : lib_.dirtyAnnotations())
         if (a.createdHere && !a.conflict) pending.push_back(std::move(a));
+    {
+        // New annotations are sent with a key made here (committed before sending), so if the
+        // answer is lost, the next pull recognises the object as our own write.
+        auto tx = lib_.begin();
+        for (auto& a : pending) {
+            if (a.version > 0 || isZoteroKey(a.key)) continue;
+            lib_.removeObject("annotation", a.key);
+            a.key = newLocalKey();
+            lib_.upsertAnnotation(a);
+        }
+        tx.commit();
+    }
     for (size_t i = 0; i < pending.size(); i += kBatch) {
         const size_t end = std::min(pending.size(), i + kBatch);
         json batch = json::array();

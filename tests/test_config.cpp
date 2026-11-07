@@ -102,3 +102,13 @@ TEST_CASE("config: the env file gives the five ZK_ values and ignores comments")
     CHECK(c->apiKey == "abcdefghijklmnopqrstuvwx");
     CHECK_FALSE(configFromEnvFile((dir.path / "nope.env").string()));
 }
+
+TEST_CASE("config: saving creates the private directory with mode 0700") {
+    TempDir parent;
+    const fs::path dir = parent.path / "zotero";
+    REQUIRE(saveConfig(dir.string(), sample()));
+    CHECK(loadConfig(dir.string()));
+    struct stat st {};
+    REQUIRE(::stat(dir.c_str(), &st) == 0);
+    CHECK((st.st_mode & 0777) == 0700);
+}

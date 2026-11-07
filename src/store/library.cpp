@@ -224,13 +224,15 @@ void Library::reindex(const std::string& itemKey) {
         "INSERT INTO item_fts(rowid, title, creators, publication, tags, notes) "
         "SELECT i.rowid, i.title, i.creatorsText, i.publication, i.tagsText, "
         "  (SELECT coalesce(group_concat(n.text || ' ' || n.comment || ' ' || n.tags, ' '), '') "
-        "   FROM annotations n JOIN attachments a ON n.parentKey = a.key WHERE a.parentKey = i.key) "
+        "   FROM annotations n JOIN attachments a ON n.parentKey = a.key "
+        "   WHERE a.parentKey = i.key OR (a.key = i.key AND a.parentKey = '')) "
         "FROM items i WHERE i.key = ?");
     ins.bind(1, itemKey).step();
 }
 
 std::string Library::itemOfAttachment(const std::string& attachmentKey) {
-    Stmt st = db_.prepare("SELECT parentKey FROM attachments WHERE key = ?");
+    // A standalone file is its own list entry.
+    Stmt st = db_.prepare("SELECT CASE WHEN parentKey = '' THEN key ELSE parentKey END FROM attachments WHERE key = ?");
     st.bind(1, attachmentKey);
     return st.step() ? st.text(0) : std::string{};
 }
@@ -278,8 +280,9 @@ void Library::upsertAttachment(const AttachmentRecord& r) {
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.contentType).bind(4, r.filename).bind(5, r.md5);
         st.bind(6, r.linkMode).bind(7, r.mtime).bind(8, r.localPath).bind(9, static_cast<int64_t>(r.state));
         st.step();
-        if (oldParent != r.parentKey) touch(oldParent);
-        touch(r.parentKey);
+        const std::string entry = r.parentKey.empty() ? r.key : r.parentKey;
+        if (!oldParent.empty() && oldParent != entry) touch(oldParent);
+        touch(entry);
     });
 }
 
@@ -497,9 +500,9 @@ std::vector<AnnotationRecord> Library::dirtyAnnotations() {
 std::vector<AttachmentRecord> Library::readableAttachments(const std::string& itemKey) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kAttachmentColumns +
-                              " FROM attachments WHERE parentKey = ? AND contentType IN ('application/epub+zip', "
+                              " FROM attachments WHERE (parentKey = ? OR (key = ? AND parentKey = '')) AND contentType IN ('application/epub+zip', "
                               "'application/pdf') AND linkMode NOT IN ('linked_file', 'linked_url') ORDER BY key");
-        st.bind(1, itemKey);
+        st.bind(1, itemKey).bind(2, itemKey);
         return readAttachments(st);
     });
 }

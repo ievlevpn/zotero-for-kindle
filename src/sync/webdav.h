@@ -7,6 +7,7 @@
 #include "store/records.h"
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 
@@ -25,6 +26,8 @@ public:
     // .prop -> .zip into a temp file -> extract `filename` -> MD5 must equal the attachment's md5
     // -> move to destDir/<key>/<filename> with the file's mtime. On failure nothing is left behind.
     bool download(const AttachmentRecord&, const std::string& destDir, UserError*);
+    // Free bytes at a path (statvfs by default); tests inject their own.
+    void setFreeSpaceProbe(std::function<uint64_t(const std::string& path)>);
 
 private:
     HttpRequest get(const std::string& name) const;
@@ -32,7 +35,12 @@ private:
 
     Http& http_;
     std::string base_, user_, password_, host_;
+    std::function<uint64_t(const std::string&)> freeSpace_;
 };
+
+// The name the downloaded file gets inside <destDir>/<key>/: the server's filename reduced to
+// its last component; KEY.<ext> when that is empty, "." or "..".
+std::string localFileName(const AttachmentRecord&);
 
 // Hex MD5 of a file's contents; empty if it can't be read.
 std::string md5OfFile(const std::string& path);

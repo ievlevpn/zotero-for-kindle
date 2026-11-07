@@ -23,6 +23,7 @@ public:
     std::map<std::string, int64_t> deletedItems, deletedCollections;  // key -> version of deletion
     std::vector<HttpRequest> sent;
     std::function<bool(const HttpRequest&)> failWhen;  // true -> connection timeout
+    bool loseNextWriteResponse = false;  // apply the next POST, then answer with a timeout
     int created = 0;
 
     // --- library editing (each bumps the library version) ---
@@ -48,6 +49,14 @@ public:
     static json attachment(const std::string& key, const std::string& parent, const std::string& md5 = "00") {
         return {{"key", key}, {"itemType", "attachment"}, {"parentItem", parent}, {"linkMode", "imported_file"},
                 {"contentType", "application/epub+zip"}, {"filename", "book.epub"}, {"md5", md5}, {"mtime", 1}};
+    }
+    static json standalone(const std::string& key, const std::string& title) {
+        json a = attachment(key, "");
+        a.erase("parentItem");
+        a["title"] = title;
+        a["contentType"] = "application/pdf";
+        a["filename"] = "lonely.pdf";
+        return a;
     }
     static json annotation(const std::string& key, const std::string& parent, const std::string& text) {
         return {{"key", key}, {"itemType", "annotation"}, {"parentItem", parent}, {"annotationType", "highlight"},
@@ -132,6 +141,13 @@ public:
                 successful[std::to_string(i)] = items[key];
             }
             r.headers["last-modified-version"] = std::to_string(libraryVersion);
+            if (loseNextWriteResponse) {
+                loseNextWriteResponse = false;
+                HttpResponse lost;
+                lost.curlCode = 28;
+                lost.curlError = "Operation timed out";
+                return lost;
+            }
             return ok(r, json{{"success", success}, {"successful", successful}, {"unchanged", json::object()},
                               {"failed", json::object()}});
         }

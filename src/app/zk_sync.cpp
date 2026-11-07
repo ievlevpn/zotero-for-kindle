@@ -201,7 +201,7 @@ int main(int argc, char** argv) {
                 printError(err);
                 return 1;
             }
-            a->localPath = args[2] + "/" + a->key + "/" + a->filename;
+            a->localPath = args[2] + "/" + a->key + "/" + localFileName(*a);
             a->state = AttachmentRecord::State::Local;
             lib.upsertAttachment(*a);
             std::printf("fetched %s (md5 ok) in %.1f s\n", a->localPath.c_str(),

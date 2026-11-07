@@ -88,8 +88,12 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     curl_easy_setopt(h, CURLOPT_URL, req.url.c_str());
     curl_easy_setopt(h, CURLOPT_ERRORBUFFER, errbuf);
     curl_easy_setopt(h, CURLOPT_NOSIGNAL, 1L);
-    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+    // Redirects only for reads, only to https: a write approved by the WriteGuard for one URL
+    // must not land somewhere else, and the API key header must not leak over plain http.
+    const bool read = req.method == "GET" || req.method == "HEAD";
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, read ? 1L : 0L);
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 5L);
+    curl_easy_setopt(h, CURLOPT_REDIR_PROTOCOLS_STR, "https");
     curl_easy_setopt(h, CURLOPT_ACCEPT_ENCODING, "");
     curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, static_cast<long>(req.connectTimeoutS));
     curl_easy_setopt(h, CURLOPT_TIMEOUT, static_cast<long>(req.timeoutS));
@@ -104,7 +108,7 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     } else if (req.method != "GET") {
         curl_easy_setopt(h, CURLOPT_CUSTOMREQUEST, req.method.c_str());
     }
-    if (!req.body.empty() || req.method == "POST" || req.method == "PUT" || req.method == "PATCH") {
+    if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH" || req.method == "PROPFIND") {
         curl_easy_setopt(h, CURLOPT_POSTFIELDS, req.body.data());
         curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(req.body.size()));
     }

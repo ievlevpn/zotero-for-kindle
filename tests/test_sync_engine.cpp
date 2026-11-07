@@ -170,7 +170,11 @@ TEST_CASE("sync: push sends a new local annotation without a key and stores the 
     REQUIRE(rig.server.count("POST", "/items") == 1);
     json body = json::parse(rig.server.sent.back().body);
     REQUIRE(body.size() == 1);
-    CHECK_FALSE(body[0].contains("key"));
+    REQUIRE(body[0].contains("key"));  // a client-made key, so a lost response can't duplicate it
+    CHECK_FALSE(body[0].contains("version"));
+    const std::string sentKey = body[0]["key"];
+    CHECK(sentKey.size() == 8);
+    CHECK(sentKey.find_first_not_of("23456789ABCDEFGHIJKLMNPQRSTUVWXYZ") == std::string::npos);
     CHECK(body[0]["annotationText"] == "kindle highlight");
     CHECK(body[0]["parentItem"] == "EPUB0001");
     CHECK(body[0]["itemType"] == "annotation");
@@ -178,7 +182,7 @@ TEST_CASE("sync: push sends a new local annotation without a key and stores the 
     auto anns = rig.lib.annotationsFor("EPUB0001");
     REQUIRE(anns.size() == 2);
     CHECK(rig.find(anns, "LOCAL001") == nullptr);
-    const AnnotationRecord* pushed = rig.find(anns, "SRV10001");
+    const AnnotationRecord* pushed = rig.find(anns, sentKey);
     REQUIRE(pushed);
     CHECK(pushed->version == rig.server.libraryVersion);
     CHECK_FALSE(pushed->dirty);
@@ -268,6 +272,7 @@ TEST_CASE("sync: a deleted attachment turns its unsynced local annotations into 
     rig.server.remove("ANNO0001");
     SyncReport rep = rig.pull();
     CHECK(rep.conflicts == 1);
+    CHECK(rep.itemsRemoved == 0);  // an attachment of a book is not a list entry
     auto anns = rig.lib.annotationsFor("EPUB0001");
     REQUIRE(anns.size() == 1);
     CHECK(anns[0].key == "LOCAL001");
@@ -295,16 +300,19 @@ TEST_CASE("sync: a pushed annotation edited again here is re-sent with its key a
     AnnotatedRig rig;
     rig.lib.upsertAnnotation(rig.localNew("LOCAL001", "first"));
     REQUIRE_FALSE(rig.engine.push().error);
-    auto mine = *rig.find(rig.lib.annotationsFor("EPUB0001"), "SRV10001");
+    AnnotationRecord mine;
+    for (const auto& a : rig.lib.annotationsFor("EPUB0001"))
+        if (a.createdHere) mine = a;
+    REQUIRE(mine.version > 0);
     mine.comment = "second thoughts";
     mine.dirty = true;
     rig.lib.upsertAnnotation(mine);
     rig.server.sent.clear();
     REQUIRE_FALSE(rig.engine.push().error);
     json body = json::parse(rig.server.sent.back().body);
-    CHECK(body[0]["key"] == "SRV10001");
+    CHECK(body[0]["key"] == mine.key);
     CHECK(body[0]["version"] == mine.version);
-    CHECK(rig.server.items["SRV10001"]["data"]["annotationComment"] == "second thoughts");
+    CHECK(rig.server.items[mine.key]["data"]["annotationComment"] == "second thoughts");
 }
 
 TEST_CASE("sync: items and attachments are fetched before annotations, so the library is usable early") {
@@ -411,4 +419,79 @@ TEST_CASE("sync: switching 'Keep all highlights offline' on downloads everything
     auto left = rig.lib.annotationsFor("EPUB0002");
     REQUIRE(left.size() == 1);
     CHECK(left[0].key == "LOCAL001");  // the Kindle's own unsent highlight is never dropped
+}
+
+TEST_CASE("sync: a lost push response does not duplicate the annotation on the server") {
+    AnnotatedRig rig;
+    rig.lib.upsertAnnotation(rig.localNew("LOCAL001", "kindle highlight"));
+    rig.server.loseNextWriteResponse = true;
+    SyncReport lost = rig.engine.push();
+    REQUIRE(lost.error);
+    CHECK(rig.server.items.size() == 4);  // book, epub, server annotation, ours (applied, answer lost)
+    SyncReport again = rig.engine.push();  // 412 -> pull finds our own write -> nothing left to send
+    CHECK_FALSE(again.error);
+    CHECK(rig.server.items.size() == 4);
+    auto anns = rig.lib.annotationsFor("EPUB0001");
+    CHECK(anns.size() == 2);
+    CHECK(rig.lib.dirtyAnnotations().empty());
+    for (const auto& a : anns) CHECK_FALSE(a.conflict);
+}
+
+TEST_CASE("sync: a Kindle edit kept as a conflict survives the annotation being restored on the desktop") {
+    AnnotatedRig rig;
+    auto local = rig.lib.annotationsFor("EPUB0001").at(0);
+    local.comment = "my kindle comment";
+    local.dirty = true;
+    rig.lib.upsertAnnotation(local);
+    json saved = rig.server.items["ANNO0001"]["data"];
+    rig.server.remove("ANNO0001");
+    REQUIRE_FALSE(rig.pull().error);
+    rig.server.put(saved);  // restored from the desktop trash, newer version, same key
+    REQUIRE_FALSE(rig.pull().error);
+    auto anns = rig.lib.annotationsFor("EPUB0001");
+    REQUIRE(anns.size() == 2);
+    int conflicts = 0;
+    for (const auto& a : anns)
+        if (a.conflict) {
+            ++conflicts;
+            CHECK(a.comment == "my kindle comment");
+            CHECK(a.key != "ANNO0001");
+        }
+    CHECK(conflicts == 1);
+    CHECK(rig.lib.annotation("ANNO0001"));
+}
+
+TEST_CASE("sync on demand: a book whose first download failed is fetched completely next time") {
+    OnDemandRig rig;
+    REQUIRE_FALSE(rig.pull().error);
+    int fetches = 0;
+    rig.server.failWhen = [&](const HttpRequest& r) { return r.url.find("itemKey=") != std::string::npos && ++fetches == 2; };
+    CHECK(rig.engine.pullAnnotationsFor("EPUB0001", nullptr).error);
+    CHECK_FALSE(rig.lib.isTracked("EPUB0001"));
+    rig.server.failWhen = nullptr;
+    rig.server.put(FakeZotero::item("BOOK0003", "Bump the library version"));
+    REQUIRE_FALSE(rig.pull().error);
+    REQUIRE_FALSE(rig.engine.pullAnnotationsFor("EPUB0001", nullptr).error);
+    CHECK(rig.lib.isTracked("EPUB0001"));
+    CHECK(rig.lib.annotationsFor("EPUB0001").size() == 70);
+}
+
+TEST_CASE("sync: a file without a parent item is listed, searchable and readable") {
+    Rig rig;
+    rig.server.put(FakeZotero::standalone("LONE0001", "Lonely paper on topology"));
+    REQUIRE_FALSE(rig.pull().error);
+    auto recent = rig.lib.recentItems(10);
+    REQUIRE(recent.size() == 1);
+    CHECK(recent[0].key == "LONE0001");
+    CHECK(recent[0].itemType == "attachment");
+    CHECK(rig.lib.search("topology", 10).size() == 1);
+    auto readable = rig.lib.readableAttachments("LONE0001");
+    REQUIRE(readable.size() == 1);
+    CHECK(readable[0].key == "LONE0001");
+    rig.server.remove("LONE0001");
+    SyncReport rep = rig.pull();
+    REQUIRE_FALSE(rep.error);
+    CHECK(rep.itemsRemoved == 1);
+    CHECK(rig.lib.recentItems(10).empty());
+    CHECK_FALSE(rig.lib.attachment("LONE0001"));
 }
