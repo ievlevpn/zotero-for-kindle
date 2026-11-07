@@ -683,7 +683,8 @@ std::vector<ItemRow> Library::rows(const ListQuery& q) {
                               " LIMIT ? OFFSET ?");
         int n = 1;
         for (const auto& a : w.args) st.bind(n++, a);
-        st.bind(n++, int64_t{q.limit}).bind(n, int64_t{q.offset});
+        st.bind(n, int64_t{q.limit});
+        st.bind(n + 1, int64_t{q.offset});
         return readRows(st);
     });
 }
