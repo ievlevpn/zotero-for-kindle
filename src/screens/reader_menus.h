@@ -47,9 +47,11 @@ public:
     static Rect trimRect(int i);     // PDF, same row: 0 Keep the page's margins, 1 Trim them
     static Rect spacingRect(int i);  // 100, 120, 140 %
     static Rect orientationRect(int i);  // 0 Portrait, 1 Landscape, 2 Two columns (EPUB in landscape)
+    static Rect penRect(int i);          // PDF once a pen was used: 0 Write, 1 Tap
 
     bool displayOpen() const { return displayOpen_; }
     bool showsTextOptions() const;
+    bool showsPenOptions() const;
     const std::vector<std::string>& fonts();
 
     std::string notesLabel() const { return "Notes (" + std::to_string(notes_) + ")"; }

@@ -79,3 +79,12 @@ TEST_CASE("pen mapping: digitizer range, swapped axes, quarter turn, window orig
     m.origin = {0, 60};  // the window starts below the status bar
     CHECK(m.map(10, 100) == Point{10, 40});
 }
+
+TEST_CASE("pen: the side button is reported with the stroke") {
+    PenDecoder d(identity());
+    report(d, {{ev::KEY, ev::BTN_TOOL_PEN, 1}});
+    auto e = report(d, {{ev::KEY, ev::BTN_STYLUS, 1}, {ev::KEY, ev::BTN_TOUCH, 1}});
+    REQUIRE(e.size() == 1);
+    CHECK(e[0].type == PenEvent::Type::Down);
+    CHECK(e[0].button);
+}

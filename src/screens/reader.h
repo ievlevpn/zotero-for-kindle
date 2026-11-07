@@ -95,6 +95,11 @@ public:
     static constexpr int64_t kInkCommitMs = 1500;
     static constexpr int kInkWidthPx = 7;  // about the Scribe wet ink line
     size_t pendingInkStrokes() const { return inkPending_.size(); }
+    // The pen on PDF pages: writes (default) or taps like a finger (kept in the library). Holding
+    // the pen's side button taps for that stroke either way.
+    bool penWrites() const { return penWrites_; }
+    void setPenWrites(bool on, Nav&);
+    bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
 
 private:
@@ -164,6 +169,9 @@ private:
     // Handwriting.
     bool inkDown_ = false, erasing_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
+    bool buttonHeld_ = false;  // the side button: the pen taps, no ink
+    bool penWrites_ = true, penSeen_ = false;
+    bool wantsSystemInk() const;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
