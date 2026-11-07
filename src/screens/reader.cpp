@@ -402,11 +402,13 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
         openAt_ = a;  // opening from Notes: the worker starts in onShow
         return;
     }
+    commitInk();
     turning_ = true;
     worker_->showAnnotation(a);
 }
 
 void ReaderScreen::onResize(Nav& nav) {
+    commitInk();  // its points belong to the old layout
     fitLayout(layout_, type_, twoColumnsSetting_);
     bar_.reset();  // anchored to the old page
     if (editor_) closeEditor(nav);
@@ -423,6 +425,7 @@ void ReaderScreen::setTwoColumns(bool on, Nav& nav) {
 }
 
 void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
+    commitInk();
     Layout l = wanted;
     fitLayout(l, type_, twoColumnsSetting_);  // the margin size in pixels, the columns
     if (l == layout_ || !worker_ || !ready()) return;
@@ -800,6 +803,10 @@ void ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         if (nav.systemInk()) nav.setSystemInk(type_ == DocType::Pdf && penAllowed() && !eraserNear_);
     }
     const bool lift = p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave;
+    if (lift && wipeFrom_) {
+        nav.damage(footerArea().contains(*wipeFrom_) ? footerArea() : Rect{0, 0, W(), H()}, Waveform::Ui);
+        wipeFrom_.reset();
+    }
     if (lift) {
         if (inkDown_) {
             inkDown_ = false;
@@ -821,7 +828,10 @@ void ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
             inkToastShown_ = true;
             return;
         }
-        if (!penAllowed() || !pageArea().contains(p.pos)) return;
+        if (!penAllowed() || !pageArea().contains(p.pos)) {
+            if (nav.systemInk()) wipeFrom_ = p.pos;  // the system may have inked it: repaint on lift
+            return;
+        }
         if (p.eraser) {
             erasing_ = true;
             eraserPath_ = {p.pos};

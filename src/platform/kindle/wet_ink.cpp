@@ -4,6 +4,7 @@
 #include <sys/msg.h>
 #include <sys/sem.h>
 
+#include <csignal>
 #include <cerrno>
 #include <cstring>
 #include <ctime>
@@ -27,7 +28,31 @@ constexpr int kNews = 1, kConnected = 3, kStroke = 5, kContext = 8, kIdle = 11;
 constexpr long kSetMode = 1, kSetCanvas = 6, kSetWindow = 7, kSetParam = 8, kSetScale = 9, kReply = 15;
 constexpr uint8_t kModePen = 0x00, kModeDisabled = 0x0a, kModeOff = 0x0b;
 
+// The live session, for emergencyOff (-1: none).
+volatile sig_atomic_t gSem = -1, gQueue = -1;
+
+void onFatalSignal(int sig) {
+    WetInk::emergencyOff();
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
 }  // namespace
+
+void WetInk::emergencyOff() {
+    const int sem = gSem, queue = gQueue;
+    if (sem < 0 || queue < 0) return;
+    gSem = gQueue = -1;
+    struct {
+        long type;
+        unsigned char mode;
+    } m{kSetMode, kModeOff};
+    msgsnd(queue, &m, 1, IPC_NOWAIT);
+    for (int num : {kMessages, kWake, kDisconnect, kWake}) {
+        sembuf op{static_cast<unsigned short>(num), 1, IPC_NOWAIT};
+        semop(sem, &op, 1);
+    }
+}
 
 std::unique_ptr<WetInk> WetInk::open() {
     const int sem = semget(kSemKey, kSemCount, 0666);
@@ -50,32 +75,48 @@ bool WetInk::take(int num, int timeoutMs) {
     return semtimedop(sem_, &op, 1, &ts) == 0;
 }
 
-void WetInk::send(long type, const void* data, size_t n) {
+bool WetInk::send(long type, const void* data, size_t n) {
     struct {
         long type;
         unsigned char data[64];
     } m{};
     m.type = type;
     std::memcpy(m.data, data, n);
-    if (msgsnd(queue_, &m, n, IPC_NOWAIT) < 0) log(LogLevel::Warn, "wet ink: message %ld: %s", type, std::strerror(errno));
+    if (msgsnd(queue_, &m, n, IPC_NOWAIT) == 0) return true;
+    log(LogLevel::Warn, "wet ink: message %ld: %s", type, std::strerror(errno));
+    return false;
 }
 
-void WetInk::sendMode(uint8_t m) {
-    send(kSetMode, &m, 1);
+bool WetInk::sendMode(uint8_t m) {
+    const bool ok = send(kSetMode, &m, 1);
     post(kMessages, 1);
     post(kWake, 1);
+    return ok;
+}
+
+bool WetInk::handshake() {
+    post(kConnect, 1);
+    post(kWake, 1);
+    if (take(kConnected, 1500)) return true;
+    take(kConnect, 0);  // nobody answered: withdraw the request
+    return false;
 }
 
 bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
     if (connected_) disconnect();
-    post(kConnect, 1);
-    post(kWake, 1);
-    if (!take(kConnected, 1500)) {
-        take(kConnect, 0);  // nobody answered: withdraw the request
-        log(LogLevel::Warn, "wet ink: the handler did not answer");
-        return false;
+    if (!handshake()) {
+        // A session a crashed run left open makes the handler ignore new requests: end it, retry.
+        post(kDisconnect, 1);
+        post(kWake, 1);
+        if (!handshake()) {
+            log(LogLevel::Warn, "wet ink: the handler did not answer");
+            return false;
+        }
     }
     connected_ = true;
+    gSem = sem_;
+    gQueue = queue_;
+    for (int sig : {SIGTERM, SIGINT, SIGHUP, SIGSEGV, SIGABRT, SIGBUS}) std::signal(sig, onFatalSignal);
     stop_ = false;
     acker_ = std::thread([this] { ackLoop(); });
 
@@ -102,12 +143,12 @@ bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
 
 void WetInk::setMode(Mode m) {
     if (!connected_ || m == mode_) return;
-    mode_ = m;
-    sendMode(m == Mode::Pen ? kModePen : kModeDisabled);
+    if (sendMode(m == Mode::Pen ? kModePen : kModeDisabled)) mode_ = m;  // else retried next time
 }
 
 void WetInk::disconnect() {
     if (!connected_) return;
+    gSem = gQueue = -1;
     sendMode(kModeOff);
     post(kDisconnect, 1);
     post(kWake, 1);

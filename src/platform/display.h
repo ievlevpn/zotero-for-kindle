@@ -48,6 +48,10 @@ public:
 // Backend chosen at build time (-Dplatform=desktop|kindle).
 std::unique_ptr<Display> makeDisplay();
 
+// Before an exit that skips destructors (the stall watchdog): leaves system state the display
+// changed (the Scribe's wet ink) as it was. Async-signal-safe.
+void displayEmergencyExit();
+
 // Directory with the UI fonts on this platform.
 const char* fontDir();
 

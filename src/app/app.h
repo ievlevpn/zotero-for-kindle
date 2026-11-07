@@ -130,6 +130,7 @@ private:
     std::vector<int> palmFingers_;  // fingers that went down while the pen was near
     void presentInk(bool force);
     bool systemInkOn_ = false;
+    bool background_ = false;  // a system dialog or the screensaver is over the app
     Rect inkDirty_;
     int64_t lastInkPresentMs_ = -1'000'000;
 };

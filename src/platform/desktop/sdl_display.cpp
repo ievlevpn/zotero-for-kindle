@@ -144,6 +144,8 @@ private:
 
 std::unique_ptr<Display> makeDisplay() { return std::make_unique<SdlDisplay>(); }
 
+void displayEmergencyExit() {}
+
 const char* fontDir() { return "assets/fonts-device"; }
 
 }  // namespace zk

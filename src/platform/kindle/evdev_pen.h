@@ -18,7 +18,7 @@ class EvdevPen {
 public:
     // Finds the stylus; `panelW` × `panelH` is the framebuffer in its native orientation.
     // `raw`: the Scribe's wet ink is on, so its re-sent copy ("stylus-custom") stays quiet: read
-    // the digitizer itself (turned half round from the panel).
+    // the digitizer itself. Its coordinates follow the panel, not the picture (see updatePenView).
     EvdevPen(int panelW, int panelH, bool raw = false);
     ~EvdevPen();
     EvdevPen(const EvdevPen&) = delete;

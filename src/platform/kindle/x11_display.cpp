@@ -45,7 +45,6 @@ public:
         // Wet ink draws only over the top window: the status bar would be it, so go full screen.
         if (std::getenv("ZK_NO_WET_INK") == nullptr) wet_ = WetInk::open();
         if (wet_) title_.replace(title_.find("PC:T"), 4, "PC:N");
-        if (const char* t = std::getenv("ZK_WINDOW_TITLE"); t && *t) title_ = t;
         XStoreName(dpy_, win_, title_.c_str());
         XSelectInput(dpy_, win_, ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
                                      Button1MotionMask | FocusChangeMask | VisibilityChangeMask | KeyPressMask);
@@ -73,7 +72,12 @@ public:
             pen_ = std::make_unique<EvdevPen>(std::min(rw, rh), std::max(rw, rh), wet_ != nullptr);
             updatePenView();
             if (wet_ && !wet_->connect(win_, std::min(rw, rh), std::max(rw, rh))) {
+                // No wet ink after all: the status bar back, and the pen as the system re-sends it.
                 wet_.reset();
+                title_.replace(title_.find("PC:N"), 4, "PC:T");
+                XStoreName(dpy_, win_, title_.c_str());
+                XFlush(dpy_);
+                pen_ = std::make_unique<EvdevPen>(std::min(rw, rh), std::max(rw, rh));
                 updatePenView();
             }
         }
@@ -145,6 +149,10 @@ public:
         if (!XPending(dpy_)) {
             pollfd p[2] = {{ConnectionNumber(dpy_), POLLIN, 0}, {pen_ ? pen_->fd() : -1, POLLIN, 0}};
             poll(p, p[1].fd >= 0 ? 2 : 1, timeout_ms);
+            if (p[1].fd >= 0 && (p[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
+                log(LogLevel::Warn, "pen: the digitizer went away");
+                pen_.reset();
+            }
         }
         // The pen first: its strokes are what must not wait (palm touches queued behind it are
         // then dropped by the app while the pen is near).
@@ -310,6 +318,8 @@ private:
 }  // namespace
 
 std::unique_ptr<Display> makeDisplay() { return std::make_unique<X11Display>(); }
+
+void displayEmergencyExit() { WetInk::emergencyOff(); }
 
 const char* fontDir() { return "/usr/java/lib/fonts"; }
 

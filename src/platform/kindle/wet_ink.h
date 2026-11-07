@@ -25,13 +25,17 @@ public:
     void setMode(Mode);
     bool connected() const { return connected_; }
     void disconnect();  // also on destruction; leaves the handler off
+    // For crash paths (signal handlers, the stall watchdog): turns the handler off and ends the
+    // session with async-signal-safe calls only. No-op when nothing is connected.
+    static void emergencyOff();
 
 private:
     WetInk(int sem, int queue) : sem_(sem), queue_(queue) {}
     bool post(int num, int delta);
     bool take(int num, int timeoutMs);  // 0: don't wait
-    void send(long type, const void* data, size_t n);
-    void sendMode(uint8_t m);
+    bool send(long type, const void* data, size_t n);
+    bool sendMode(uint8_t m);
+    bool handshake();
     void ackLoop();
 
     int sem_, queue_;

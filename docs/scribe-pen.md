@@ -41,7 +41,11 @@ What the app does:
 - Connects at start, registers its window, keeps the handler paused except while a PDF page takes
   handwriting, acknowledges every stroke and stroke context at once (the strokes themselves aren't
   used: the app reads the digitizer too), drains the handler's replies, and disconnects on exit.
-  A session left open with unacknowledged strokes once took the Kindle framework down (a reboot fixed it).
+  A session left open with unacknowledged strokes once took the Kindle framework down (a reboot fixed it):
+  fatal signals and the stall watchdog turn the handler off and end the session (`WetInk::emergencyOff`),
+  and a connect that isn't answered first ends a stale session, then retries.
+- Pauses wet ink while the app is in the background (a system dialog over it) and ignores the pen there.
+- Repaints where an ignored stroke (outside the page, or before wet ink paused) may have been inked.
 - Reads the raw digitizer: the handler's re-sent copy (`stylus-custom`, event5) goes quiet while wet
   ink is on. Raw coordinates follow the panel, not the picture: the turn comes from
   `/sys/class/graphics/fb0/rotate` (3 = upright on the Scribe, raw = screen; 1 = upside down), read
@@ -55,7 +59,8 @@ What the app does:
     creates shm `0x537a74` (40 bytes, stroke context), posts sem 8, sem 1.
   - Connected: after each wake the handler checks sems 7, 9, 10, 12 and reads queued messages of each type.
   - Strokes: shm `0x537a71` (136 B header), `0x537a72` (points, ~1 KB), `0x537a75` (40 B); handler logs
-    "ipcSendStroke: N" and waits for "ipcReceiveStrokeProcessed" (client ack, likely sem 9).
+    "ipcSendStroke: N" (sem 5) and waits for "ipcReceiveStrokeProcessed" (client ack: sem 6; the stroke
+    context, sem 8, is acknowledged with sem 9).
   - Close: "ipcReceiveTerminateConnectionRequest" (probably sem 4).
 - Handler log goes to syslog (`/var/log/messages`, tmpfs) with `KNSR::` tags; it names each message.
 
@@ -76,4 +81,7 @@ Notebook open sequence: 1:0a, 7:window, 1:0a, 8:thickness, 5:exclusions, 1:00, 8
 ## Not verified on a device yet
 - Landscape reading with wet ink (the quarter-turn direction is derived from `fb0/rotate`).
 - Strokes made less than 1.5 s before the reader closes other than through the menus are lost.
+- Wet ink drawn while the page is being repainted (just after a save) can vanish from the screen; the
+  stroke itself is saved and comes back with the annotation.
+- Whether the pen can tap buttons outside the reader while wet ink is connected (paused).
 - Kindles with a pen other than the Scribe (1st generation, firmware 5.16.8 tested).
