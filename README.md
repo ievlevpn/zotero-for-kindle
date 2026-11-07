@@ -23,6 +23,9 @@ Highlights and notes sync both ways with Zotero.
 - Library, collections and search, with offline use.
 - Downloads books on demand, from Zotero storage or your WebDAV server.
 - EPUB and PDF reader with fonts, sizes and margins, plus PDF margin trimming.
+- Fast reading fonts (bold word beginnings) for EPUBs: Fast Serif, Fast Sans and Fast Mono.
+- Footnotes in a pop-up, Back after a jump, bookmarks and Go to page.
+- Collections pinned to the top with a long press.
 - Highlights and notes that show up in Zotero desktop, and the other way round.
 - Optional landscape mode, with two columns on big screens.
 - A native app with a Kindle-like look, made for e-ink.
@@ -65,4 +68,6 @@ The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built
 ## Licence
 
 AGPL-3.0-or-later. An unofficial project for personal use, with no affiliation to Zotero or Amazon.
+The Fast reading fonts are [Fast Font](https://github.com/chelaxian/Fast-Font) by Born2Root (MIT, see
+`assets/fonts-fast/`).
 Zotero is a trademark of the Corporation for Digital Scholarship. Kindle is a trademark of Amazon.
