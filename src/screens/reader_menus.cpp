@@ -6,6 +6,7 @@
 #include "docs/fonts.h"
 #include "platform/lipc.h"
 #include "screens/book_notes.h"
+#include "screens/book_search.h"
 #include "screens/contents.h"
 #include "screens/reader.h"
 #include "ui/paint.h"
@@ -189,6 +190,10 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     if (backRect().contains(g.pos)) {
         nav.pop();
+        return;
+    }
+    if (searchRect().contains(g.pos)) {
+        nav.push(std::make_unique<BookSearchScreen>(reader_));
         return;
     }
     if (contentsIconRect().contains(g.pos) || buttonRect(0).contains(g.pos)) return openContents(nav);

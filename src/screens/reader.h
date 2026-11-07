@@ -29,6 +29,10 @@ public:
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
     void onTick(Nav&) override;
+    // Collects worker events; when not visible (a pushed panel is on top) the page state is kept
+    // but nothing is repainted — the reader redraws when it is shown again.
+    void pumpEvents(Nav&, bool visible);
+    void setSearchListener(std::function<void(const std::vector<SearchHit>&)> f) { searchListener_ = std::move(f); }
     bool showsTabBar() const override { return false; }
     bool wantsKeyboard() const override;
 
@@ -82,6 +86,7 @@ private:
     int64_t wordsLeft_ = 0;
     double progress_ = 0;
     bool turning_ = false;
+    std::function<void(const std::vector<SearchHit>&)> searchListener_;
 };
 
 }  // namespace zk

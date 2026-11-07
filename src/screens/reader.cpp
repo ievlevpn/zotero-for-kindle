@@ -102,7 +102,9 @@ void ReaderScreen::onShow(Nav& nav) {
     worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
 }
 
-void ReaderScreen::onTick(Nav& nav) {
+void ReaderScreen::onTick(Nav& nav) { pumpEvents(nav, true); }
+
+void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
     if (!worker_) return;
     RenderEvent e;
     while (worker_->poll(e)) {
@@ -113,10 +115,10 @@ void ReaderScreen::onTick(Nav& nav) {
                 break;
             case RenderEvent::Kind::Error:
                 error_ = e.error;
-                nav.redrawAll(Waveform::Quality);
+                if (visible) nav.redrawAll(Waveform::Quality);
                 break;
             case RenderEvent::Kind::SearchResults:
-                if (menus_) menus_->onSearchResults(e.hits, nav);
+                if (searchListener_) searchListener_(e.hits);
                 break;
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
@@ -132,6 +134,7 @@ void ReaderScreen::onTick(Nav& nav) {
                 position_ = e.position;
                 turning_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
+                if (!visible) break;
                 Waveform w = Waveform::Quality;
                 if (turned && (++turns_ % flashEvery_ == 0 || chapterChanged)) w = Waveform::Full;
                 if (!turned && chapterChanged) w = Waveform::Full;
@@ -145,7 +148,7 @@ void ReaderScreen::onTick(Nav& nav) {
             }
         }
     }
-    if (menus_) menus_->onTick(nav);
+    if (menus_ && visible) menus_->onTick(nav);
 }
 
 void ReaderScreen::turn(int delta, Nav&) {

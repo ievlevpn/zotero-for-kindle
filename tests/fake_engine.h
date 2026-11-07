@@ -51,6 +51,7 @@ public:
     std::string chapterAt(int page) override { return "Chapter " + std::to_string(page / chapterEvery + 1); }
     std::vector<SearchHit> search(const std::string& q, int maxHits) override {
         std::vector<SearchHit> out;
+        if (q == "zzz") return out;
         for (int p = 3; p < pageCount() && static_cast<int>(out.size()) < maxHits; p += 7)
             out.push_back({p, "…" + q + " on page " + std::to_string(p) + "…", positionOfPage(p)});
         return out;
