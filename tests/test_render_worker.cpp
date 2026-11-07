@@ -117,7 +117,9 @@ TEST_CASE("render worker: jumps to positions and annotations; search runs on the
     a.pageLabel = "33";
     rig.worker->highlightsFor({a});
     rig.worker->showAnnotation(a);
-    p = rig.waitFor(RenderEvent::Kind::Page);
+    // New highlights may first repost the current page (20) with them; wait for the jump.
+    do p = rig.waitFor(RenderEvent::Kind::Page);
+    while (p && p->page != 33);
     REQUIRE(p);
     CHECK(p->page == 33);
     REQUIRE(p->highlights.size() == 1);
