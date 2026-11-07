@@ -32,6 +32,7 @@ test_sources = files(
   'test_update_check.cpp',
   'test_update_download.cpp',
   'test_update_install.cpp',
+  'test_launcher.cpp',
   'test_layout_scribe.cpp',
   'test_keyboard_bounds.cpp',
   'test_review_fixes6.cpp',

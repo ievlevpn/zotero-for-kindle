@@ -3,10 +3,71 @@
 # Author: zotero-for-kindle
 # Icon: /mnt/us/zotero/share/icon.png
 # DontUseFBInk
-cd /mnt/us/zotero || exit 1
+#
+# Starts the app, and keeps its updates safe: update protocol format 1 (src/update/install.h).
+# Every launcher from 0.2.0 on must understand it; a new format ships a launcher that knows both.
+#   update/state   "installing|installed|tried <from> <to>", written by the app while installing
+#   update/old/    bin lib share Zotero.sh zotero.db config.json: what a rollback restores
+#   exit code 75   the app installed an update: start it again
+# installing: the swap was interrupted. tried: the new version ran and never confirmed (the app
+# confirms by deleting update/state once it has drawn its first screen). Both: roll back.
+ZK_HOME=${ZK_HOME:-/mnt/us/zotero}
+ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
+ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
+ZK_DISPLAY=${ZK_DISPLAY:-:0}
+cd "$ZK_HOME" || exit 1
 mkdir -p log
-# Copied over USB, the programs may have lost their execute bit.
-chmod +x bin/* 2>/dev/null
-DISPLAY=:0 ./bin/zotero >> log/zotero.log 2>&1
+U=update
+
+note() { echo "$(date '+%H:%M:%S') launcher: $*" >> log/zotero.log; }
+
+# Puts update/old back. Every step can be repeated, so an interrupted rollback finishes later.
+restore() {
+    for d in bin lib share; do
+        if [ -d "$U/old/$d" ]; then
+            rm -rf "$d" && cp -r "$U/old/$d" "$d" || return 1
+        fi
+    done
+    if [ -f "$U/old/Zotero.sh" ]; then
+        cp "$U/old/Zotero.sh" "$ZK_LAUNCHER.tmp" && mv "$ZK_LAUNCHER.tmp" "$ZK_LAUNCHER" || return 1
+    fi
+    if [ -f "$U/old/zotero.db" ]; then
+        cp "$U/old/zotero.db" zotero.db.tmp && rm -f zotero.db-wal zotero.db-shm && mv zotero.db.tmp zotero.db || return 1
+    fi
+    if [ -f "$U/old/config.json" ]; then
+        cp "$U/old/config.json" "$ZK_CONFIG.tmp" && mv "$ZK_CONFIG.tmp" "$ZK_CONFIG" || return 1
+    fi
+    echo "$1 $2" > "$U/rolled-back"
+    rm -f "$U/state"
+    rm -rf "$U/old" "$U/new" "$U/trash"
+    note "rolled back from $2 to $1"
+}
+
+# Looks at update/state before a start: rolls back if needed, marks a first start as tried.
+check_update() {
+    [ -f "$U/state" ] || return 0
+    read -r word from to < "$U/state"
+    case "$word" in
+        installing|tried) restore "$from" "$to" || note "rollback from $to failed; will try again" ;;
+        installed) echo "tried $from $to" > "$U/state" ;;
+    esac
+}
+
+starts=0
+while [ "$starts" -lt 5 ]; do
+    starts=$((starts + 1))
+    check_update
+    chmod +x bin/* 2>/dev/null  # copied over USB, the programs may have lost their execute bit
+    DISPLAY=$ZK_DISPLAY ./bin/zotero >> log/zotero.log 2>&1
+    code=$?
+    [ "$code" = 75 ] && continue
+    # A new version that ended before confirming: go back now, and start the old one.
+    if [ -f "$U/state" ] && read -r word rest < "$U/state" && [ "$word" = tried ]; then
+        note "the new version exited ($code) before it started properly"
+        continue
+    fi
+    break
+done
 # Whatever happened to the app, let the Kindle sleep again.
-lipc-set-prop com.lab126.powerd preventScreenSaver 0
+command -v lipc-set-prop >/dev/null 2>&1 && lipc-set-prop com.lab126.powerd preventScreenSaver 0
+exit 0
