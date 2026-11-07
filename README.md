@@ -3,6 +3,9 @@
 Your Zotero library on a jailbroken Kindle: browse it, read EPUBs and PDFs, and highlight.
 Highlights and notes sync both ways with Zotero.
 
+> **Unofficial.** This is a personal project, built for my own use. It is not made or supported by Zotero or Amazon.
+> It works on my Kindles. It may not work on yours.
+
 <p>
   <img src="docs/screenshots/home.png" width="24%" alt="Home">
   <img src="docs/screenshots/library.png" width="24%" alt="Library">
@@ -57,5 +60,5 @@ The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built
 
 ## Licence
 
-AGPL-3.0-or-later. Zotero is a trademark of the Corporation for Digital Scholarship; this project is not affiliated
-with Zotero or Amazon.
+AGPL-3.0-or-later. An unofficial project for personal use, with no affiliation to Zotero or Amazon.
+Zotero is a trademark of the Corporation for Digital Scholarship. Kindle is a trademark of Amazon.
