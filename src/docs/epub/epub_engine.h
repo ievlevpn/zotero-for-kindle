@@ -22,6 +22,7 @@ public:
     PageImage render(int page) override;
     DocPosition positionOfPage(int page) override;
     int pageOf(const DocPosition&) override;
+    int pageOfPlaced(const DocPosition&) override;
     std::vector<TocEntry> toc() override;
     std::string chapterAt(int page) override;
     std::vector<SearchHit> search(const std::string& query, int maxHits) override;

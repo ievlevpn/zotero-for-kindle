@@ -33,6 +33,7 @@ public:
     int pageOfAnnotation(const AnnotationRecord&) override;
     std::string zoteroPosition(int page) override;
     int pageOfZoteroPosition(const std::string& json) override;
+    int pageOfPlaced(const DocPosition&) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
 
 private:

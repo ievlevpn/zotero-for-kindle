@@ -76,10 +76,10 @@ struct RenderWorker::Impl {
     std::unique_ptr<DocumentEngine> engine;
     std::vector<AnnotationRecord> anns;
     std::vector<DocPosition> bookmarks;
-    std::vector<int> bookmarkPages;  // of `bookmarks`, in the current layout
+    std::vector<std::pair<std::string, int>> bookmarkPlaces;  // of `bookmarks`, in the current layout
     void placeBookmarks() {
-        bookmarkPages.clear();
-        for (const auto& b : bookmarks) bookmarkPages.push_back(b.value.empty() ? -1 : engine->pageOf(b));
+        bookmarkPlaces.clear();
+        for (const auto& b : bookmarks) bookmarkPlaces.emplace_back(b.value, b.value.empty() ? -1 : engine->pageOfPlaced(b));
     }
     std::vector<TocEntry> toc;
     std::map<int, Entry> cache;
@@ -138,7 +138,7 @@ struct RenderWorker::Impl {
         ev.wordsLeftInChapter = wordsLeft(page);
         ev.position = engine->positionOfPage(page);
         ev.zoteroPosition = engine->zoteroPosition(page);
-        ev.bookmarkPages = bookmarkPages;
+        ev.bookmarkPlaces = bookmarkPlaces;
         return ev;
     }
     void relaid(int page) {
@@ -209,6 +209,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<PointRequest> sel, hit;
     std::optional<std::pair<uint64_t, std::string>> place;
     std::optional<std::vector<DocPosition>> marks;
+    bool landed = false;
     std::deque<InkRequest> inks;
     uint64_t gen = 0;
     {
@@ -291,6 +292,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         else if (const int p = engine->pageOfAnnotation(t.annotation); p >= 0) page = p;
         current = std::clamp(page, 0, std::max(0, pageCount - 1));
         postCurrent = true;
+        landed = true;
     }
     if (sel) {
         RenderEvent ev;
@@ -329,6 +331,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     }
     if (postCurrent) {
         RenderEvent ev = pageEvent(current);
+        ev.landed = landed;
         postCurrent = false;
         {
             std::lock_guard<std::mutex> lock(mutex);

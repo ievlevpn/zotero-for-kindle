@@ -66,7 +66,7 @@ TEST_CASE("navigation: after a jump, Back returns to where you were") {
     rig.r->jumpTo(probe.positionOfPage(40));  // e.g. from Contents
     REQUIRE(rig.waitPage(40));
     REQUIRE(rig.r->backLabel());
-    CHECK(*rig.r->backLabel() == "‹ Back to page 2");
+    CHECK(rig.r->backLabel()->rfind("‹ Back to page 2", 0) == 0);
     rig.r->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
     REQUIRE(rig.waitPage(1));
     CHECK_FALSE(rig.r->backLabel());
@@ -79,10 +79,10 @@ TEST_CASE("navigation: Back walks back through several jumps") {
     REQUIRE(rig.waitPage(20));
     rig.r->turnTo(60);  // the slider in the menus is a jump too
     REQUIRE(rig.waitPage(60));
-    CHECK(*rig.r->backLabel() == "‹ Back to page 21");
+    CHECK(rig.r->backLabel()->rfind("‹ Back to page 21", 0) == 0);
     rig.r->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
     REQUIRE(rig.waitPage(20));
-    CHECK(*rig.r->backLabel() == "‹ Back to page 1");
+    CHECK(rig.r->backLabel()->rfind("‹ Back to page 1", 0) == 0);
     rig.r->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
     REQUIRE(rig.waitPage(0));
     CHECK_FALSE(rig.r->backLabel());
@@ -196,7 +196,7 @@ TEST_CASE("navigation: Go to page is a jump that Back returns from") {
     Rig rig;
     rig.r->goToPage(70);
     REQUIRE(rig.waitPage(70));
-    CHECK(*rig.r->backLabel() == "‹ Back to page 1");
+    CHECK(rig.r->backLabel()->rfind("‹ Back to page 1", 0) == 0);
 }
 
 TEST_CASE("navigation: the ribbon, Back and the pages match the reviewed goldens") {
@@ -234,4 +234,100 @@ TEST_CASE("navigation: the ribbon, Back and the pages match the reviewed goldens
     Canvas c3(kPw5.width, kPw5.height);
     pad.draw(c3);
     checkGolden(c3, "tests/golden/goto-page.png");
+}
+
+// ---- Review fixes ----
+
+TEST_CASE("navigation fix: the corner during a page turn doesn't bookmark the page being left") {
+    Rig rig;
+    rig.r->onGesture(tapAt({1100, 700}), rig.nav);  // turning to page 1 ...
+    rig.r->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // ... and the corner at once
+    REQUIRE(rig.waitPage(1));
+    for (int i = 0; i < 20; ++i) rig.r->onTick(rig.nav);
+    CHECK(rig.lib.bookmarks("EP000003").empty());
+}
+
+TEST_CASE("navigation fix: a quick second tap on the corner never removes another page's bookmark") {
+    Rig rig;
+    FakeEngine probe;
+    for (int p : {10, 20, 30}) rig.lib.addBookmark("EP000003", {probe.positionOfPage(p).value, "", p});
+    auto r2 = std::make_unique<ReaderScreen>(rig.row, "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
+    }, 6);
+    rig.r = std::move(r2);
+    rig.nav.visible = rig.r.get();
+    rig.r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(0));
+    rig.r->jumpTo(probe.positionOfPage(10));
+    REQUIRE(rig.waitPage(10));
+    REQUIRE(rig.until([&] { return rig.r->bookmarked(); }));
+    rig.r->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // remove 10's
+    rig.r->onGesture(tapAt(ReaderScreen::bookmarkRect().center()), rig.nav);  // again, before the page comes back
+    for (int i = 0; i < 40; ++i) rig.r->onTick(rig.nav);
+    std::vector<std::string> left;
+    for (const auto& b : rig.lib.bookmarks("EP000003")) left.push_back(b.position);
+    CHECK(std::find(left.begin(), left.end(), probe.positionOfPage(20).value) != left.end());
+    CHECK(std::find(left.begin(), left.end(), probe.positionOfPage(30).value) != left.end());
+}
+
+TEST_CASE("navigation fix: after a layout change Back drops the page number it can't know") {
+    Rig rig;
+    FakeEngine probe;
+    rig.r->jumpTo(probe.positionOfPage(40));
+    REQUIRE(rig.waitPage(40));
+    CHECK(rig.r->backLabel()->rfind("‹ Back to page 1", 0) == 0);
+    Layout bigger = rig.r->layout();
+    bigger.sizePt = 12;
+    rig.r->applyLayout(bigger, rig.nav);
+    REQUIRE(rig.until([&] { return rig.r->ready() && !rig.r->turning() && rig.r->pageCount() == 75; }));
+    CHECK(rig.r->backLabel()->rfind("‹ Back", 0) == 0);
+    CHECK(rig.r->backLabel()->find("page 1") == std::string::npos);
+}
+
+TEST_CASE("navigation fix: a jump to the page you're on adds no Back") {
+    Rig rig;
+    FakeEngine probe;
+    rig.r->jumpTo(probe.positionOfPage(0));
+    for (int i = 0; i < 40; ++i) rig.r->onTick(rig.nav);
+    REQUIRE(rig.waitPage(0));
+    REQUIRE(rig.until([&] { return !rig.r->turning(); }));
+    CHECK_FALSE(rig.r->backLabel());
+}
+
+TEST_CASE("navigation fix: a bookmark that can't be placed shows no ribbon and no entry") {
+    Rig rig;
+    rig.lib.addBookmark("EP000003", {"gone-from-this-edition", "Chapter 1", 1});
+    auto r2 = std::make_unique<ReaderScreen>(rig.row, "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
+    }, 6);
+    rig.r = std::move(r2);
+    rig.nav.visible = rig.r.get();
+    rig.r->onShow(rig.nav);
+    REQUIRE(rig.waitPage(0));
+    for (int i = 0; i < 20; ++i) rig.r->onTick(rig.nav);
+    CHECK_FALSE(rig.r->bookmarked());
+    CHECK(rig.r->bookmarks().empty());
+}
+
+TEST_CASE("navigation fix: a second tap on Back while the first is turning goes back once") {
+    Rig rig;
+    FakeEngine probe;
+    rig.r->jumpTo(probe.positionOfPage(20));
+    REQUIRE(rig.waitPage(20));
+    rig.r->jumpTo(probe.positionOfPage(60));
+    REQUIRE(rig.waitPage(60));
+    rig.r->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
+    rig.r->onGesture(tapAt(ReaderScreen::backRect().center()), rig.nav);
+    REQUIRE(rig.waitPage(20));
+    for (int i = 0; i < 20; ++i) rig.r->onTick(rig.nav);
+    CHECK(rig.r->page() == 20);
+    CHECK(rig.r->backLabel()->rfind("‹ Back to page 1", 0) == 0);
+}
+
+TEST_CASE("navigation fix: Back keeps the chapter in view") {
+    Rig rig;
+    FakeEngine probe;
+    rig.r->jumpTo(probe.positionOfPage(40));
+    REQUIRE(rig.waitPage(40));
+    CHECK(*rig.r->backLabel() == "‹ Back to page 1 · Chapter 5");
 }

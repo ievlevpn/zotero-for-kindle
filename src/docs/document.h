@@ -114,6 +114,8 @@ public:
     virtual PageImage render(int page) = 0;
     virtual DocPosition positionOfPage(int page) = 0;
     virtual int pageOf(const DocPosition&) = 0;
+    // As pageOf, but -1 where the position can't be placed (a bookmark from another edition).
+    virtual int pageOfPlaced(const DocPosition& p) { return pageOf(p); }
     virtual std::vector<TocEntry> toc() = 0;
     virtual std::string chapterAt(int page) = 0;
     virtual std::vector<SearchHit> search(const std::string& query, int maxHits) = 0;

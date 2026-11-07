@@ -41,6 +41,7 @@ public:
         return guard([&] { return e_->highlights(page, a); }, std::vector<HighlightBox>{});
     }
     int pageOfAnnotation(const AnnotationRecord& a) override { return guard([&] { return e_->pageOfAnnotation(a); }, -1); }
+    int pageOfPlaced(const DocPosition& p) override { return guard([&] { return e_->pageOfPlaced(p); }, -1); }
     std::string zoteroPosition(int page) override { return guard([&] { return e_->zoteroPosition(page); }, std::string()); }
     int pageOfZoteroPosition(const std::string& v) override { return guard([&] { return e_->pageOfZoteroPosition(v); }, -1); }
     int64_t wordsBetween(int from, int to) override { return guard([&] { return e_->wordsBetween(from, to); }, int64_t{0}); }

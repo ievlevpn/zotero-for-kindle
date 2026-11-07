@@ -161,6 +161,14 @@ DocPosition EpubEngine::positionOfPage(int page) {
     return p.isNull() ? DocPosition{} : DocPosition{utf8(p.toString())};
 }
 
+int EpubEngine::pageOfPlaced(const DocPosition& pos) {
+    if (!view_ || pos.value.empty()) return -1;
+    ldomXPointer p = view_->getDocument()->createXPointer(Utf8ToUnicode(lString8(pos.value.c_str())));
+    if (p.isNull()) return -1;
+    const int page = spreadOf(view_->getBookmarkPage(p));
+    return page >= 0 && page < pageCount() ? page : -1;
+}
+
 int EpubEngine::pageOf(const DocPosition& pos) {
     if (!view_ || pos.value.empty()) return 0;
     ldomXPointer p = view_->getDocument()->createXPointer(Utf8ToUnicode(lString8(pos.value.c_str())));

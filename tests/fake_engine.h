@@ -97,6 +97,11 @@ public:
             }
         return out;
     }
+    int pageOfPlaced(const DocPosition& p) override {
+        if (p.value.rfind("pos:", 0) != 0) return -1;
+        const int page = pageOf(p);
+        return page >= 0 && page < pageCount() ? page : -1;
+    }
     // Zotero positions: the page number as text.
     std::string zoteroPosition(int page) override { return std::to_string(page); }
     int pageOfZoteroPosition(const std::string& v) override {

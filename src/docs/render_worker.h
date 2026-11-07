@@ -34,7 +34,9 @@ struct RenderEvent {
     std::optional<InkPlacement> ink;     // Ink (nullopt: the format has no ink)
     UserError error;                 // Error
     DocPosition position;            // of this page
-    std::vector<int> bookmarkPages;  // Page: the page of each bookmark given to setBookmarks (-1: nowhere)
+    // Page: each bookmark given to setBookmarks with its page (-1: can't be placed), by position.
+    std::vector<std::pair<std::string, int>> bookmarkPlaces;
+    bool landed = false;  // Page: where a show/showPosition/showAnnotation request took it
     std::string zoteroPosition;      // Page: this page in Zotero's terms (lastPageIndex), "" if none
                                      // Placed: page (-1 if it can't be placed), chapter, progress
 };

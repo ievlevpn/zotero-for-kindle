@@ -282,6 +282,16 @@ PdfPosition parsePosition(const std::string& s) {
 
 }  // namespace
 
+int PdfEngine::pageOfPlaced(const DocPosition& pos) {
+    if (pos.value.rfind("p:", 0) != 0) return -1;
+    try {
+        const int page = std::stoi(pos.value.substr(2));
+        return page >= 0 && page < pageCount() ? page : -1;
+    } catch (...) {
+        return -1;
+    }
+}
+
 std::string PdfEngine::zoteroPosition(int page) {
     if (page < 0 || page >= pageCount()) return "";
     return std::to_string(page);  // Zotero's lastPageIndex for a PDF: the page index

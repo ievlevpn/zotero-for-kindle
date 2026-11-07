@@ -379,7 +379,11 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 turning_ = false;
                 layoutPending_ = false;
                 nav.library().saveReading(row_.key, position_.value, progress_);
-                markPages_ = e.bookmarkPages;
+                markPlaces_ = e.bookmarkPlaces;
+                if (e.landed && arriving_) {  // a jump landed; one onto the page it left needs no Back
+                    arriving_ = false;
+                    if (!back_.empty() && back_.back().page == page_) back_.pop_back();
+                }
                 // On Zotero's page, Zotero's exact place (not this page's start) stays the Kindle's.
                 if (!e.zoteroPosition.empty())
                     nav.library().setLocalPosition(row_.attachmentKey,
@@ -461,6 +465,7 @@ void ReaderScreen::onResize(Nav& nav) {
     if (editor_) closeEditor(nav);
     if (!worker_) return;
     layoutPending_ = true;
+    for (auto& b : back_) b.page = -1;  // turned: pages are counted again
     worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
 }
 
@@ -478,6 +483,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;
     layout_ = l;
+    for (auto& b : back_) b.page = -1;  // their pages are counted again: Back keeps the place, not the number
     saveLayout(nav.library(), row_.key, l);
     worker_->setLayout(l, position_);
 }
@@ -505,7 +511,8 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
         if (backLabel() && backRect().contains(g.pos)) return back(nav);
-        if (bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)))
+        if (bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
+            !layoutPending_ && !position_.value.empty())
             return toggleBookmark(nav);
     }
     if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()
@@ -850,19 +857,24 @@ void ReaderScreen::draw(Canvas& canvas) {
 
 void ReaderScreen::markJumpOrigin() {
     turnsSinceJump_ = 0;
-    if (page_ < 0 || position_.value.empty()) return;
-    if (!back_.empty() && back_.back().page == page_) return;
+    if (page_ < 0 || position_.value.empty() || layoutPending_) return;
+    arriving_ = true;
+    if (!back_.empty() && back_.back().page == page_ && page_ >= 0) return;
     back_.push_back({position_, page_});
 }
 
 std::optional<std::string> ReaderScreen::backLabel() const {
     if (back_.empty()) return std::nullopt;
-    return "‹ Back to page " + std::to_string(back_.back().page + 1);
+    // The page number only while the layout it was counted in lasts.
+    std::string label = back_.back().page >= 0 ? "‹ Back to page " + std::to_string(back_.back().page + 1) : "‹ Back";
+    if (!chapter_.empty()) label += " · " + chapter_;  // where you are now, as the footer said
+    return label;
 }
 
-Rect ReaderScreen::backRect() { return {0, H() - kFooterH, W() / 2, kFooterH}; }
+Rect ReaderScreen::backRect() { return {0, H() - kFooterH, W() * 3 / 5, kFooterH}; }
 
 void ReaderScreen::back(Nav& nav) {
+    if (turning_ || back_.empty()) return;
     const BackEntry to = back_.back();
     back_.pop_back();
     turnsSinceJump_ = 0;
@@ -874,16 +886,26 @@ void ReaderScreen::back(Nav& nav) {
 
 Rect ReaderScreen::bookmarkRect() { return {W() - 150, 0, 150, 160}; }
 
+int ReaderScreen::markPage(const std::string& position) const {
+    for (const auto& [pos, page] : markPlaces_)
+        if (pos == position) return page;
+    return -1;
+}
+
 bool ReaderScreen::bookmarked() const {
-    return std::find(markPages_.begin(), markPages_.end(), page_) != markPages_.end() && page_ >= 0;
+    if (page_ < 0) return false;
+    for (const auto& m : marks_)
+        if (markPage(m.position) == page_) return true;
+    return false;
 }
 
 std::vector<TocEntry> ReaderScreen::bookmarks() const {
     std::vector<TocEntry> out;
-    for (size_t i = 0; i < marks_.size() && i < markPages_.size(); ++i) {
-        if (markPages_[i] < 0) continue;
+    for (const auto& m : marks_) {
+        const int page = markPage(m.position);
+        if (page < 0) continue;
         // The page number shows beside it, as in the chapter list.
-        out.push_back({marks_[i].chapter.empty() ? "Bookmark" : marks_[i].chapter, 0, {marks_[i].position}, markPages_[i]});
+        out.push_back({m.chapter.empty() ? "Bookmark" : m.chapter, 0, {m.position}, page});
     }
     std::stable_sort(out.begin(), out.end(), [](const TocEntry& a, const TocEntry& b) { return a.page < b.page; });
     return out;
@@ -898,8 +920,8 @@ void ReaderScreen::sendBookmarks() {
 
 void ReaderScreen::toggleBookmark(Nav& nav) {
     if (bookmarked()) {
-        for (size_t i = 0; i < marks_.size() && i < markPages_.size(); ++i)
-            if (markPages_[i] == page_) nav.library().removeBookmark(row_.attachmentKey, marks_[i].position);
+        for (const auto& m : marks_)
+            if (markPage(m.position) == page_) nav.library().removeBookmark(row_.attachmentKey, m.position);
     } else {
         nav.library().addBookmark(row_.attachmentKey, {position_.value, chapter_, nav.nowMs()});
     }

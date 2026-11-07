@@ -190,7 +190,11 @@ private:
     int turnsSinceJump_ = 0;
     static constexpr int kBackTurns = 3;  // pages read at the new place before Back goes
     std::vector<Bookmark> marks_;
-    std::vector<int> markPages_;  // the page of each of marks_ (from the worker)
+    // Where the worker last placed each bookmark, by position (a stale Page event can't pair a
+    // bookmark with another's page).
+    std::vector<std::pair<std::string, int>> markPlaces_;
+    int markPage(const std::string& position) const;  // -1: not placed (yet)
+    bool arriving_ = false;  // a jump is landing: if it lands where it started, it needs no Back
     void answerPosition(bool go, Nav&);
     uint64_t placeId_ = 0;  // where Zotero's newer position falls (a Placed event)
     std::string placeAfterFirstPage_;  // Zotero's newer position, asked about once the book shows a page
