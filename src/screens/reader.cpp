@@ -114,12 +114,15 @@ ReaderScreen::~ReaderScreen() = default;
 
 Rect ReaderScreen::pageArea() { return {0, 0, kW, kH - kFooterH}; }
 Rect ReaderScreen::footerArea() { return {0, kH - kFooterH, kW, kFooterH}; }
-Rect ReaderScreen::noteRect() { return {40, 690, kW - 80, 260}; }  // above the system keyboard
+Rect ReaderScreen::noteRect() { return AnnotationEditor::commentRect(); }  // above the system keyboard
 
-bool ReaderScreen::wantsKeyboard() const { return note_.has_value(); }
+bool ReaderScreen::wantsKeyboard() const { return note_.has_value() || (editor_ && editor_->wantsKeyboard()); }
 
 void ReaderScreen::onShow(Nav& nav) {
-    if (worker_) return;  // back from a pushed panel: the book stays open
+    if (worker_) {  // back from a pushed panel: the book stays open (its notes may have changed)
+        refreshHighlights(nav);
+        return;
+    }
     layout_ = loadLayout(nav.library(), row_.key);
     if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
     DocPosition start;
@@ -156,8 +159,9 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
-                if (e.page != page_ && (selecting_ || selection_)) {  // the page changed under the selection
-                    if (note_) nav.keyboard().hide();
+                if (e.page != page_ && (selecting_ || selection_ || editor_)) {  // the page changed under them
+                    if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
+                    editor_.reset();
                     selecting_ = selDragging_ = false;
                     selection_.reset();
                     bar_.reset();
@@ -247,6 +251,14 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         menus_->onGesture(g, nav);
         return;
     }
+    if (editor_) {
+        if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
+            if (editor_->takeChanged()) refreshHighlights(nav);
+            return;
+        }
+        closeEditor(nav);
+        if (g.type == GestureType::Tap) return;
+    }
     if (note_) {  // typing a note: a tap elsewhere gives up on it
         if (g.type == GestureType::Tap && !noteRect().contains(g.pos)) closeSelection(nav);
         return;
@@ -290,12 +302,17 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    // The outer 30% always turns; in the middle a highlight opens its editor, elsewhere the menus.
     if (g.pos.x > kW * 7 / 10) turn(+1, nav);
     else if (g.pos.x < kW * 3 / 10) turn(-1, nav);
-    else if (ready()) openMenus(nav);  // not before the first page: nothing to act on yet
+    else if (ready() && !editAt(g.pos, nav)) openMenus(nav);  // not before the first page
 }
 
 void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
+    if (editor_) {
+        if (editor_->onKey(k, nav) == AnnotationEditor::Result::Closed) closeEditor(nav);
+        return;
+    }
     if (note_) {
         if (k.code == KeyEvent::Code::Escape) return closeSelection(nav);
         note_->apply(k);
@@ -304,6 +321,32 @@ void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
         return;
     }
     if (menus_) menus_->onKey(k, nav);
+}
+
+bool ReaderScreen::editAt(Point p, Nav& nav) {
+    std::string key;
+    for (auto it = highlights_.rbegin(); it != highlights_.rend() && key.empty(); ++it)
+        if (it->rect.contains(p)) key = it->annotationKey;
+    if (key.empty()) return false;
+    auto a = nav.library().annotation(key);
+    if (!a) return false;
+    Rect anchor;
+    for (const auto& h : highlights_)
+        if (h.annotationKey == key) anchor = anchor.united(h.rect);
+    editor_ = std::make_unique<AnnotationEditor>(*a, anchor);
+    nav.damage(editor_->rect(), Waveform::Fast);
+    return true;
+}
+
+void ReaderScreen::closeEditor(Nav& nav) {
+    if (!editor_) return;
+    if (editor_->takeChanged()) refreshHighlights(nav);
+    editor_.reset();
+    nav.damage(pageArea(), Waveform::Quality);
+}
+
+void ReaderScreen::refreshHighlights(Nav& nav) {
+    if (worker_) worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
 }
 
 void ReaderScreen::startSelection(Point at, Nav&) {
@@ -384,7 +427,7 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     nav.library().createAnnotation(a);
     nav.library().setMetaValue(kColourKey, colour_);
     if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
-    if (worker_) worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
+    refreshHighlights(nav);
     closeSelection(nav);
 }
 
@@ -434,6 +477,7 @@ void ReaderScreen::draw(Canvas& canvas) {
     drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, kW - 2 * kMargin - 260, 40}, 1);
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {kW - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
     if (bar_) bar_->draw(cr);
+    if (editor_) editor_->draw(cr);
     if (note_) {
         const Rect n = noteRect();
         roundedRect(cr, n.x + 1.5, n.y + 1.5, n.w - 3, n.h - 3, 18);

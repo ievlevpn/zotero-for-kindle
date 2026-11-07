@@ -17,6 +17,7 @@ namespace zk {
 class ReaderMenus;
 class Lipc;
 class AnnotationBar;
+class AnnotationEditor;
 
 class ReaderScreen final : public Screen {
 public:
@@ -72,6 +73,7 @@ public:
     const std::optional<Selection>& selection() const { return selection_; }
     AnnotationBar* annotationBar() { return bar_.get(); }
     bool noteOpen() const { return note_.has_value(); }
+    AnnotationEditor* annotationEditor() { return editor_.get(); }
     static Rect noteRect();
 
 private:
@@ -82,6 +84,9 @@ private:
     void showBar(Nav&);
     void saveSelection(const std::string& type, const std::string& comment, Nav&);
     void closeSelection(Nav&);
+    bool editAt(Point, Nav&);  // a highlight under the tap: open its editor
+    void closeEditor(Nav&);
+    void refreshHighlights(Nav&);
     void turn(int delta, Nav&);
     void openMenus(Nav&);
 
@@ -114,6 +119,7 @@ private:
     std::unique_ptr<AnnotationBar> bar_;
     std::optional<TextField> note_;
     std::string colour_ = "#ffd400";  // the colour used last
+    std::unique_ptr<AnnotationEditor> editor_;
 };
 
 }  // namespace zk

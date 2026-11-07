@@ -9,6 +9,8 @@
 #include <cairo.h>
 
 #include "core/geometry.h"
+#include "platform/input.h"
+#include "store/records.h"
 
 namespace zk {
 
@@ -48,6 +50,45 @@ private:
     Mode mode_;
     Rect rect_;
     std::string colour_;
+};
+
+class Nav;
+
+// Editing an existing annotation (spec §6.3 "tapping an existing highlight"): the Edit bar
+// (a colour recolours at once), its comment in a field over the keyboard, and "Delete this
+// highlight?" before deleting. Changes go to the library as edits to be sent; the caller
+// refreshes the page's highlights when changed() and repaints the page when it closes.
+class AnnotationEditor {
+public:
+    enum class Result { Open, Closed };
+
+    AnnotationEditor(AnnotationRecord, Rect anchor);
+
+    const std::string& key() const { return annotation_.key; }
+    const AnnotationBar& bar() const { return bar_; }
+    bool confirming() const { return state_ == State::Confirm; }
+    bool commenting() const { return state_ == State::Comment; }
+    bool wantsKeyboard() const { return commenting(); }
+    Rect rect() const;              // what is drawn now: the bar, the question or the comment box
+    Rect confirmRect(int i) const;  // 0 Delete, 1 Cancel
+    static Rect commentRect();      // above the system keyboard
+
+    // True once since the last call if the annotation changed (the page's highlights need redoing).
+    bool takeChanged();
+
+    void draw(cairo_t*) const;
+    Result onTap(Point, Nav&);
+    Result onKey(const KeyEvent&, Nav&);
+
+private:
+    enum class State { Bar, Confirm, Comment };
+    void enter(State, Nav&);
+
+    AnnotationRecord annotation_;
+    AnnotationBar bar_;
+    State state_ = State::Bar;
+    std::string comment_;
+    bool changed_ = false;
 };
 
 }  // namespace zk

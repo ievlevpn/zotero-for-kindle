@@ -21,6 +21,7 @@ test_sources = files(
   'test_epub_select.cpp',
   'test_pdf_select.cpp',
   'test_annotation_bar.cpp',
+  'test_annotation_edit.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',
