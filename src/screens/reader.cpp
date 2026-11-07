@@ -50,6 +50,34 @@ void blit(Canvas& c, const PageImage& img, int y0) {
     cairo_surface_mark_dirty(c.surface());
 }
 
+// Zotero highlights (read-only): the page under the box is multiplied by the shade, so paper
+// darkens and ink stays black; underlines are a bar under the text.
+void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
+    if (boxes.empty()) return;
+    cairo_surface_flush(c.surface());
+    unsigned char* data = cairo_image_surface_get_data(c.surface());
+    const int stride = cairo_image_surface_get_stride(c.surface());
+    for (const auto& b : boxes) {
+        const Rect r = b.rect.intersected(ReaderScreen::pageArea());
+        if (r.empty()) continue;
+        if (b.underline) {
+            for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < c.height(); ++y) {
+                auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
+                for (int x = r.x; x < r.x + r.w; ++x) row[x] = 0xff3c3c3cu;
+            }
+            continue;
+        }
+        for (int y = r.y; y < r.y + r.h; ++y) {
+            auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
+            for (int x = r.x; x < r.x + r.w; ++x) {
+                const uint32_t v = (row[x] & 0xff) * b.shade / 255;
+                row[x] = 0xff000000u | (v << 16) | (v << 8) | v;
+            }
+        }
+    }
+    cairo_surface_mark_dirty(c.surface());
+}
+
 }  // namespace
 
 ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery,
@@ -221,6 +249,7 @@ void ReaderScreen::draw(Canvas& canvas) {
         return;
     }
     blit(canvas, *image_, 0);
+    drawHighlights(canvas, highlights_);
     const Rect f = footerArea();
     drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, kW - 2 * kMargin - 260, 40}, 1);
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {kW - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);

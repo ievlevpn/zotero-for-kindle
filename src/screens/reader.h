@@ -37,6 +37,7 @@ public:
 
     int page() const { return page_; }
     bool ready() const { return image_ != nullptr; }
+    const std::vector<HighlightBox>& highlights() const { return highlights_; }
     const std::optional<UserError>& error() const { return error_; }
     std::string footerLeft() const;
     std::string footerRight() const;
