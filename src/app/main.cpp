@@ -20,6 +20,7 @@
 #include "screens/collections.h"
 #include "screens/home.h"
 #include "screens/library.h"
+#include "screens/search.h"
 #include "screens/sync_status.h"
 #include "store/db.h"
 #include "store/library.h"
@@ -158,8 +159,11 @@ int main(int argc, char** argv) {
     std::unique_ptr<Display> display = makeDisplay();
     App app(*display, lib, sync, *keyboard);
     SyncStatus status;
-    app.setRoot(0, std::make_unique<HomeScreen>(status, HomeActions{}, wallMs));
     auto openItem = [](const ItemRow& r) { log(LogLevel::Info, "open %s (open flow arrives in Task 10)", r.key.c_str()); };
+    HomeActions home;
+    home.openSearch = [&app, openItem] { app.push(std::make_unique<SearchScreen>(openItem)); };
+    home.openItem = openItem;
+    app.setRoot(0, std::make_unique<HomeScreen>(status, home, wallMs));
     app.setRoot(1, std::make_unique<LibraryScreen>(openItem));
     app.setRoot(2, std::make_unique<CollectionsScreen>(openItem));
     app.setRoot(3, std::make_unique<PlaceholderScreen>("Notes"));
