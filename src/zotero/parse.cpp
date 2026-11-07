@@ -60,6 +60,16 @@ std::vector<std::string> tagsOf(const json& d) {
     return out;
 }
 
+// The first run of exactly four digits ("2019-02-01" -> "2019", "Spring 1843" -> "1843").
+std::string yearOf(const std::string& s) {
+    for (size_t i = 0; i + 4 <= s.size(); ++i) {
+        auto digit = [&](size_t k) { return k < s.size() && s[k] >= '0' && s[k] <= '9'; };
+        if ((i == 0 || !digit(i - 1)) && digit(i) && digit(i + 1) && digit(i + 2) && digit(i + 3) && !digit(i + 4))
+            return s.substr(i, 4);
+    }
+    return {};
+}
+
 }  // namespace
 
 ObjectKind kindOf(const json& obj) {
@@ -93,6 +103,9 @@ ItemRecord parseItem(const json& obj) {
     r.dateAdded = str(d, "dateAdded");
     r.dateModified = str(d, "dateModified");
     r.json = d.dump();
+    const json& meta = obj.is_object() && obj.contains("meta") && obj["meta"].is_object() ? obj["meta"] : json::object();
+    r.year = yearOf(str(meta, "parsedDate"));
+    if (r.year.empty()) r.year = yearOf(r.date);
     return r;
 }
 
@@ -124,6 +137,7 @@ AnnotationRecord parseAnnotation(const json& obj) {
     a.position = str(d, "annotationPosition");
     a.tags = tagsOf(d);
     a.json = d.dump();
+    a.dateModified = str(d, "dateModified");
     return a;
 }
 

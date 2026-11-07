@@ -1,5 +1,7 @@
 #include "store/library.h"
 
+#include "core/log.h"
+
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
@@ -9,18 +11,29 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 1;
+constexpr int64_t kSchemaVersion = 2;
 
-// Schema version 1 (PRAGMA user_version). Text-heavy columns default to '' so reads never see NULL.
+// Schema version 2 (PRAGMA user_version). Text-heavy columns default to '' so reads never see NULL.
+// items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
+// readableKey/readableType: the item's file to open (EPUB preferred), kept by reindex().
 const char* kSchema = R"sql(
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE items (
-  key TEXT PRIMARY KEY, version INTEGER NOT NULL DEFAULT 0, itemType TEXT NOT NULL DEFAULT '',
+  id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, version INTEGER NOT NULL DEFAULT 0, itemType TEXT NOT NULL DEFAULT '',
   title TEXT NOT NULL DEFAULT '', date TEXT NOT NULL DEFAULT '', publication TEXT NOT NULL DEFAULT '',
   parentKey TEXT NOT NULL DEFAULT '', creators TEXT NOT NULL DEFAULT '[]', collections TEXT NOT NULL DEFAULT '[]',
   tags TEXT NOT NULL DEFAULT '[]', dateAdded TEXT NOT NULL DEFAULT '', dateModified TEXT NOT NULL DEFAULT '',
-  json TEXT NOT NULL DEFAULT '{}', creatorsText TEXT NOT NULL DEFAULT '', tagsText TEXT NOT NULL DEFAULT '');
+  json TEXT NOT NULL DEFAULT '{}', creatorsText TEXT NOT NULL DEFAULT '', tagsText TEXT NOT NULL DEFAULT '',
+  year TEXT NOT NULL DEFAULT '', sortCreator TEXT NOT NULL DEFAULT '', readableKey TEXT NOT NULL DEFAULT '',
+  readableType TEXT NOT NULL DEFAULT '');
 CREATE INDEX items_recent ON items(parentKey, dateAdded DESC);
+CREATE INDEX items_title ON items(parentKey, title COLLATE NOCASE);
+CREATE INDEX items_author ON items(parentKey, sortCreator COLLATE NOCASE, title COLLATE NOCASE);
+CREATE INDEX items_year ON items(parentKey, year DESC, title COLLATE NOCASE);
+CREATE INDEX items_readable ON items(parentKey, readableType);
+CREATE TABLE reading_state (itemKey TEXT PRIMARY KEY, attachmentKey TEXT NOT NULL DEFAULT '',
+  openedMs INTEGER NOT NULL DEFAULT 0, progress REAL NOT NULL DEFAULT 0, location TEXT NOT NULL DEFAULT '');
+CREATE INDEX reading_state_opened ON reading_state(openedMs DESC);
 CREATE TABLE item_collections (itemKey TEXT NOT NULL, collectionKey TEXT NOT NULL, PRIMARY KEY (collectionKey, itemKey));
 CREATE INDEX item_collections_item ON item_collections(itemKey);
 CREATE TABLE collections (key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', parentKey TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0);
@@ -34,7 +47,8 @@ CREATE TABLE annotations (
   comment TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '', pageLabel TEXT NOT NULL DEFAULT '',
   sortIndex TEXT NOT NULL DEFAULT '', position TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '[]',
   version INTEGER NOT NULL DEFAULT 0, dirty INTEGER NOT NULL DEFAULT 0, conflict INTEGER NOT NULL DEFAULT 0,
-  createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}');
+  createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '');
+CREATE INDEX annotations_modified ON annotations(dateModified DESC);
 CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
 CREATE TABLE tracked_attachments (key TEXT PRIMARY KEY);
@@ -91,7 +105,7 @@ std::vector<ItemRecord> readItems(Stmt& st) {
 
 const char* kAnnotationColumns =
     "key, parentKey, type, text, comment, color, pageLabel, sortIndex, position, tags, version, dirty, conflict, "
-    "createdHere, json";
+    "createdHere, json, dateModified";
 
 std::vector<AnnotationRecord> readAnnotations(Stmt& st) {
     std::vector<AnnotationRecord> out;
@@ -112,6 +126,7 @@ std::vector<AnnotationRecord> readAnnotations(Stmt& st) {
         a.conflict = st.integer(12) != 0;
         a.createdHere = st.integer(13) != 0;
         a.json = st.text(14);
+        a.dateModified = st.text(15);
         out.push_back(std::move(a));
     }
     return out;
@@ -197,14 +212,32 @@ template <class F> auto Library::guarded(F&& f) -> decltype(f()) {
 }
 
 void Library::migrate() {
-    if (db_.userVersion() >= kSchemaVersion) return;
+    const int64_t version = db_.userVersion();
+    if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
+        if (version > 0) {
+            // Older schemas are rebuilt: the database is a cache of Zotero and nothing local is
+            // lost (no version before 2 ever uploaded or kept unsent work).
+            log(LogLevel::Info, "library: schema %lld -> %lld, rebuilding the local copy", static_cast<long long>(version),
+                static_cast<long long>(kSchemaVersion));
+            std::vector<std::string> tables;
+            {
+                Stmt st = db_.prepare(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
+                    "AND name NOT LIKE 'item_fts_%'");
+                while (st.step()) tables.push_back(st.text(0));
+            }
+            for (const auto& t : tables) db_.exec("DROP TABLE IF EXISTS \"" + t + "\"");
+        }
         db_.exec(kSchema);
         db_.setUserVersion(kSchemaVersion);
         db_.exec("COMMIT");
     } catch (...) {
-        db_.exec("ROLLBACK");
+        try {
+            db_.exec("ROLLBACK");
+        } catch (const DbError&) {
+        }
         throw;
     }
 }
@@ -228,6 +261,16 @@ void Library::reindex(const std::string& itemKey) {
         "   WHERE a.parentKey = i.key OR (a.key = i.key AND a.parentKey = '')) "
         "FROM items i WHERE i.key = ?");
     ins.bind(1, itemKey).step();
+    Stmt readable = db_.prepare(
+        "UPDATE items SET (readableKey, readableType) = (SELECT coalesce(a.key, ''), coalesce(CASE a.contentType "
+        "  WHEN 'application/epub+zip' THEN 'EPUB' WHEN 'application/pdf' THEN 'PDF' END, '') "
+        "  FROM (SELECT 1) LEFT JOIN (SELECT key, contentType FROM attachments "
+        "    WHERE (parentKey = ?1 OR (key = ?1 AND parentKey = '')) "
+        "      AND contentType IN ('application/epub+zip', 'application/pdf') "
+        "      AND linkMode NOT IN ('linked_file', 'linked_url') "
+        "    ORDER BY contentType = 'application/epub+zip' DESC, key LIMIT 1) a) "
+        "WHERE key = ?1");
+    readable.bind(1, itemKey).step();
 }
 
 std::string Library::itemOfAttachment(const std::string& attachmentKey) {
@@ -248,16 +291,22 @@ void Library::upsertItem(const ItemRecord& r) {
         }
         Stmt st = db_.prepare(
             "INSERT INTO items (key, version, itemType, title, date, publication, parentKey, creators, collections, "
-            "tags, dateAdded, dateModified, json, creatorsText, tagsText) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "tags, dateAdded, dateModified, json, creatorsText, tagsText, year, sortCreator) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET version=excluded.version, itemType=excluded.itemType, "
             "title=excluded.title, date=excluded.date, publication=excluded.publication, parentKey=excluded.parentKey, "
             "creators=excluded.creators, collections=excluded.collections, tags=excluded.tags, "
             "dateAdded=excluded.dateAdded, dateModified=excluded.dateModified, json=excluded.json, "
-            "creatorsText=excluded.creatorsText, tagsText=excluded.tagsText");
+            "creatorsText=excluded.creatorsText, tagsText=excluded.tagsText, year=excluded.year, "
+            "sortCreator=excluded.sortCreator");
         st.bind(1, r.key).bind(2, r.version).bind(3, r.itemType).bind(4, r.title).bind(5, r.date);
         st.bind(6, r.publication).bind(7, r.parentKey).bind(8, creators.dump());
         st.bind(9, json(r.collections).dump()).bind(10, json(r.tags).dump()).bind(11, r.dateAdded);
         st.bind(12, r.dateModified).bind(13, r.json).bind(14, creatorsText).bind(15, joined(r.tags));
+        std::string sortCreator = r.sortCreator;
+        if (sortCreator.empty() && !r.creators.empty())
+            sortCreator = r.creators[0].last.empty() ? r.creators[0].name : r.creators[0].last;
+        st.bind(16, r.year).bind(17, sortCreator);
         st.step();
         Stmt clear = db_.prepare("DELETE FROM item_collections WHERE itemKey = ?");
         clear.bind(1, r.key).step();
@@ -293,15 +342,16 @@ void Library::upsertAnnotation(const AnnotationRecord& r) {
         const std::string oldAttachment = old.step() ? old.text(0) : std::string{};
         Stmt st = db_.prepare(
             std::string("INSERT INTO annotations (") + kAnnotationColumns +
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
             "type=excluded.type, text=excluded.text, comment=excluded.comment, color=excluded.color, "
             "pageLabel=excluded.pageLabel, sortIndex=excluded.sortIndex, position=excluded.position, "
             "tags=excluded.tags, version=excluded.version, dirty=excluded.dirty, conflict=excluded.conflict, "
-            "createdHere=excluded.createdHere, json=excluded.json");
+            "createdHere=excluded.createdHere, json=excluded.json, dateModified=excluded.dateModified");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.type).bind(4, r.text).bind(5, r.comment);
         st.bind(6, r.color).bind(7, r.pageLabel).bind(8, r.sortIndex).bind(9, r.position);
         st.bind(10, json(r.tags).dump()).bind(11, r.version).bind(12, int64_t{r.dirty});
         st.bind(13, int64_t{r.conflict}).bind(14, int64_t{r.createdHere}).bind(15, r.json.empty() ? "{}" : r.json);
+        st.bind(16, r.dateModified);
         st.step();
         if (!oldAttachment.empty() && oldAttachment != r.parentKey) touch(itemOfAttachment(oldAttachment));
         touch(itemOfAttachment(r.parentKey));
@@ -540,6 +590,232 @@ void Library::setObjectVersion(const std::string& key, int64_t version) {
         Stmt st = db_.prepare(
             "INSERT INTO object_versions (key, version) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET version=excluded.version");
         st.bind(1, key).bind(2, version).step();
+    });
+}
+
+}  // namespace zk
+
+// ---- Screens -------------------------------------------------------------------------------
+
+namespace zk {
+
+namespace {
+
+const char* kRowColumns =
+    "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
+    "coalesce(rs.progress, -1)";
+const char* kRowJoins =
+    " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key ";
+
+std::vector<ItemRow> readRows(Stmt& st) {
+    std::vector<ItemRow> out;
+    while (st.step()) {
+        ItemRecord rec;
+        rec.year = st.text(3);
+        auto creators = json::parse(st.text(2), nullptr, false);
+        if (creators.is_array())
+            for (const auto& c : creators)
+                rec.creators.push_back({c.value("first", ""), c.value("last", ""), c.value("name", ""), c.value("type", "")});
+        ItemRow r;
+        r.key = st.text(0);
+        r.title = st.text(1);
+        r.byline = byline(rec);
+        r.attachmentKey = st.text(4);
+        r.badge = st.text(5);
+        r.fileState = static_cast<AttachmentRecord::State>(st.integer(6));
+        r.progress = st.real(7);
+        out.push_back(std::move(r));
+    }
+    return out;
+}
+
+// WHERE clause and bindings shared by rows() and countRows().
+struct Where {
+    std::string sql;
+    std::vector<std::string> args;
+};
+
+Where whereOf(const ListQuery& q) {
+    Where w{" WHERE i.parentKey = ''", {}};
+    switch (q.filter) {
+        case Filter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
+        case Filter::Pdf: w.sql += " AND i.readableType = 'PDF'"; break;
+        case Filter::Unread: w.sql += " AND NOT EXISTS (SELECT 1 FROM reading_state r WHERE r.itemKey = i.key)"; break;
+        case Filter::All: break;
+    }
+    if (!q.tag.empty()) {
+        w.sql += " AND EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?)";
+        w.args.push_back(q.tag);
+    }
+    if (!q.collectionKey.empty()) {
+        w.sql += " AND i.key IN (SELECT itemKey FROM item_collections WHERE collectionKey = ?)";
+        w.args.push_back(q.collectionKey);
+    }
+    return w;
+}
+
+const char* orderOf(SortBy s) {
+    switch (s) {
+        case SortBy::Title: return " ORDER BY i.title COLLATE NOCASE, i.key";
+        case SortBy::Author: return " ORDER BY i.sortCreator COLLATE NOCASE, i.title COLLATE NOCASE, i.key";
+        case SortBy::Year: return " ORDER BY i.year DESC, i.title COLLATE NOCASE, i.key";
+        case SortBy::Recent: break;
+    }
+    return " ORDER BY i.dateAdded DESC, i.key";
+}
+
+}  // namespace
+
+std::string byline(const ItemRecord& r) {
+    auto nameOf = [](const Creator& c) { return c.last.empty() ? c.name : c.last; };
+    std::string who;
+    if (r.creators.size() == 1) who = nameOf(r.creators[0]);
+    else if (r.creators.size() == 2) who = nameOf(r.creators[0]) + ", " + nameOf(r.creators[1]);
+    else if (r.creators.size() > 2) who = nameOf(r.creators[0]) + " et al.";
+    if (who.empty()) return r.year;
+    return r.year.empty() ? who : who + " · " + r.year;
+}
+
+std::vector<ItemRow> Library::rows(const ListQuery& q) {
+    return guarded([&] {
+        Where w = whereOf(q);
+        Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + w.sql + orderOf(q.sort) +
+                              " LIMIT ? OFFSET ?");
+        int n = 1;
+        for (const auto& a : w.args) st.bind(n++, a);
+        st.bind(n++, int64_t{q.limit}).bind(n, int64_t{q.offset});
+        return readRows(st);
+    });
+}
+
+int64_t Library::countRows(const ListQuery& q) {
+    return guarded([&] {
+        Where w = whereOf(q);
+        Stmt st = db_.prepare("SELECT count(*) FROM items i" + w.sql);
+        int n = 1;
+        for (const auto& a : w.args) st.bind(n++, a);
+        st.step();
+        return st.integer(0);
+    });
+}
+
+std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, int limit) {
+    const std::string fts = ftsQuery(query);
+    if (fts.empty()) return {};
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM item_fts JOIN items i ON i.id = item_fts.rowid" +
+                              kRowJoins + " WHERE item_fts MATCH ? AND i.parentKey = '' ORDER BY rank LIMIT ? OFFSET ?");
+        st.bind(1, fts).bind(2, int64_t{limit}).bind(3, int64_t{offset});
+        return readRows(st);
+    });
+}
+
+std::vector<std::pair<std::string, int64_t>> Library::topTags(int n) {
+    return guarded([&] {
+        Stmt st = db_.prepare(
+            "SELECT t.value, count(*) FROM items i, json_each(i.tags) t WHERE i.parentKey = '' "
+            "GROUP BY t.value ORDER BY 2 DESC, 1 LIMIT ?");
+        st.bind(1, int64_t{n});
+        std::vector<std::pair<std::string, int64_t>> out;
+        while (st.step()) out.emplace_back(st.text(0), st.integer(1));
+        return out;
+    });
+}
+
+std::vector<CollectionEntry> Library::childCollections(const std::string& parentKey) {
+    return guarded([&] {
+        Stmt st = db_.prepare(
+            "SELECT c.key, c.name, c.parentKey, c.version, "
+            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key), "
+            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
+            "FROM collections c WHERE c.parentKey = ? ORDER BY c.name COLLATE NOCASE");
+        st.bind(1, parentKey);
+        std::vector<CollectionEntry> out;
+        while (st.step())
+            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+        return out;
+    });
+}
+
+std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
+    return guarded([&] {
+        std::string cols;
+        for (const char* c : {"key", "parentKey", "type", "text", "comment", "color", "pageLabel", "sortIndex", "position",
+                              "tags", "version", "dirty", "conflict", "createdHere", "json", "dateModified"})
+            cols += std::string(cols.empty() ? "" : ", ") + "n." + c;
+        Stmt st = db_.prepare("SELECT " + cols +
+                              ", coalesce(i.key, ''), coalesce(i.title, '') FROM annotations n "
+                              "LEFT JOIN attachments a ON a.key = n.parentKey "
+                              "LEFT JOIN items i ON i.key = CASE WHEN a.parentKey = '' THEN a.key ELSE a.parentKey END "
+                              "ORDER BY n.dateModified DESC, n.key LIMIT ? OFFSET ?");
+        st.bind(1, int64_t{limit}).bind(2, int64_t{offset});
+        std::vector<NoteRow> out;
+        // readAnnotations consumes the statement; read the two extra columns alongside.
+        while (st.step()) {
+            NoteRow row;
+            AnnotationRecord& a = row.annotation;
+            a.key = st.text(0);
+            a.parentKey = st.text(1);
+            a.type = st.text(2);
+            a.text = st.text(3);
+            a.comment = st.text(4);
+            a.color = st.text(5);
+            a.pageLabel = st.text(6);
+            a.sortIndex = st.text(7);
+            a.position = st.text(8);
+            a.tags = strings(st.text(9));
+            a.version = st.integer(10);
+            a.dirty = st.integer(11) != 0;
+            a.conflict = st.integer(12) != 0;
+            a.createdHere = st.integer(13) != 0;
+            a.json = st.text(14);
+            a.dateModified = st.text(15);
+            row.itemKey = st.text(16);
+            row.itemTitle = st.text(17);
+            out.push_back(std::move(row));
+        }
+        return out;
+    });
+}
+
+int64_t Library::countAnnotations() {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT count(*) FROM annotations");
+        st.step();
+        return st.integer(0);
+    });
+}
+
+void Library::markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs) {
+    guarded([&] {
+        Stmt st = db_.prepare(
+            "INSERT INTO reading_state (itemKey, attachmentKey, openedMs) VALUES (?, ?, ?) ON CONFLICT(itemKey) DO UPDATE "
+            "SET attachmentKey = excluded.attachmentKey, openedMs = excluded.openedMs");
+        st.bind(1, itemKey).bind(2, attachmentKey).bind(3, nowMs).step();
+    });
+}
+
+std::optional<ReadingState> Library::lastOpened() {
+    return guarded([&]() -> std::optional<ReadingState> {
+        Stmt st = db_.prepare(
+            "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state ORDER BY openedMs DESC LIMIT 1");
+        if (!st.step()) return std::nullopt;
+        return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
+    });
+}
+
+void Library::setFileState(const std::string& attachmentKey, AttachmentRecord::State state, const std::string& localPath) {
+    guarded([&] {
+        Stmt st = db_.prepare("UPDATE attachments SET state = ?, localPath = ? WHERE key = ?");
+        st.bind(1, static_cast<int64_t>(state)).bind(2, localPath).bind(3, attachmentKey).step();
+    });
+}
+
+std::vector<AttachmentRecord> Library::downloadedAttachments() {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kAttachmentColumns + " FROM attachments WHERE state = ? ORDER BY key");
+        st.bind(1, static_cast<int64_t>(AttachmentRecord::State::Local));
+        return readAttachments(st);
     });
 }
 

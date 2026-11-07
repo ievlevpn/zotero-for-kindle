@@ -15,6 +15,44 @@ namespace zk {
 
 class Library;
 
+enum class SortBy { Recent, Title, Author, Year };
+enum class Filter { All, Epub, Pdf, Unread };
+
+struct ListQuery {
+    SortBy sort = SortBy::Recent;
+    Filter filter = Filter::All;
+    std::string tag, collectionKey;
+    int offset = 0, limit = 8;
+};
+
+// One line in a list: an item and the file it opens (EPUB preferred over PDF).
+struct ItemRow {
+    std::string key, title, byline, badge /* "EPUB" | "PDF" | "" */, attachmentKey;
+    AttachmentRecord::State fileState = AttachmentRecord::State::Remote;
+    double progress = -1;  // -1: never opened
+};
+
+struct CollectionEntry {
+    CollectionRecord collection;
+    int64_t items = 0;
+    bool hasChildren = false;
+};
+
+struct NoteRow {
+    AnnotationRecord annotation;
+    std::string itemKey, itemTitle;
+};
+
+struct ReadingState {
+    std::string itemKey, attachmentKey;
+    int64_t openedMs = 0;
+    double progress = 0;
+    std::string location;
+};
+
+// "Kuhn · 1962", "Adda, Cooper · 2003", "Raissi et al. · 2019", "2019", "".
+std::string byline(const ItemRecord&);
+
 struct LibraryStats {
     int64_t items = 0, attachments = 0, annotations = 0, collections = 0, conflicts = 0, unsent = 0;
 };
@@ -78,6 +116,19 @@ public:
     std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB/PDF files only
 
     LibraryStats stats();
+
+    // Screens (spec §6): paged lists, counts, collections, notes, reading state, downloads.
+    std::vector<ItemRow> rows(const ListQuery&);
+    int64_t countRows(const ListQuery&);
+    std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit);
+    std::vector<std::pair<std::string, int64_t>> topTags(int n);
+    std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
+    std::vector<NoteRow> recentAnnotations(int offset, int limit);
+    int64_t countAnnotations();
+    void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);
+    std::optional<ReadingState> lastOpened();
+    void setFileState(const std::string& attachmentKey, AttachmentRecord::State, const std::string& localPath);
+    std::vector<AttachmentRecord> downloadedAttachments();
 
     Transaction begin();
 
