@@ -15,7 +15,7 @@ DRY=0
 VERSION=$1
 NOTES=$2
 [ -f "$NOTES" ] || { echo "error: $NOTES missing" >&2; exit 1; }
-[ "$(git branch --show-current)" = master ] || { echo "error: not on master" >&2; exit 1; }
+[ "$DRY" = 1 ] || [ "$(git branch --show-current)" = master ] || { echo "error: not on master" >&2; exit 1; }
 [ -z "$(git status --porcelain)" ] || { echo "error: the working tree isn't clean" >&2; exit 1; }
 CURRENT=$(sed -n "s/^  version : '\(.*\)',$/\1/p" meson.build)
 python3 - "$CURRENT" "$VERSION" <<'PY' || { echo "error: $VERSION isn't newer than $CURRENT" >&2; exit 1; }
