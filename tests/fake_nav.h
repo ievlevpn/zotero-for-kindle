@@ -46,6 +46,10 @@ public:
     void toast(const std::string& text) override { toasts.push_back(text); }
     const Screen* top() const override { return visible; }
     void orientationChanged() override { ++orientationChanges; }
+    void paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>&) override { painted.push_back({r, w}); }
+    bool systemInk() const override { return hasSystemInk; }
+    void setSystemInk(bool on) override { systemInkOn = on; }
+    bool hasSystemInk = false, systemInkOn = false;
     int orientationChanges = 0;
 
     struct Damage {
@@ -53,6 +57,7 @@ public:
         Waveform waveform;
     };
     std::vector<Damage> damages;
+    std::vector<Damage> painted;  // paintNow: drawn and shown at once
     std::vector<std::unique_ptr<Screen>> pushed;
     std::vector<std::string> toasts;
     const Screen* visible = nullptr;

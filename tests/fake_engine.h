@@ -8,6 +8,8 @@
 
 #include "docs/document.h"
 
+#include <nlohmann/json.hpp>
+
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -70,7 +72,21 @@ public:
     std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>& anns) override {
         std::vector<HighlightBox> out;
         for (const auto& a : anns)
-            if (a.pageLabel == std::to_string(page)) {
+            if (a.pageLabel == std::to_string(page) && a.type == "ink") {  // position: device points as drawn
+                HighlightBox b{a.key, {}, 0, false};
+                b.kind = HighlightBox::Kind::Ink;
+                b.strokePx = 4;
+                const nlohmann::json pos = nlohmann::json::parse(a.position);
+                for (const auto& xy : pos["paths"]) {
+                    std::vector<Point> path;
+                    for (size_t i = 0; i + 1 < xy.size(); i += 2) {
+                        path.push_back({xy[i].get<int>(), xy[i + 1].get<int>()});
+                        b.rect = b.rect.united({path.back().x - 4, path.back().y - 4, 9, 9});
+                    }
+                    b.paths.push_back(std::move(path));
+                }
+                out.push_back(std::move(b));
+            } else if (a.pageLabel == std::to_string(page)) {
                 HighlightBox b{a.key, {100, 200, 600, 50}, shadeOf(a.color), a.type == "underline"};
                 if (a.type == "text") {
                     b.kind = HighlightBox::Kind::Text;
@@ -101,6 +117,19 @@ public:
     int64_t wordsBetween(int from, int to) override {
         wordPagesCounted += to - from;
         return static_cast<int64_t>(to - from) * 300;
+    }
+
+    std::optional<InkPlacement> inkPosition(int page, const std::vector<std::vector<Point>>& paths, int widthPx) override {
+        nlohmann::json jp = nlohmann::json::array();
+        for (const auto& path : paths) {
+            nlohmann::json xy = nlohmann::json::array();
+            for (const Point& q : path) xy.push_back(q.x), xy.push_back(q.y);
+            jp.push_back(xy);
+        }
+        char sort[32];
+        std::snprintf(sort, sizeof sort, "%05d|%08d", page, 0);
+        return InkPlacement{nlohmann::json{{"fake", page}, {"width", widthPx}, {"paths", jp}}.dump(), sort,
+                            std::to_string(page)};
     }
 
     std::optional<Selection> select(int page, Point from, Point to) override {

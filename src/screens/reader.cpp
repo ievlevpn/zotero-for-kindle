@@ -155,6 +155,37 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
     cairo_restore(cr);
 }
 
+void strokePaths(cairo_t* cr, const std::vector<std::vector<Point>>& paths, int widthPx) {
+    if (paths.empty()) return;
+    gray(cr, kInk);
+    cairo_set_line_width(cr, widthPx);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    for (const auto& path : paths) {
+        for (size_t i = 0; i < path.size(); ++i)
+            i ? cairo_line_to(cr, path[i].x, path[i].y) : cairo_move_to(cr, path[i].x, path[i].y);
+        if (path.size() == 1) cairo_line_to(cr, path[0].x + 0.1, path[0].y);
+    }
+    cairo_stroke(cr);
+}
+
+// Distance from p to the segment a-b, squared.
+double distSq(Point p, Point a, Point b) {
+    const double vx = b.x - a.x, vy = b.y - a.y, wx = p.x - a.x, wy = p.y - a.y;
+    const double len = vx * vx + vy * vy;
+    const double t = len > 0 ? std::clamp((wx * vx + wy * vy) / len, 0.0, 1.0) : 0.0;
+    const double dx = wx - t * vx, dy = wy - t * vy;
+    return dx * dx + dy * dy;
+}
+
+bool pathNear(const std::vector<Point>& path, const std::vector<Point>& probe, double radius) {
+    const double r2 = radius * radius;
+    for (const Point& q : probe)
+        for (size_t i = 0; i < path.size(); ++i)
+            if (distSq(q, path[i], path[i + 1 < path.size() ? i + 1 : i]) <= r2) return true;
+    return false;
+}
+
 // The selection, shown inverted (white text on black), as Kindle shows it.
 void drawSelection(Canvas& c, const std::vector<Rect>& rects) {
     if (rects.empty()) return;
@@ -232,7 +263,11 @@ void ReaderScreen::onShow(Nav& nav) {
     worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
 }
 
-void ReaderScreen::onTick(Nav& nav) { pumpEvents(nav, true); }
+void ReaderScreen::onTick(Nav& nav) {
+    if (nav.systemInk()) nav.setSystemInk(type_ == DocType::Pdf && penAllowed() && !eraserNear_);
+    if (!inkPending_.empty() && !inkDown_ && nav.nowMs() - inkLastMs_ >= kInkCommitMs) commitInk();
+    pumpEvents(nav, true);
+}
 
 void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
     if (!worker_) return;
@@ -275,6 +310,9 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 if (visible) nav.damage(positionBannerRect(), Waveform::Ui);
                 break;
             }
+            case RenderEvent::Kind::Ink:
+                onInk(e, nav);
+                break;
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
@@ -289,6 +327,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 }
                 image_ = e.image;
                 highlights_ = e.highlights;
+                inkSaved_.clear();  // now drawn from the annotations
                 page_ = e.page;
                 pageCount_ = e.pageCount;
                 chapter_ = e.chapter;
@@ -325,6 +364,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
 
 void ReaderScreen::turn(int delta, Nav& nav) {
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
+    commitInk();
     const int target = page_ + delta;
     if (target < 0 || (pageCount_ > 0 && target >= pageCount_)) return;
     // Reading on answers Zotero's position: the Kindle's place it is.
@@ -343,6 +383,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
 
 void ReaderScreen::turnTo(int page) {
     if (!worker_ || layoutPending_) return;
+    commitInk();
     turning_ = true;
     worker_->show(page);
 }
@@ -350,6 +391,7 @@ void ReaderScreen::turnTo(int page) {
 void ReaderScreen::jumpTo(const DocPosition& pos) {
     menus_.reset();  // we're not visible (a pushed screen called us); the next Page repaints all
     if (!worker_) return;
+    commitInk();
     turning_ = true;
     worker_->showPosition(pos);
 }
@@ -391,6 +433,7 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
 }
 
 void ReaderScreen::openMenus(Nav& nav) {
+    commitInk();  // leaving the book goes through the menus
     menus_ = std::make_unique<ReaderMenus>(*this, lipc_);
     menus_->open(nav);
 }
@@ -669,6 +712,17 @@ void ReaderScreen::draw(Canvas& canvas) {
     }
     blit(canvas, *image_, 0);
     drawHighlights(canvas, highlights_);
+    {
+        cairo_save(cr);
+        const Rect pa = pageArea();
+        cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
+        cairo_clip(cr);
+        strokePaths(cr, inkSaved_, kInkWidthPx);
+        for (const auto& [id, paths] : inkSent_) strokePaths(cr, paths, kInkWidthPx);
+        strokePaths(cr, inkPending_, kInkWidthPx);
+        if (inkDown_) strokePaths(cr, {inkStroke_}, kInkWidthPx);
+        cairo_restore(cr);
+    }
     if (selection_) drawSelection(canvas, selection_->rects);
     const Rect f = footerArea();
     drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, W() - 2 * kMargin - 260, 40}, 1);
@@ -730,6 +784,147 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     }
     question_.reset();
     nav.damage(positionBannerRect(), Waveform::Ui);
+}
+
+// --- Handwriting -----------------------------------------------------------------------------
+
+bool ReaderScreen::penAllowed() const {
+    return worker_ && image_ && !error_ && !menus_ && !selecting_ && !selection_ && !editor_ && !note_ &&
+           !layoutPending_ && !turning_;
+}
+
+void ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
+    const bool eraserNear = p.eraser && p.type != PenEvent::Type::Leave;
+    if (eraserNear != eraserNear_) {
+        eraserNear_ = eraserNear;
+        if (nav.systemInk()) nav.setSystemInk(type_ == DocType::Pdf && penAllowed() && !eraserNear_);
+    }
+    const bool lift = p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave;
+    if (lift) {
+        if (inkDown_) {
+            inkDown_ = false;
+            if (!inkStroke_.empty()) inkPending_.push_back(std::move(inkStroke_));
+            inkStroke_.clear();
+            inkLastMs_ = nav.nowMs();
+        }
+        if (erasing_) {
+            erasing_ = false;
+            eraseAlong(eraserPath_, nav);
+            eraserPath_.clear();
+        }
+        return;
+    }
+    if (p.type == PenEvent::Type::Near) return;
+    if (p.type == PenEvent::Type::Down) {
+        if (type_ != DocType::Pdf) {
+            if (!inkToastShown_ && image_) nav.toast("Handwriting works in PDFs.");
+            inkToastShown_ = true;
+            return;
+        }
+        if (!penAllowed() || !pageArea().contains(p.pos)) return;
+        if (p.eraser) {
+            erasing_ = true;
+            eraserPath_ = {p.pos};
+            return;
+        }
+        if (inkPage_ != page_) commitInk();
+        inkPage_ = page_;
+        inkDown_ = true;
+        inkStroke_ = {p.pos};
+        const Rect r{p.pos.x - kInkWidthPx, p.pos.y - kInkWidthPx, 2 * kInkWidthPx + 1, 2 * kInkWidthPx + 1};
+        if (!nav.systemInk())  // the system's wet ink already shows the line
+            nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
+                     [&](cairo_t* cr) { strokePaths(cr, {{p.pos}}, kInkWidthPx); });
+        return;
+    }
+    // Move.
+    if (erasing_) {
+        if (eraserPath_.empty() || std::abs(eraserPath_.back().x - p.pos.x) + std::abs(eraserPath_.back().y - p.pos.y) >= 4)
+            eraserPath_.push_back(p.pos);
+        return;
+    }
+    if (!inkDown_ || inkStroke_.empty()) return;
+    const Point a = inkStroke_.back(), b = p.pos;
+    if (std::abs(a.x - b.x) + std::abs(a.y - b.y) < 2) return;
+    inkStroke_.push_back(b);
+    if (nav.systemInk()) return;
+    const int pad = kInkWidthPx + 1;
+    const Rect r{std::min(a.x, b.x) - pad, std::min(a.y, b.y) - pad, std::abs(a.x - b.x) + 2 * pad + 1,
+                 std::abs(a.y - b.y) + 2 * pad + 1};
+    nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
+                 [&](cairo_t* cr) { strokePaths(cr, {{a, b}}, kInkWidthPx); });
+}
+
+void ReaderScreen::commitInk() {
+    if (inkPending_.empty() || !worker_ || inkPage_ < 0) return;
+    const uint64_t id = worker_->ink(inkPage_, inkPending_, kInkWidthPx);
+    inkSent_[id] = std::move(inkPending_);
+    inkPending_.clear();
+}
+
+void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
+    auto it = inkSent_.find(e.requestId);
+    if (it == inkSent_.end()) return;
+    std::vector<std::vector<Point>> paths = std::move(it->second);
+    inkSent_.erase(it);
+    if (!e.ink) {
+        nav.toast("This handwriting couldn't be saved.");
+        nav.damage(pageArea(), Waveform::Quality);
+        return;
+    }
+    AnnotationRecord a;
+    a.parentKey = row_.attachmentKey;
+    a.type = "ink";
+    a.color = "#000000";
+    a.position = e.ink->position;
+    a.sortIndex = e.ink->sortIndex;
+    a.pageLabel = e.ink->pageLabel;
+    nav.library().createAnnotation(a);
+    nav.sync().pushSoon();
+    if (e.page == page_) inkSaved_.insert(inkSaved_.end(), paths.begin(), paths.end());
+    refreshHighlights(nav);
+}
+
+// The eraser end: strokes not yet saved go at once; saved ink annotations it touches are deleted.
+void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
+    if (path.empty()) return;
+    // A quick swipe leaves samples far apart: test the line between them too, every few pixels.
+    std::vector<Point> probe{path.front()};
+    for (size_t i = 1; i < path.size(); ++i) {
+        const Point a = path[i - 1], b = path[i];
+        const int steps = std::max(1, (std::abs(b.x - a.x) + std::abs(b.y - a.y)) / 4);
+        for (int k = 1; k <= steps; ++k)
+            probe.push_back({a.x + (b.x - a.x) * k / steps, a.y + (b.y - a.y) * k / steps});
+    }
+    const double radius = kInkWidthPx / 2.0 + 12;
+    const size_t before = inkPending_.size();
+    inkPending_.erase(std::remove_if(inkPending_.begin(), inkPending_.end(),
+                                     [&](const std::vector<Point>& path) { return pathNear(path, probe, radius); }),
+                      inkPending_.end());
+    bool changed = inkPending_.size() != before;
+    std::vector<std::string> keys;
+    for (const auto& b : highlights_) {
+        if (b.kind != HighlightBox::Kind::Ink) continue;
+        const double r = b.strokePx / 2.0 + 12;
+        for (const auto& path : b.paths)
+            if (pathNear(path, probe, r)) {
+                keys.push_back(b.annotationKey);
+                break;
+            }
+    }
+    for (const auto& k : keys) nav.library().deleteAnnotation(k);
+    if (!keys.empty()) {
+        nav.sync().pushSoon();
+        inkSaved_.clear();
+        highlights_.erase(std::remove_if(highlights_.begin(), highlights_.end(),
+                                         [&](const HighlightBox& b) {
+                                             return std::find(keys.begin(), keys.end(), b.annotationKey) != keys.end();
+                                         }),
+                          highlights_.end());
+        refreshHighlights(nav);
+        changed = true;
+    }
+    if (changed) nav.damage(pageArea(), Waveform::Quality);
 }
 
 }  // namespace zk

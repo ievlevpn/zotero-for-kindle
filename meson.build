@@ -24,6 +24,7 @@ inc = include_directories('src')
 
 core_lib = static_library('zk-core',
   'src/core/log.cpp',
+  'src/platform/pen_decoder.cpp',
   include_directories : inc)
 
 core_dep = declare_dependency(link_with : core_lib, include_directories : inc)
@@ -188,7 +189,7 @@ if backend == 'kindle'
   fbink_lib = meson.get_compiler('cpp').find_library('fbink',
     dirs : meson.project_source_root() / 'build-deps/kindle/prefix/lib', static : true)
   platform_lib = static_library('zk-platform', 'src/platform/kindle/x11_display.cpp', 'src/platform/kindle/x_touch.cpp',
-    'src/platform/kindle/kindle_keyboard.cpp',
+    'src/platform/kindle/kindle_keyboard.cpp', 'src/platform/kindle/evdev_pen.cpp', 'src/platform/kindle/wet_ink.cpp',
     include_directories : ui_incs + [include_directories('build-deps/kindle/prefix/include', is_system : true)],
     dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
   platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])

@@ -66,6 +66,7 @@ void App::start() {
 }
 
 void App::showTop() {
+    setSystemInk(false);  // the screen that wants it asks again
     Screen* s = visibleTop();
     if (!s) return;
     if (s->wantsKeyboard()) keyboard_.show();
@@ -172,6 +173,69 @@ void App::redrawAll(Waveform w) {
     pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, w});
 }
 
+void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& paint) {
+    if (caller_ && caller_ != visibleTop()) return;
+    r = r.intersected({0, 0, canvas_.width(), canvas_.height()});
+    if (r.empty()) return;
+    cairo_t* cr = canvas_.cr();
+    cairo_save(cr);
+    cairo_rectangle(cr, r.x, r.y, r.w, r.h);
+    cairo_clip(cr);
+    paint(cr);
+    cairo_restore(cr);
+    if (w != Waveform::Ink) {
+        display_.present(canvas_, r, w);
+        return;
+    }
+    inkDirty_ = inkDirty_.united(r);
+    presentInk(false);
+}
+
+void App::setSystemInk(bool on) {
+    if (on && caller_ && caller_ != visibleTop()) return;
+    if (on == systemInkOn_) return;
+    systemInkOn_ = on;
+    display_.setSystemInk(on);
+}
+
+void App::presentInk(bool force) {
+    if (inkDirty_.empty()) return;
+    const int64_t now = clock_();
+    if (!force && now - lastInkPresentMs_ < kInkFrameMs) return;
+    display_.present(canvas_, inkDirty_, Waveform::Ink);
+    inkDirty_ = {};
+    lastInkPresentMs_ = now;
+}
+
+void App::handlePen(const PenEvent& p) {
+    if (p.type == PenEvent::Type::Leave) {
+        penNear_ = false;
+        penLeftMs_ = p.t_ms ? p.t_ms : clock_();
+    } else {
+        penNear_ = true;
+    }
+    Screen* s = visibleTop();
+    if (!s) return;
+    caller_ = s;
+    guard([&] { s->onPen(p, *this); });
+    caller_ = nullptr;
+}
+
+// A finger that lands while the pen is near (or just left) is the palm: it and its later samples
+// are dropped. Fingers already down when the pen came keep going (the gesture must end).
+bool App::palmBlocked(const TouchEvent& t) {
+    auto it = std::find(palmFingers_.begin(), palmFingers_.end(), t.id);
+    if (t.type == TouchEvent::Type::Down) {
+        const bool palm = penNear_ || (penLeftMs_ >= 0 && t.t_ms - penLeftMs_ < kPalmMs);
+        if (palm && it == palmFingers_.end()) palmFingers_.push_back(t.id);
+        if (!palm && it != palmFingers_.end()) palmFingers_.erase(it);
+        return palm;
+    }
+    if (it == palmFingers_.end()) return false;
+    if (t.type == TouchEvent::Type::Up) palmFingers_.erase(it);
+    return true;
+}
+
 void App::guard(const std::function<void()>& f) {
     try {
         f();
@@ -222,6 +286,7 @@ void App::beat(const char* doing) {
 void App::step(int timeout_ms) {
     beat("idle");
     std::vector<InputEvent> events;
+    if (!inkDirty_.empty()) timeout_ms = std::min<int>(timeout_ms, static_cast<int>(kInkFrameMs));
     if (!display_.pollEvents(events, timeout_ms)) {
         closed_ = true;
         return;
@@ -231,6 +296,7 @@ void App::step(int timeout_ms) {
     for (const InputEvent& e : events) {
         switch (e.kind) {
             case InputEvent::Kind::Touch: {
+                if (palmBlocked(e.touch)) break;
                 auto g = gestures_.feed(e.touch);
                 gestures.insert(gestures.end(), g.begin(), g.end());
                 break;
@@ -249,6 +315,9 @@ void App::step(int timeout_ms) {
             case InputEvent::Kind::Resize:
                 resized();
                 break;
+            case InputEvent::Kind::Pen:
+                handlePen(e.pen);
+                break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");
                 redrawAll(Waveform::Full);
@@ -256,6 +325,7 @@ void App::step(int timeout_ms) {
                 break;
         }
     }
+    presentInk(false);
     auto ticked = gestures_.tick(clock_());
     gestures.insert(gestures.end(), ticked.begin(), ticked.end());
     for (const Gesture& g : gestures) {
@@ -309,6 +379,7 @@ void App::step(int timeout_ms) {
     deferred_.clear();
     for (auto& f : deferred) guard(f);
     beat("drawing");
+    presentInk(false);
     flush();
     while (!graveyard_.empty()) graveyard_.pop_back();  // newest (topmost) first
     beat("idle");
@@ -319,7 +390,7 @@ void App::flush() {
     const Rect all{0, 0, canvas_.width(), canvas_.height()};
     Rect fast, ui, quality, full;
     for (const auto& [r, w] : pending_) {
-        Rect& u = w == Waveform::Fast ? fast : w == Waveform::Ui ? ui : w == Waveform::Quality ? quality : full;
+        Rect& u = w == Waveform::Fast || w == Waveform::Ink ? fast : w == Waveform::Ui ? ui : w == Waveform::Quality ? quality : full;
         u = u.united(r.intersected(all));
     }
     pending_.clear();
