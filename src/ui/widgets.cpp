@@ -196,7 +196,8 @@ int drawInkPreview(cairo_t* cr, Rect box, const std::string& position) {
     }
     if (paths.empty()) return 0;
     const double w = std::max(1.0, x1 - x0), h = std::max(1.0, y1 - y0);
-    const double s = std::min(box.w / w, box.h / h);
+    // At most about the size on a page (1 pt ~ 4 px at 300 ppi): a dot stays a dot.
+    const double s = std::min({box.w / w, box.h / h, 3.0});
     const int usedH = static_cast<int>(std::ceil(h * s));
     gray(cr, theme::kInk);
     cairo_set_line_width(cr, 3);

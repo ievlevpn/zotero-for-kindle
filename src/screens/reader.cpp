@@ -837,6 +837,20 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     if (lift) {
         if (inkDown_) {
             inkDown_ = false;
+            // A quick touch that hardly moved, with nothing written before it, is a tap (menus,
+            // page turns), not a dot: a dot right after writing (an i, a full stop) stays ink.
+            Rect extent;
+            for (const Point& q : inkStroke_) extent = extent.united({q.x, q.y, 1, 1});
+            const bool tap = inkPending_.empty() && !inkStroke_.empty() && extent.w <= kTapSlopPx &&
+                             extent.h <= kTapSlopPx && nav.nowMs() - inkDownMs_ <= kTapMs;
+            if (tap) {
+                const Point at = inkStroke_.front();
+                inkStroke_.clear();
+                const int pad = kInkWidthPx + 2;  // the system may have inked the dot
+                nav.damage({extent.x - pad, extent.y - pad, extent.w + 2 * pad, extent.h + 2 * pad}, Waveform::Ui);
+                onGesture(Gesture{GestureType::Tap, at, at}, nav);
+                return false;
+            }
             if (!inkStroke_.empty()) inkPending_.push_back(std::move(inkStroke_));
             inkStroke_.clear();
             inkLastMs_ = nav.nowMs();
@@ -864,6 +878,7 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         if (inkPage_ != page_) commitInk();
         inkPage_ = page_;
         inkDown_ = true;
+        inkDownMs_ = nav.nowMs();
         inkStroke_ = {p.pos};
         const Rect r{p.pos.x - kInkWidthPx, p.pos.y - kInkWidthPx, 2 * kInkWidthPx + 1, 2 * kInkWidthPx + 1};
         if (!nav.systemInk())  // the system's wet ink already shows the line
