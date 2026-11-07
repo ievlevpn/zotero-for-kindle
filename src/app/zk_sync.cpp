@@ -2,11 +2,13 @@
 //   zk-sync [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND
 //   commands: pull | status | search <words> | collections | annotations <attachmentKey>
 //             | fetch <attachmentKey> <dir> | highlights-offline on|off
-//             | push | annotate-test <attachmentKey> [page] | annotate-test-cleanup
+//             | push | annotate-test <attachmentKey> [page] | annotate-test-edit <key>
+//             | annotate-test-cleanup
 //   `annotations` downloads that book's annotations first, as opening a book in the app will.
 //   `annotate-test` highlights the first text of a page (3 by default) of a fetched file, as the
 //   reader would, tagged zk-test with a "[zk-test]" comment; `annotate-test-cleanup` deletes
-//   those (and only those). Both change the local library; `push` sends the changes.
+//   those (and only those); `annotate-test-edit` makes one of them blue with an "edited" comment.
+//   They change the local library; `push` sends the changes.
 // Every request goes through the WriteGuard, which allows annotation writes and nothing else.
 // Credentials are never printed.
 
@@ -59,7 +61,8 @@ int usage() {
                  "usage: zk-sync [--config DIR | --env FILE] [--db PATH] [--ca FILE] COMMAND\n"
                  "  pull | status | search <words> | collections | annotations <attachmentKey>\n"
                  "  | fetch <attachmentKey> <dir> | highlights-offline on|off\n"
-                 "  | push | annotate-test <attachmentKey> [page] | annotate-test-cleanup\n");
+                 "  | push | annotate-test <attachmentKey> [page] | annotate-test-edit <key>\n"
+                 "  | annotate-test-cleanup\n");
     return 2;
 }
 
@@ -268,6 +271,18 @@ int main(int argc, char** argv) {
             const std::string key = lib.createAnnotation(n);
             std::printf("created %s on page %d: \"%s\"\n  position %s\n  sortIndex %s (run push to send it)\n",
                         key.c_str(), page + 1, sel->text.c_str(), sel->position.c_str(), sel->sortIndex.c_str());
+        } else if (cmd == "annotate-test-edit" && args.size() == 2) {
+            auto a = lib.annotation(args[1]);
+            const bool ours = a && std::find(a->tags.begin(), a->tags.end(), kTestTag) != a->tags.end() &&
+                              a->comment.rfind("[zk-test]", 0) == 0;
+            if (!ours) {
+                std::printf("error: %s is not one of this tool's zk-test annotations.\n", args[1].c_str());
+                return 1;
+            }
+            a->color = "#2ea8e5";
+            a->comment = "[zk-test] edited on the Kindle side";
+            lib.editAnnotation(*a);
+            std::printf("edited %s: blue, comment \"%s\" (run push to send it)\n", a->key.c_str(), a->comment.c_str());
         } else if (cmd == "annotate-test-cleanup") {
             int n = 0;
             for (const auto& row : lib.recentAnnotations(0, 1'000'000)) {
