@@ -97,4 +97,21 @@ void progressBar(cairo_t* cr, Rect r, double fraction) {
     cairo_fill(cr);
 }
 
+void gearIcon(cairo_t* cr, double cx, double cy, double r, uint8_t g) {
+    gray(cr, g);
+    cairo_new_path(cr);
+    const int teeth = 8;
+    for (int i = 0; i < teeth * 2; ++i) {
+        const double a0 = i * M_PI / teeth, a1 = (i + 1) * M_PI / teeth;
+        const double rr = i % 2 ? r * 0.78 : r;
+        cairo_arc(cr, cx, cy, rr, a0, a1);
+    }
+    cairo_close_path(cr);
+    cairo_new_sub_path(cr);
+    cairo_arc_negative(cr, cx, cy, r * 0.36, 2 * M_PI, 0);
+    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+    cairo_fill(cr);
+    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_WINDING);
+}
+
 }  // namespace zk

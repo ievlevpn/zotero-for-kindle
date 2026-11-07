@@ -124,11 +124,12 @@ ui_lib = static_library('zk-ui',
 ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps])
 
 screens_lib = static_library('zk-screens',
-  'src/screens/home_demo.cpp',
+  'src/screens/home.cpp',
+  'src/screens/sync_status.cpp',
   include_directories : ui_incs,
-  dependencies : [ui_dep])
+  dependencies : [ui_dep, store_dep])
 
-screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep])
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep])
 
 app_lib = static_library('zk-app',
   'src/app/app.cpp',
@@ -152,7 +153,7 @@ else
 endif
 
 executable('zotero', 'src/app/main.cpp',
-  dependencies : [core_dep, ui_dep, screens_dep, platform_dep],
+  dependencies : [app_dep, platform_dep],
   install : true)
 
 executable('zk-sync', 'src/app/zk_sync.cpp',

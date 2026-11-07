@@ -235,3 +235,13 @@ TEST_CASE("library: a version-1 database is rebuilt as version 2") {
     }
     std::filesystem::remove_all(dir);
 }
+
+TEST_CASE("library: one item as a row, for the Continue reading card") {
+    Rig rig;
+    auto r = rig.lib.rowFor("IT000003");
+    REQUIRE(r);
+    CHECK(r->badge == "EPUB");
+    CHECK(r->attachmentKey == "EP000003");
+    CHECK(r->title == "");
+    CHECK_FALSE(rig.lib.rowFor("NOPE0000"));
+}

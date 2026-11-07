@@ -19,6 +19,7 @@ void centredText(cairo_t* cr, const std::string& s, const TextStyle& st, Rect bo
 // Circular "refresh" arrow: an open ring with a solid arrowhead continuing the curve.
 void syncIcon(cairo_t* cr, double cx, double cy, double r);
 void searchIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+void gearIcon(cairo_t* cr, double cx, double cy, double r, uint8_t g);
 // Typographic cover for items without one: title in Bookerly, authors in Ember.
 void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark);
 void typeBadge(cairo_t* cr, Rect r, const std::string& type);

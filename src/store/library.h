@@ -121,6 +121,7 @@ public:
     std::vector<ItemRow> rows(const ListQuery&);
     int64_t countRows(const ListQuery&);
     std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit);
+    std::optional<ItemRow> rowFor(const std::string& itemKey);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
     std::vector<NoteRow> recentAnnotations(int offset, int limit);

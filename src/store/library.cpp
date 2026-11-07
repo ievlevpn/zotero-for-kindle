@@ -711,6 +711,16 @@ std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, i
     });
 }
 
+std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
+    return guarded([&]() -> std::optional<ItemRow> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + " WHERE i.key = ?");
+        st.bind(1, itemKey);
+        auto rows = readRows(st);
+        if (rows.empty()) return std::nullopt;
+        return rows[0];
+    });
+}
+
 std::vector<std::pair<std::string, int64_t>> Library::topTags(int n) {
     return guarded([&] {
         Stmt st = db_.prepare(

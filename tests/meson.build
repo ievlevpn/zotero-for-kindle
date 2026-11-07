@@ -6,7 +6,6 @@ test_sources = files(
   'test_gesture.cpp',
   'test_canvas.cpp',
   'test_text.cpp',
-  'test_home_golden.cpp',
   'test_x_touch.cpp',
   'test_expose_policy.cpp',
   'test_vendored.cpp',
@@ -25,6 +24,7 @@ test_sources = files(
   'test_widgets.cpp',
   'test_app_shell.cpp',
   'test_sync_service.cpp',
+  'test_home.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
