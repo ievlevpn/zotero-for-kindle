@@ -10,6 +10,7 @@
 
 #include "core/log.h"
 #include "platform/display.h"
+#include "platform/keysym.h"
 #include "platform/kindle/expose_policy.h"
 #include "platform/kindle/x_touch.h"
 
@@ -38,7 +39,7 @@ public:
         win_ = XCreateSimpleWindow(dpy_, RootWindow(dpy_, scr), 0, 0, w_, h_, 0, 0, WhitePixel(dpy_, scr));
         XStoreName(dpy_, win_, kWindowTitle);
         XSelectInput(dpy_, win_, ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
-                                     Button1MotionMask | FocusChangeMask | VisibilityChangeMask);
+                                     Button1MotionMask | FocusChangeMask | VisibilityChangeMask | KeyPressMask);
         XMapWindow(dpy_, win_);
         gc_ = XCreateGC(dpy_, win_, 0, nullptr);
         waitForFinalGeometry();
@@ -72,7 +73,7 @@ public:
         putAndRefresh(r, w);
     }
 
-    bool pollTouch(std::vector<TouchEvent>& out, int timeout_ms) override {
+    bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
         if (!dpy_) return false;
         if (!XPending(dpy_)) {
             pollfd p{ConnectionNumber(dpy_), POLLIN, 0};
@@ -94,12 +95,23 @@ public:
                     if (auto t = touchFromX(kind, button, fingerDown_, pos, nowMs())) {
                         if (t->type == TouchEvent::Type::Down) fingerDown_ = true;
                         if (t->type == TouchEvent::Type::Up) fingerDown_ = false;
-                        out.push_back(*t);
+                        InputEvent e;
+                        e.touch = *t;
+                        out.push_back(e);
                     }
                     break;
                 }
+                case KeyPress:
+                    if (auto k = keyFromKeysym(keysymOf(ev.xkey))) {
+                        InputEvent e;
+                        e.kind = InputEvent::Kind::Key;
+                        e.key = *k;
+                        out.push_back(e);
+                    }
+                    break;
                 case VisibilityNotify:
                     expose_.visibilityChanged(ev.xvisibility.state == VisibilityFullyObscured);
+                    if (ev.xvisibility.state == VisibilityFullyObscured) setBackground(true, out);
                     break;
                 case Expose:
                     // Repaint the exposed area from the backing store: flash only after wake.
@@ -108,9 +120,16 @@ public:
                         putAndRefresh(exposed_.intersected({0, 0, w_, h_}), expose_.onExpose());
                         exposed_ = {};
                     }
+                    setBackground(false, out);
                     break;
-                case FocusOut: log(LogLevel::Debug, "focus out (background)"); break;
-                case FocusIn: log(LogLevel::Debug, "focus in"); break;
+                case FocusOut:
+                    log(LogLevel::Debug, "focus out (background)");
+                    setBackground(true, out);
+                    break;
+                case FocusIn:
+                    log(LogLevel::Debug, "focus in");
+                    setBackground(false, out);
+                    break;
                 case DestroyNotify: return false;
                 default: break;
             }
@@ -119,6 +138,23 @@ public:
     }
 
 private:
+    // The text a key produces: XLookupString applies the keyboard's shift state; the Kindle's
+    // keyboard sends ready-made keysyms (S3), so the unshifted keysym is the fallback.
+    static unsigned long keysymOf(XKeyEvent& key) {
+        KeySym sym = 0;
+        char buf[8];
+        XLookupString(&key, buf, sizeof buf, &sym, nullptr);
+        return sym ? sym : XLookupKeysym(&key, 0);
+    }
+
+    void setBackground(bool background, std::vector<InputEvent>& out) {
+        if (background == background_) return;
+        background_ = background;
+        InputEvent e;
+        e.kind = background ? InputEvent::Kind::Background : InputEvent::Kind::Foreground;
+        out.push_back(e);
+    }
+
     void waitForFinalGeometry() {
         // The WM maps us full-screen, then resizes below the status bar (~350 ms).
         int64_t deadline = nowMs() + 2000;
@@ -157,6 +193,7 @@ private:
     int fb_ = -1;
     bool fingerDown_ = false;
     ExposePolicy expose_;
+    bool background_ = false;
     Rect exposed_;
     FBInkConfig cfg_;
 };

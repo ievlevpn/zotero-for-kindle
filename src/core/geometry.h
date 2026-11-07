@@ -19,6 +19,8 @@ struct Rect {
 
     bool contains(Point p) const { return p.x >= x && p.y >= y && p.x < x + w && p.y < y + h; }
 
+    Point center() const { return {x + w / 2, y + h / 2}; }
+
     Rect united(const Rect& o) const {
         if (empty()) return o;
         if (o.empty()) return *this;

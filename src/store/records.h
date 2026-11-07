@@ -19,6 +19,8 @@ struct ItemRecord {
     std::vector<std::string> collections, tags;
     std::string dateAdded, dateModified;
     std::string json;  // raw `data` object, for round-trips
+    std::string year;         // from meta.parsedDate (else the first 4-digit run of `date`)
+    std::string sortCreator;  // first creator's last name or name; filled by the store if empty
 };
 
 struct AttachmentRecord {
@@ -37,6 +39,7 @@ struct AnnotationRecord {
     bool conflict = false;
     bool createdHere = false;
     std::string json;
+    std::string dateModified;
 };
 
 struct CollectionRecord {

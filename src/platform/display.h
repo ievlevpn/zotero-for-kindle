@@ -22,9 +22,10 @@ public:
     virtual int height() const = 0;
     // Shows region `r` of `canvas` (canvas and display share coordinates).
     virtual void present(const Canvas& canvas, Rect r, Waveform w) = 0;
-    // Waits up to timeout_ms for input; appends touches to `out`. Returns false when the
-    // app should quit (window closed). Redraw after wake is handled inside the display.
-    virtual bool pollTouch(std::vector<TouchEvent>& out, int timeout_ms) = 0;
+    // Waits up to timeout_ms for input; appends touches, keys and background/foreground
+    // changes to `out`. Returns false when the app should quit (window closed). Redraw after
+    // wake is handled inside the display.
+    virtual bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) = 0;
 };
 
 // Backend chosen at build time (-Dplatform=desktop|kindle).

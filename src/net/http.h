@@ -2,7 +2,10 @@
 // The HTTP seam: everything that talks to zotero.org or WebDAV goes through `Http`, so tests
 // can substitute a scripted fake and the write guard can sit in front of the real client.
 
+#include <atomic>
+#include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -19,6 +22,8 @@ struct HttpRequest {
     std::string outFile;         // when set, the response body is streamed to this file
     int connectTimeoutS = 10;
     int timeoutS = 120;
+    std::function<void(int64_t done, int64_t total)> onProgress;  // download progress (bytes)
+    std::shared_ptr<std::atomic<bool>> cancel;                    // set to abort the transfer
 };
 
 struct HttpResponse {

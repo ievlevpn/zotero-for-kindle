@@ -1,0 +1,53 @@
+#pragma once
+// Reusable pieces of the screens (mockup C): list rows, tab bar, chips, banner, toggle,
+// buttons, page indicator. Each draws into a rect; the matching *Rect functions hit-test.
+
+#include <string>
+#include <vector>
+
+#include <cairo.h>
+
+#include "core/geometry.h"
+#include "net/errors.h"
+#include "store/library.h"
+
+namespace zk {
+
+constexpr int kMargin = 60;
+constexpr int kHeaderH = 140;
+constexpr int kTabBarH = 130;
+constexpr int kRowH = 186;
+constexpr int kRowsPerPage = 6;
+constexpr int kPageIndicatorH = 60;
+
+// Badge, Bookerly title (2 lines), byline, and on the right progress ("71%", "new", "opened")
+// unless `status` is set ("Downloading 42%", or an error message, shown in place of the byline).
+void drawItemRow(cairo_t*, Rect, const ItemRow&, const std::string& status);
+
+void drawTabBar(cairo_t*, Rect bar, const std::vector<std::string>& tabs, int active);
+Rect tabRect(Rect bar, int index, int count);
+
+void drawChips(cairo_t*, Rect area, const std::vector<std::string>& labels, int active);
+std::vector<Rect> chipRects(Rect area, const std::vector<std::string>& labels);  // stops when out of room
+
+// The error message (up to 2 lines) and a small "Details: …" line.
+void drawBanner(cairo_t*, Rect, const UserError&);
+void drawToggle(cairo_t*, Rect, bool on);
+void drawButton(cairo_t*, Rect, const std::string& label, bool primary);
+void drawPageIndicator(cairo_t*, Rect, int page /* 0-based */, int pages);  // "3 / 41"
+
+// Screen header: large title, or "‹" + title for pushed screens; the back target is backRect().
+void drawHeader(cairo_t*, const std::string& title, bool back);
+Rect headerBackRect();
+
+// A dark pill with a short message.
+void drawToast(cairo_t*, Rect, const std::string& text);
+
+// A highlight or note: shade bar, text (Bookerly, 3 lines), comment, page label.
+constexpr int kNoteRowH = 220;
+void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&);
+
+// A collection line: folder glyph, name, item count, "›" when it has subcollections.
+void drawCollectionRow(cairo_t*, Rect, const std::string& name, int64_t items, bool hasChildren);
+
+}  // namespace zk

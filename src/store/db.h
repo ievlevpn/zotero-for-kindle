@@ -38,6 +38,7 @@ public:
 
     std::string text(int col) const;  // 0-based
     int64_t integer(int col) const;
+    double real(int col) const;
 
 private:
     sqlite3* db_;

@@ -99,6 +99,20 @@ UserError WebDav::fail(const HttpResponse& r) const {
     return classify(r, r.curlCode ? probeNetState() : NetState{}, host_, isTailnetHost(host_), "GET");
 }
 
+bool WebDav::check(UserError* err) {
+    HttpRequest req = get("");
+    req.method = "PROPFIND";
+    req.headers.emplace_back("Depth", "0");
+    HttpResponse r = http_.send(req);
+    if (r.curlCode == 0 && (r.status == 207 || r.status == 200)) return true;
+    if (r.curlCode == 0 && r.status == 404) {
+        setError(err, fileError(ErrorKind::NotOnServer, "There's no zotero folder at that WebDAV address.", "HTTP 404"));
+        return false;
+    }
+    setError(err, fail(r));
+    return false;
+}
+
 std::optional<PropInfo> WebDav::prop(const std::string& key, UserError* err) {
     HttpResponse r = http_.send(get(key + ".prop"));
     if (r.curlCode || r.status != 200) return setError(err, fail(r)), std::nullopt;
@@ -126,6 +140,7 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
     HttpRequest req = get(a.key + ".zip");
     req.outFile = zipPath.string();
     req.timeoutS = 600;
+    req.onProgress = progress_;
     const std::string name = localFileName(a);
     auto noSpace = [&](const std::string& details) {
         return fileError(ErrorKind::DiskFull, "Not enough space for " + name + ".", details);

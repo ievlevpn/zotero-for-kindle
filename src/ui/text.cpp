@@ -14,8 +14,15 @@ namespace {
 constexpr double kDpi = 300.0;
 
 // FreeType/fontconfig font map on every platform, so the desktop renders like the device.
+// Recreated after addFontDir: a map caches the font set it was created with.
+PangoFontMap*& fontMapSlot() {
+    static PangoFontMap* map = nullptr;
+    return map;
+}
+
 PangoFontMap* fontMap() {
-    static PangoFontMap* map = pango_cairo_font_map_new_for_font_type(CAIRO_FONT_TYPE_FT);
+    PangoFontMap*& map = fontMapSlot();
+    if (!map) map = pango_cairo_font_map_new_for_font_type(CAIRO_FONT_TYPE_FT);
     return map;
 }
 
@@ -87,6 +94,12 @@ TextResult resultOf(PangoLayout* layout, std::string_view utf8) {
 
 void addFontDir(const std::string& dir) {
     FcConfigAppFontAddDir(FcConfigGetCurrent(), reinterpret_cast<const FcChar8*>(dir.c_str()));
+    // Text drawn before this call created a font map with the old font set: start a new one.
+    PangoFontMap*& map = fontMapSlot();
+    if (map) {
+        g_object_unref(map);  // live contexts keep their own reference
+        map = nullptr;
+    }
 }
 
 TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int max_lines,

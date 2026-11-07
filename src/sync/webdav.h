@@ -23,6 +23,10 @@ public:
     WebDav(Http&, std::string baseUrl /* ends with /zotero/ */, std::string user, std::string password);
 
     std::optional<PropInfo> prop(const std::string& key, UserError*);
+    // Can we log in and list the folder? (PROPFIND, Depth 0.) For the Setup screen.
+    bool check(UserError*);
+    // Called while the .zip downloads (bytes done, total; total 0 = unknown).
+    void setProgress(std::function<void(int64_t done, int64_t total)> f) { progress_ = std::move(f); }
     // .prop -> .zip into a temp file -> extract `filename` -> MD5 must equal the attachment's md5
     // -> move to destDir/<key>/<filename> with the file's mtime. On failure nothing is left behind.
     bool download(const AttachmentRecord&, const std::string& destDir, UserError*);
@@ -36,6 +40,7 @@ private:
     Http& http_;
     std::string base_, user_, password_, host_;
     std::function<uint64_t(const std::string&)> freeSpace_;
+    std::function<void(int64_t, int64_t)> progress_;
 };
 
 // The name the downloaded file gets inside <destDir>/<key>/: the server's filename reduced to

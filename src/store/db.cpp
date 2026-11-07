@@ -62,6 +62,8 @@ std::string Stmt::text(int col) const {
 
 int64_t Stmt::integer(int col) const { return sqlite3_column_int64(st_, col); }
 
+double Stmt::real(int col) const { return sqlite3_column_double(st_, col); }
+
 Db Db::open(const std::string& path) {
     sqlite3* db = nullptr;
     int rc = sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr);

@@ -50,7 +50,7 @@ public:
         upload();
     }
 
-    bool pollTouch(std::vector<TouchEvent>& out, int timeout_ms) override {
+    bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
         SDL_Event ev;
         if (!SDL_WaitEventTimeout(&ev, timeout_ms)) return true;
         do {
@@ -58,15 +58,21 @@ public:
                 case SDL_QUIT: return false;
                 case SDL_MOUSEBUTTONDOWN:
                     down_ = true;
-                    out.push_back({TouchEvent::Type::Down, 0, {ev.button.x * kScale, ev.button.y * kScale}, nowMs()});
+                    touch(out, {TouchEvent::Type::Down, 0, {ev.button.x * kScale, ev.button.y * kScale}, nowMs()});
                     break;
                 case SDL_MOUSEMOTION:
                     if (down_)
-                        out.push_back({TouchEvent::Type::Move, 0, {ev.motion.x * kScale, ev.motion.y * kScale}, nowMs()});
+                        touch(out, {TouchEvent::Type::Move, 0, {ev.motion.x * kScale, ev.motion.y * kScale}, nowMs()});
                     break;
                 case SDL_MOUSEBUTTONUP:
                     down_ = false;
-                    out.push_back({TouchEvent::Type::Up, 0, {ev.button.x * kScale, ev.button.y * kScale}, nowMs()});
+                    touch(out, {TouchEvent::Type::Up, 0, {ev.button.x * kScale, ev.button.y * kScale}, nowMs()});
+                    break;
+                case SDL_TEXTINPUT: key(out, KeyEvent::Code::Text, ev.text.text); break;
+                case SDL_KEYDOWN:
+                    if (ev.key.keysym.sym == SDLK_BACKSPACE) key(out, KeyEvent::Code::Backspace, "");
+                    if (ev.key.keysym.sym == SDLK_RETURN || ev.key.keysym.sym == SDLK_KP_ENTER) key(out, KeyEvent::Code::Return, "");
+                    if (ev.key.keysym.sym == SDLK_ESCAPE) key(out, KeyEvent::Code::Escape, "");
                     break;
                 case SDL_WINDOWEVENT: upload(); break;
                 default: break;
@@ -76,6 +82,18 @@ public:
     }
 
 private:
+    static void touch(std::vector<InputEvent>& out, TouchEvent t) {
+        InputEvent e;
+        e.touch = t;
+        out.push_back(e);
+    }
+    static void key(std::vector<InputEvent>& out, KeyEvent::Code code, const char* text) {
+        InputEvent e;
+        e.kind = InputEvent::Kind::Key;
+        e.key = {code, text};
+        out.push_back(e);
+    }
+
     void upload() {
         void* pixels;
         int pitch;
