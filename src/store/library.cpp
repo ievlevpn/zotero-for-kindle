@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 
+#include <sstream>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
@@ -952,10 +953,28 @@ void Library::editAnnotation(const AnnotationRecord& edited) {
     upsertAnnotation(a);
 }
 
+namespace {
+constexpr const char* kUploadsSent = "annotations.uploadsSent";  // keys, one per line
+}  // namespace
+
+void Library::markUploadSent(const std::vector<std::string>& keys) {
+    std::string kept;
+    std::istringstream in(metaValue(kUploadsSent));
+    for (std::string k; std::getline(in, k);)  // only those still waiting for a version
+        if (auto a = annotation(k); a && a->version == 0) kept += k + "\n";
+    for (const auto& k : keys)
+        if (kept.find(k + "\n") == std::string::npos) kept += k + "\n";
+    setMetaValue(kUploadsSent, kept);
+}
+
+bool Library::uploadSent(const std::string& key) {
+    return ("\n" + metaValue(kUploadsSent)).find("\n" + key + "\n") != std::string::npos;
+}
+
 void Library::deleteAnnotation(const std::string& key) {
     auto a = annotation(key);
     if (!a) return;
-    if (a->version == 0) {
+    if (a->version == 0 && !uploadSent(key)) {  // never left the Kindle
         removeObject("annotation", key);
         return;
     }

@@ -217,6 +217,14 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
             AnnotationRecord incoming = parseAnnotation(obj);
             if (auto local = lib_.annotation(key)) {
                 incoming.createdHere = local->createdHere;
+                if (local->deletedHere && local->createdHere && local->version == 0) {
+                    // Our own upload, landed although its answer was lost, and deleted here since:
+                    // keep the deletion, now against the server's version.
+                    AnnotationRecord gone = *local;
+                    gone.version = version;
+                    lib_.upsertAnnotation(gone);
+                    break;
+                }
                 if (local->deletedHere && version <= local->version) break;  // our DELETE is still to be sent
                 // (a newer server version over a tombstone: edited on the desktop, so the Kindle
                 // deletion is dropped and the annotation comes back with that edit — below)
@@ -377,6 +385,10 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
             a.key = newLocalKey();
             lib_.upsertAnnotation(a);
         }
+        std::vector<std::string> sent;
+        for (const auto& a : pending)
+            if (a.version == 0) sent.push_back(a.key);
+        lib_.markUploadSent(sent);  // from here Zotero may have them, answer or not
         tx.commit();
     }
     for (size_t i = 0; i < pending.size(); i += kBatch) {

@@ -127,6 +127,10 @@ public:
     void editAnnotation(const AnnotationRecord&);
     // Never-synced annotations are removed; synced ones become tombstones until the push.
     void deleteAnnotation(const std::string& key);
+    // New annotations whose upload has been sent (its answer may have been lost, so Zotero may
+    // have them although they are still at version 0): deleting one leaves a tombstone.
+    void markUploadSent(const std::vector<std::string>& keys);
+    bool uploadSent(const std::string& key);
     std::vector<AnnotationRecord> pendingDeletions();
     std::vector<AnnotationRecord> conflicts();
     void discardConflict(const std::string& key);

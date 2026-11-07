@@ -178,6 +178,36 @@ TEST_CASE("annotations: deleting a highlight that was never pushed just removes 
     CHECK(rig.server.sent.empty());
 }
 
+TEST_CASE("annotations: a highlight whose upload answer was lost, then deleted here, stays deleted") {
+    // Seen as "erased ink came back after a sync" (Scribe pen PR): the upload landed, its answer
+    // didn't, and deleting the still-version-0 annotation left nothing to tell the next pull.
+    Rig rig;
+    const std::string key = rig.lib->createAnnotation(rig.fresh("answer lost"));
+    rig.server.loseNextWriteResponse = true;
+    REQUIRE(rig.push().error);
+    REQUIRE(rig.server.items.count(key));  // it landed
+    rig.lib->deleteAnnotation(key);
+    CHECK(rig.lib->annotationsFor("EPUB0001").size() == 1);  // only the desktop's
+    CHECK_FALSE(rig.pull().error);
+    CHECK(rig.lib->annotationsFor("EPUB0001").size() == 1);  // not back
+    CHECK_FALSE(rig.push().error);
+    CHECK_FALSE(rig.server.items.count(key));  // deleted on Zotero too
+    CHECK_FALSE(rig.pull().error);
+    CHECK(rig.lib->annotationsFor("EPUB0001").size() == 1);
+    CHECK_FALSE(rig.lib->annotation(key));
+}
+
+TEST_CASE("annotations: deleted here after its upload was sent, before any answer -> pushed as a DELETE") {
+    Rig rig;
+    const std::string key = rig.lib->createAnnotation(rig.fresh("sent, answer lost"));
+    rig.server.loseNextWriteResponse = true;
+    REQUIRE(rig.push().error);
+    rig.lib->deleteAnnotation(key);
+    CHECK_FALSE(rig.push().error);  // 412 (the library moved) -> pull -> DELETE
+    CHECK_FALSE(rig.server.items.count(key));
+    CHECK(rig.lib->pendingDeletions().empty());
+}
+
 TEST_CASE("annotations: deleted here offline, edited on the desktop -> it comes back with the desktop edit") {
     Rig rig;
     rig.lib->deleteAnnotation("ANNO0001");
