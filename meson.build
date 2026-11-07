@@ -94,7 +94,7 @@ services_dep = declare_dependency(link_with : services_lib, dependencies : [core
 
 sync_lib = static_library('zk-sync',
   'src/sync/sync_engine.cpp',
-  'src/sync/webdav.cpp',
+  'src/sync/webdav.cpp', 'src/sync/zotero_storage.cpp',
   'src/sync/config.cpp',
   'src/sync/sync_service.cpp',
   'third_party/pugixml/pugixml.cpp',

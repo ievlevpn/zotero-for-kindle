@@ -10,6 +10,7 @@
 #include "store/library.h"
 #include "sync/sync_engine.h"
 #include "sync/webdav.h"
+#include "sync/zotero_storage.h"
 #include "zotero/api.h"
 
 namespace zk {
@@ -51,7 +52,7 @@ struct SyncService::Worker {
     std::unique_ptr<WriteGuard> guard;
     std::unique_ptr<ZoteroApi> api;
     std::unique_ptr<SyncEngine> engine;
-    std::unique_ptr<WebDav> dav;
+    std::unique_ptr<FileStore> files;  // WebDAV or Zotero storage
 };
 
 SyncService::SyncService(SyncDeps deps) : deps_(std::move(deps)), intervalMinutes_(deps_.intervalMinutes) {
@@ -154,9 +155,7 @@ void SyncService::run() {
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);
-        if (!deps_.config.webdavUrl.empty())
-            w.dav = std::make_unique<WebDav>(*w.guard, deps_.config.webdavUrl, deps_.config.webdavUser,
-                                             deps_.config.webdavPassword);
+        w.files = makeFileStore(*w.guard, deps_.config);
     } catch (const DbError& e) {
         log(LogLevel::Error, "sync service: can't open the database: %s", e.what());
         SyncEvent ev;
@@ -252,8 +251,6 @@ void SyncService::run() {
                     if (!att) {
                         done.error = UserError{ErrorKind::Other, "This file isn't in the library yet. Sync, then try again.",
                                                "no attachment " + cmd.attachmentKey};
-                    } else if (!local && !w.dav) {
-                        done.error = UserError{ErrorKind::Other, "No WebDAV server is set up. Add it in Settings.", "no WebDAV"};
                     } else if (!local) {
                         SyncEvent p0;
                         p0.kind = SyncEvent::Kind::DownloadProgress;
@@ -262,7 +259,7 @@ void SyncService::run() {
                         emit(p0);
                         auto last = Clock::now();
                         int lastPct = 0;
-                        w.dav->setProgress([&](int64_t d, int64_t t) {
+                        w.files->setProgress([&](int64_t d, int64_t t) {
                             const int pct = t > 0 ? static_cast<int>(100 * d / t) : 0;
                             if (pct - lastPct < 5 && Clock::now() - last < std::chrono::seconds(1)) return;
                             lastPct = pct;
@@ -273,13 +270,13 @@ void SyncService::run() {
                             emit(std::move(e));
                         });
                         UserError err;
-                        if (w.dav->download(*att, deps_.filesDir, &err)) {
+                        if (w.files->download(*att, deps_.filesDir, &err)) {
                             const std::string path = (fs::path(deps_.filesDir) / att->key / localFileName(*att)).string();
                             w.lib->setFileState(att->key, AttachmentRecord::State::Local, path);
                         } else {
                             done.error = err;
                         }
-                        w.dav->setProgress(nullptr);
+                        w.files->setProgress(nullptr);
                     }
                     const bool ok = !done.error;
                     if (!stopping_) emit(done);

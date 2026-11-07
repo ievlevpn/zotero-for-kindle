@@ -21,6 +21,7 @@
 #include "sync/config.h"
 #include "sync/sync_engine.h"
 #include "sync/webdav.h"
+#include "sync/zotero_storage.h"
 #include "zotero/api.h"
 
 #include <sys/resource.h>
@@ -206,14 +207,10 @@ int main(int argc, char** argv) {
                 std::printf("error: No attachment %s in the local library (run pull first).\n", args[1].c_str());
                 return 1;
             }
-            if (cfg->webdavUrl.empty()) {
-                std::printf("error: No WebDAV server configured.\n");
-                return 1;
-            }
-            WebDav dav(http, cfg->webdavUrl, cfg->webdavUser, cfg->webdavPassword);
+            auto files = makeFileStore(http, *cfg);  // WebDAV, or Zotero storage without one
             const auto t0 = std::chrono::steady_clock::now();
             UserError err;
-            if (!dav.download(*a, args[2], &err)) {
+            if (!files->download(*a, args[2], &err)) {
                 printError(err);
                 return 1;
             }

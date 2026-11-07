@@ -28,9 +28,9 @@ Ask, in one message:
 
 1. Is the Kindle jailbroken, with scriptlet support (the Universal Hotfix: `.sh` files in `documents/` appear in the
    library)?
-2. Do they use **WebDAV** for file syncing in Zotero (Zotero desktop: *Settings → Sync → File Syncing*)? Without it the
-   app shows the library and annotations but can't download books. Zotero's own file storage isn't supported yet.
-3. Do they want you to set up their account now (you'll need their Zotero user ID, an API key and the WebDAV
+2. Where does Zotero desktop sync their files (*Settings → Sync → File Syncing*): **Zotero storage** (the default) or
+   **WebDAV**? Both work.
+3. Do they want you to set up their account now (you'll need their Zotero user ID, an API key and, for WebDAV, its
    details), or will they type it on the Kindle?
 
 ## 2. Get the release
@@ -70,14 +70,15 @@ Ask for:
 - **Zotero user ID and API key.** The key is made at https://www.zotero.org/settings/keys with *Allow library access*
   and *Allow write access*. Write access is needed for Kindle highlights to reach Zotero. The user ID is shown on that
   page ("Your user ID for use in API calls is …").
-- **WebDAV URL, user name and password**, as in Zotero desktop.
+- **Only for WebDAV:** its URL, user name and password, as in Zotero desktop. With Zotero storage, leave the three
+  `webdav` fields out of `config.json`.
 
 Optionally check them before writing anything:
 
 - `curl -s -H "Zotero-API-Key: $KEY" https://api.zotero.org/keys/current` should return JSON whose `userID` equals the
-  user ID.
-- `curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X PROPFIND -H "Depth: 0" <WebDAV URL>/zotero/` should
-  print 207. Leave out `zotero/` if the URL already ends with it.
+  user ID. For Zotero storage, its `access.user.files` must be `true`.
+- For WebDAV: `curl -s -o /dev/null -w "%{http_code}" -u "$USER:$PASS" -X PROPFIND -H "Depth: 0" <WebDAV URL>/zotero/`
+  should print 207. Leave out `zotero/` if the URL already ends with it.
 
 Pass secrets through environment variables or files, not command lines, where you can.
 
@@ -106,7 +107,8 @@ follow the rules above: keep `zotero.db`, `files/`, `cache/` and `log/`, and rem
 Eject the Kindle safely (`diskutil eject`, `gio mount -u`, or "Eject" in Windows), then tell the user:
 
 - Unplug the Kindle, open the library and tap **Zotero**. It has a Zotero cover and might take a moment to appear.
-- If no account was set up, the first screen asks for the user ID, API key and WebDAV details.
+- If no account was set up, the first screen asks for the user ID and API key, plus the WebDAV details if they use
+  WebDAV.
 - If "Zotero" doesn't appear in the library, the jailbreak lacks scriptlet support (install the Universal Hotfix).
 - Problems: the log is at `zotero/log/zotero.log` on the USB drive. Issues go to
   https://github.com/ievlevpn/zotero-for-kindle/issues.

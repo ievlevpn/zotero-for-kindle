@@ -21,7 +21,7 @@ Highlights and notes sync both ways with Zotero.
 
 - Syncs your library from zotero.org: items, collections, tags and annotations.
 - Library, collections and search, with offline use.
-- Downloads books on demand from your WebDAV storage.
+- Downloads books on demand, from Zotero storage or your WebDAV server.
 - EPUB and PDF reader with fonts, sizes and margins, plus PDF margin trimming.
 - Highlights and notes that show up in Zotero desktop, and the other way round.
 - Optional landscape mode, with two columns on big screens.
@@ -33,8 +33,8 @@ Highlights and notes sync both ways with Zotero.
   Most jailbreaks provide this through the Universal Hotfix. See [kindlemodding.org](https://kindlemodding.org).
   Tested on a Paperwhite 5 (firmware 5.18.4) and a Kindle Scribe (5.16.8).
 - **A Zotero account and an API key** from [zotero.org/settings/keys](https://www.zotero.org/settings/keys).
-- **WebDAV file syncing** in Zotero, so the Kindle can download books.
-  Files kept in Zotero's own storage can't be downloaded yet; their items still show, with their annotations.
+- **Your files in Zotero storage or on WebDAV**, the same place Zotero desktop syncs them to
+  (*Settings → Sync → File Syncing*).
 
 ## Install
 

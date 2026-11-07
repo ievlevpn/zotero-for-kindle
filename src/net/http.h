@@ -20,6 +20,7 @@ struct HttpRequest {
     std::string body;
     std::string user, password;  // HTTP basic/digest auth when `user` is set
     std::string outFile;         // when set, the response body is streamed to this file
+    bool followRedirects = true;  // reads only (writes never follow); false: the 3xx itself is returned
     int connectTimeoutS = 10;
     int timeoutS = 120;
     std::function<void(int64_t done, int64_t total)> onProgress;  // download progress (bytes)

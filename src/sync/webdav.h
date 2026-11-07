@@ -3,6 +3,7 @@
 // with mtime and hash) in the configured zotero/ folder. Downloads only, GET only.
 
 #include "net/errors.h"
+#include "sync/file_store.h"
 #include "net/http.h"
 #include "store/records.h"
 
@@ -18,7 +19,7 @@ struct PropInfo {
     std::string hash;   // MD5 of the file, hex
 };
 
-class WebDav {
+class WebDav final : public FileStore {
 public:
     WebDav(Http&, std::string baseUrl /* zotero/ added if missing */, std::string user, std::string password);
 
@@ -26,10 +27,10 @@ public:
     // Can we log in and list the folder? (PROPFIND, Depth 0.) For the Setup screen.
     bool check(UserError*);
     // Called while the .zip downloads (bytes done, total; total 0 = unknown).
-    void setProgress(std::function<void(int64_t done, int64_t total)> f) { progress_ = std::move(f); }
+    void setProgress(std::function<void(int64_t done, int64_t total)> f) override { progress_ = std::move(f); }
     // .prop -> .zip into a temp file -> extract `filename` -> MD5 must equal the attachment's md5
     // -> move to destDir/<key>/<filename> with the file's mtime. On failure nothing is left behind.
-    bool download(const AttachmentRecord&, const std::string& destDir, UserError*);
+    bool download(const AttachmentRecord&, const std::string& destDir, UserError*) override;
     // Free bytes at a path (statvfs by default); tests inject their own.
     void setFreeSpaceProbe(std::function<uint64_t(const std::string& path)>);
 
