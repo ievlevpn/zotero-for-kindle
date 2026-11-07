@@ -220,6 +220,25 @@ if fs.exists(deps_prefix / 'lib' / 'libcrengine.a')
     install : true, install_dir : 'lib')
 endif
 
+if fs.exists(deps_prefix / 'lib' / 'libmupdf.a')
+  mupdf_libs = [cxx.find_library('mupdf', dirs : deps_prefix / 'lib', static : true),
+                cxx.find_library('mupdf-third', dirs : deps_prefix / 'lib', static : true)]
+  if backend == 'desktop'
+    mupdf_libs += dependency('zlib')  # MuPDF built with the system zlib on macOS
+  endif
+  shared_module('zk-pdf',
+    'src/docs/pdf/pdf_module.cpp',
+    'src/docs/pdf/pdf_engine.cpp',
+    'src/docs/shade.cpp',
+    name_prefix : 'lib', name_suffix : 'so',
+    include_directories : [inc, include_directories('third_party', is_system : true),
+                           include_directories('build-deps' / backend / 'prefix/include', is_system : true)],
+    cpp_args : ['-fvisibility=hidden'],
+    dependencies : mupdf_libs,
+    link_args : module_link_args + (backend == 'kindle' ? ['-lm', '-lpthread'] : []),
+    install : true, install_dir : 'lib')
+endif
+
 executable('zotero', 'src/app/main.cpp',
   dependencies : [app_dep, platform_dep],
   install : true)
