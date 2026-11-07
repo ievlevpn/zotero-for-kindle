@@ -32,6 +32,7 @@ test_sources = files(
   'test_lifecycle.cpp',
   'test_review_fixes.cpp',
   'test_engine_isolation.cpp',
+  'test_document_types.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
