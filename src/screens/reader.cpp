@@ -138,6 +138,11 @@ void ReaderScreen::onShow(Nav& nav) {
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start);
+    if (openAt_) {
+        turning_ = true;
+        worker_->showAnnotation(*openAt_);
+        openAt_.reset();
+    }
     worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
 }
 
@@ -227,7 +232,10 @@ void ReaderScreen::jumpTo(const DocPosition& pos) {
 
 void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
     menus_.reset();
-    if (!worker_) return;
+    if (!worker_) {
+        openAt_ = a;  // opening from Notes: the worker starts in onShow
+        return;
+    }
     turning_ = true;
     worker_->showAnnotation(a);
 }
@@ -319,10 +327,11 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
-    // The outer 30% always turns; in the middle a highlight opens its editor, elsewhere the menus.
+    // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens the menus.
+    if (ready() && editAt(g.pos, nav)) return;
     if (g.pos.x > kW * 7 / 10) turn(+1, nav);
     else if (g.pos.x < kW * 3 / 10) turn(-1, nav);
-    else if (ready() && !editAt(g.pos, nav)) openMenus(nav);  // not before the first page
+    else if (ready()) openMenus(nav);  // not before the first page
 }
 
 void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
@@ -341,9 +350,23 @@ void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
 }
 
 bool ReaderScreen::editAt(Point p, Nav& nav) {
+    // On a box first; else the nearest box within a fingertip (thin PDF lines are hard to hit).
+    constexpr int kSlack = 30;
     std::string key;
     for (auto it = highlights_.rbegin(); it != highlights_.rend() && key.empty(); ++it)
         if (it->rect.contains(p)) key = it->annotationKey;
+    if (key.empty()) {
+        int best = kSlack + 1;
+        for (const auto& h : highlights_) {
+            const Rect& r = h.rect;
+            const int dx = std::max({r.x - p.x, 0, p.x - (r.x + r.w - 1)});
+            const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
+            if (std::max(dx, dy) < best) {
+                best = std::max(dx, dy);
+                key = h.annotationKey;
+            }
+        }
+    }
     if (key.empty()) return false;
     auto a = nav.library().annotation(key);
     if (!a) return false;

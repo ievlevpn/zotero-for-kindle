@@ -237,7 +237,12 @@ int main(int argc, char** argv) {
 
     app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
     app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
-    app.setRoot(3, std::make_unique<NotesScreen>());
+    app.setRoot(3, std::make_unique<NotesScreen>(
+                       [&flow, &app](const ItemRow& r, std::optional<AnnotationRecord> at) {
+                           if (r.fileState != AttachmentRecord::State::Local && !r.attachmentKey.empty())
+                               app.toast("Downloading the book…");  // Notes has no row to show progress in
+                           flow.open(r, app, std::move(at));
+                       }));
     if (config && !startup.imported) {
         startService(*config);
         app.setRoot(0, makeHome());

@@ -1,6 +1,7 @@
 #include "screens/open_flow.h"
 
 #include "screens/book.h"
+#include "screens/reader.h"
 
 namespace zk {
 
@@ -9,17 +10,19 @@ std::string OpenFlow::statusFor(const std::string& key) const {
     return it == pending_.end() ? std::string{} : it->second.status;
 }
 
-void OpenFlow::openNow(const ItemRow& row, Nav& nav) {
+void OpenFlow::openNow(const ItemRow& row, Nav& nav, const std::optional<AnnotationRecord>& at) {
     nav.library().markOpened(row.key, row.attachmentKey, wallMs_());
     if (readerFactory_)
         if (auto reader = readerFactory_(row, nav)) {
+            if (at)
+                if (auto* r = dynamic_cast<ReaderScreen*>(reader.get())) r->jumpToAnnotation(*at);
             nav.push(std::move(reader));
             return;
         }
     nav.push(std::make_unique<BookScreen>(row));
 }
 
-void OpenFlow::open(const ItemRow& row, Nav& nav) {
+void OpenFlow::open(const ItemRow& row, Nav& nav, std::optional<AnnotationRecord> at) {
     if (row.attachmentKey.empty()) {
         bool linked = false;
         for (const auto& a : nav.library().attachmentsOf(row.key))
@@ -32,12 +35,12 @@ void OpenFlow::open(const ItemRow& row, Nav& nav) {
     if (it != pending_.end() && it->second.running) return;  // already downloading
     if (row.fileState == AttachmentRecord::State::Local) {
         pending_.erase(row.attachmentKey);
-        openNow(row, nav);
+        openNow(row, nav, at);
         nav.sync().openBook(row.key, row.attachmentKey);  // refreshes its highlights
         return;
     }
     pending_[row.attachmentKey] =
-        Pending{row, nav.top(), nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true};
+        Pending{row, nav.top(), nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true, std::move(at)};
     nav.sync().openBook(row.key, row.attachmentKey);
 }
 
@@ -54,11 +57,12 @@ void OpenFlow::onSyncEvent(const SyncEvent& e, Nav& nav) {
             return;
         }
         const ItemRow row = p.row;
+        const auto at = p.at;
         const bool stillThere = p.from && nav.top() == p.from;
         pending_.erase(it);
         if (stillThere) {
             ItemRow fresh = nav.library().rowFor(row.key).value_or(row);
-            openNow(fresh, nav);
+            openNow(fresh, nav, at);
         }
     }
 }

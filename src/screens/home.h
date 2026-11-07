@@ -32,6 +32,7 @@ public:
     static Rect searchFieldRect();
     static Rect cardRect();
     std::vector<Rect> recentRowRects() const;
+    const std::vector<ItemRow>& recent() const { return recent_; }
 
 private:
     void reload(Library&);

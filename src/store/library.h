@@ -147,6 +147,9 @@ public:
     std::optional<ItemRow> rowFor(const std::string& itemKey);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
+    std::vector<CollectionEntry> allCollections();  // every level, by name
+    // Items whose books were opened on the Kindle, last opened first.
+    std::vector<ItemRow> recentlyOpened(int limit);
     std::vector<NoteRow> recentAnnotations(int offset, int limit);
     int64_t countAnnotations();
     void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);

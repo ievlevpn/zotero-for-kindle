@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 
 #include "screens/screen.h"
@@ -15,7 +16,7 @@ class OpenFlow {
 public:
     explicit OpenFlow(std::function<int64_t()> wallMs) : wallMs_(std::move(wallMs)) {}
 
-    void open(const ItemRow&, Nav&);
+    void open(const ItemRow&, Nav&, std::optional<AnnotationRecord> at = std::nullopt);  // at: show this highlight
     void onSyncEvent(const SyncEvent&, Nav&);  // from App::setEventHook
     std::string statusFor(const std::string& attachmentKey) const;
     void reset() { pending_.clear(); }
@@ -32,8 +33,9 @@ private:
         const Screen* from = nullptr;
         std::string status;
         bool running = false;
+        std::optional<AnnotationRecord> at;
     };
-    void openNow(const ItemRow&, Nav&);
+    void openNow(const ItemRow&, Nav&, const std::optional<AnnotationRecord>& at = std::nullopt);
 
     std::function<int64_t()> wallMs_;
     ReaderFactory readerFactory_;

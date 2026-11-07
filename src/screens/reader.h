@@ -84,7 +84,7 @@ private:
     void showBar(Nav&);
     void saveSelection(const std::string& type, const std::string& comment, Nav&);
     void closeSelection(Nav&);
-    bool editAt(Point, Nav&);  // a highlight under the tap: open its editor
+    bool editAt(Point, Nav&);  // a highlight under (or right next to) the tap: open its editor
     void closeEditor(Nav&);
     void refreshHighlights(Nav&);
     void turn(int delta, Nav&);
@@ -120,6 +120,7 @@ private:
     std::optional<TextField> note_;
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
+    std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
 };
 
 }  // namespace zk

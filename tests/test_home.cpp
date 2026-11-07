@@ -113,7 +113,7 @@ TEST_CASE("home: taps go to sync, search, settings and items") {
     REQUIRE(rows.size() == 3);  // what fits under the card at mockup C's sizes
     rig.home.onGesture(tapAt(rows[0].center()), rig.nav);
     REQUIRE(rig.opened.size() == 1);
-    CHECK(rig.opened[0] == "IT000039");  // newest item
+    CHECK(rig.opened[0] == "IT000038");  // newest item not already in the card
     rig.home.onGesture(tapAt(HomeScreen::cardRect().center()), rig.nav);
     CHECK(rig.opened.size() == 2);
 }

@@ -135,6 +135,7 @@ docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, de
 screens_lib = static_library('zk-screens',
   'src/screens/home.cpp',
   'src/screens/annotation_bar.cpp',
+  'src/screens/collection_search.cpp',
   'src/screens/sync_status.cpp',
   'src/screens/item_list.cpp',
   'src/screens/library.cpp',

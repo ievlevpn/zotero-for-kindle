@@ -26,6 +26,7 @@ test_sources = files(
   'test_push_triggers.cpp',
   'test_review_fixes5.cpp',
   'test_stall_watchdog.cpp',
+  'test_device_requests.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',

@@ -20,6 +20,7 @@ public:
 
     const std::vector<CollectionEntry>& entries() const { return entries_; }  // this page
     std::vector<Rect> entryRects() const;
+    static Rect searchRect();  // the header's search icon
 
 private:
     void load(Library&);

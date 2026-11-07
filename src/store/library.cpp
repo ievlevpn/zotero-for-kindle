@@ -796,6 +796,34 @@ std::vector<CollectionEntry> Library::childCollections(const std::string& parent
     });
 }
 
+std::vector<CollectionEntry> Library::allCollections() {
+    return guarded([&] {
+        Stmt st = db_.prepare(
+            "SELECT c.key, c.name, c.parentKey, c.version, "
+            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key), "
+            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
+            "FROM collections c ORDER BY c.name COLLATE NOCASE");
+        std::vector<CollectionEntry> out;
+        while (st.step())
+            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+        return out;
+    });
+}
+
+std::vector<ItemRow> Library::recentlyOpened(int limit) {
+    std::vector<std::string> keys = guarded([&] {
+        Stmt st = db_.prepare("SELECT itemKey FROM reading_state WHERE openedMs > 0 ORDER BY openedMs DESC LIMIT ?");
+        st.bind(1, int64_t{limit});
+        std::vector<std::string> out;
+        while (st.step()) out.push_back(st.text(0));
+        return out;
+    });
+    std::vector<ItemRow> rows;
+    for (const auto& k : keys)
+        if (auto r = rowFor(k)) rows.push_back(std::move(*r));
+    return rows;
+}
+
 std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
     return guarded([&] {
         std::string cols;

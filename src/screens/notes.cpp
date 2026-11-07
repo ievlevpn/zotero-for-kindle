@@ -124,7 +124,11 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
                 return;
             }
         }
-        if (auto row = nav.library().rowFor(lines_[i].itemKey)) nav.push(std::make_unique<BookScreen>(*row));
+        auto row = nav.library().rowFor(lines_[i].itemKey);
+        if (!row) return;
+        if (!open_) return nav.push(std::make_unique<BookScreen>(*row));  // no reader (screenshots)
+        open_(*row, lines_[i].header ? std::nullopt : std::optional<AnnotationRecord>(a));
+        return;
     }
 }
 

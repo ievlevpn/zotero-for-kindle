@@ -79,9 +79,22 @@ void HomeScreen::reload(Library& lib) {
             }
     }
     if (card_ && !card_->attachmentKey.empty()) cardHighlights_ = lib.annotationsFor(card_->attachmentKey).size();
-    ListQuery recent;
-    recent.limit = 3;
-    recent_ = lib.rows(recent);
+    // Recent: the books read last (after the one in the card), then the newest items if fewer.
+    recent_.clear();
+    auto seen = [&](const std::string& key) {
+        if (card_ && card_->key == key) return true;
+        for (const auto& r : recent_)
+            if (r.key == key) return true;
+        return false;
+    };
+    for (auto& r : lib.recentlyOpened(4))
+        if (recent_.size() < 3 && !seen(r.key)) recent_.push_back(std::move(r));
+    if (recent_.size() < 3) {
+        ListQuery newest;
+        newest.limit = 6;
+        for (auto& r : lib.rows(newest))
+            if (recent_.size() < 3 && !seen(r.key)) recent_.push_back(std::move(r));
+    }
 }
 
 void HomeScreen::onShow(Nav& nav) {
