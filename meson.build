@@ -171,7 +171,7 @@ endif
 fs = import('fs')
 cxx = meson.get_compiler('cpp')
 deps_prefix = meson.project_source_root() / 'build-deps' / backend / 'prefix'
-docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp',
+docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp', 'src/docs/render_worker.cpp',
   include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
 docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, cxx.find_library('dl', required : false)])
 
