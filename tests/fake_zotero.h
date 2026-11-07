@@ -26,6 +26,7 @@ public:
     std::function<bool(const HttpRequest&)> failWhen;  // true -> connection timeout
     bool loseNextWriteResponse = false;  // apply the next POST, then answer with a timeout
     int created = 0;
+    std::map<std::string, int> failObjects;  // POST: these keys fail with this code
 
     // --- library editing (each bumps the library version) ---
     void put(json data) {
@@ -134,6 +135,10 @@ public:
             for (size_t i = 0; i < body.size(); ++i) {
                 json data = body[i];
                 std::string key = data.value("key", "");
+                if (failObjects.count(key)) {
+                    failed[std::to_string(i)] = {{"key", key}, {"code", failObjects[key]}, {"message", "refused"}};
+                    continue;
+                }
                 if (data.contains("version") && items.count(key) && items[key]["version"] != data["version"]) {
                     failed[std::to_string(i)] = {{"key", key}, {"code", 412}, {"message", "Item has been modified"}};
                     continue;

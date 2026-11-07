@@ -164,6 +164,10 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
     const AnnotationBar::Hit hit = bar_.hit(p);
     if (hit.action == AnnotationBar::Action::Colour) {
         const std::string colour = zoteroColours()[hit.colour].hex;
+        // Change only the colour, on the annotation as it is now (a sync may have updated it).
+        auto now = nav.library().annotation(annotation_.key);
+        if (!now || now->deletedHere) return Result::Closed;
+        annotation_ = *now;
         if (colour != annotation_.color) {
             annotation_.color = colour;
             nav.library().editAnnotation(annotation_);
@@ -190,10 +194,13 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
     field.apply(k);
     comment_ = field.text();
     if (field.submitted()) {
+        auto now = nav.library().annotation(annotation_.key);
+        nav.keyboard().hide();
+        if (!now || now->deletedHere) return Result::Closed;
+        annotation_ = *now;
         annotation_.comment = comment_;
         nav.library().editAnnotation(annotation_);
         changed_ = true;
-        nav.keyboard().hide();
         return Result::Closed;
     }
     nav.damage(commentRect(), Waveform::Fast);

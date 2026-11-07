@@ -24,6 +24,7 @@ test_sources = files(
   'test_annotation_edit.cpp',
   'test_notes_conflicts.cpp',
   'test_push_triggers.cpp',
+  'test_review_fixes5.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',

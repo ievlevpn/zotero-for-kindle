@@ -53,6 +53,7 @@ private:
 
     ZoteroApi& api_;
     Library& lib_;
+    std::vector<std::string> refetch_;  // annotations to download again at the end of this pull
 };
 
 }  // namespace zk

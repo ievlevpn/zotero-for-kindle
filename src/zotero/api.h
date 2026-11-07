@@ -35,6 +35,7 @@ struct Deleted {
 struct WriteResult {
     std::map<int, std::string> successKeys;  // batch index -> key
     std::map<int, std::string> failed;       // batch index -> message
+    std::map<int, int> failedCodes;          // batch index -> Zotero's code (e.g. 400, 412)
     bool preconditionFailed = false;         // 412: the library changed since `ifUnmodifiedSince`
     int64_t libraryVersion = 0;
 };

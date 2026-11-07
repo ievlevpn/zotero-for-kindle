@@ -103,6 +103,14 @@ Rect boundsOf(const std::vector<Rect>& rects) {
 
 constexpr const char* kColourKey = "annotationColour";
 
+// What the page shows: not conflict copies (they sit over Zotero's version and are resolved in Notes).
+std::vector<AnnotationRecord> pageAnnotations(Library& lib, const std::string& attachmentKey) {
+    std::vector<AnnotationRecord> out;
+    for (auto& a : lib.annotationsFor(attachmentKey))
+        if (!a.conflict) out.push_back(std::move(a));
+    return out;
+}
+
 }  // namespace
 
 ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery,
@@ -129,7 +137,7 @@ void ReaderScreen::onShow(Nav& nav) {
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start);
-    worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
+    worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
 }
 
 void ReaderScreen::onTick(Nav& nav) { pumpEvents(nav, true); }
@@ -352,7 +360,7 @@ void ReaderScreen::closeEditor(Nav& nav) {
 }
 
 void ReaderScreen::refreshHighlights(Nav& nav) {
-    if (worker_) worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
+    if (worker_) worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
 }
 
 void ReaderScreen::startSelection(Point at, Nav&) {
@@ -449,7 +457,7 @@ void ReaderScreen::closeSelection(Nav& nav) {
 
 void ReaderScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind == SyncEvent::Kind::AnnotationsReady && e.attachmentKey == row_.attachmentKey && worker_)
-        worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
+        worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
     if (menus_) menus_->onSyncEvent(e, nav);
 }
 

@@ -169,7 +169,7 @@ Rect noteRowButtonRect(Rect row, int i) {
     return {row.x + row.w - 2 * w - gap + i * (w + gap), row.y + row.h - h - 14, w, h};
 }
 
-void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a) {
+void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons) {
     fillRect(cr, r, 255);
     fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
     const std::string mark = noteSyncMark(a);
@@ -187,10 +187,10 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a) {
         drawText(cr, "p. " + a.pageLabel, {kSans, 6.5, 400, false, kTertiary}, {r.x + r.w - 110, r.y + 20, 110, 40}, 1,
                  Align::Right);
     if (!mark.empty()) {
-        const int markW = a.conflict ? noteRowButtonRect(r, 0).x - tx - 20 : tw;
+        const int markW = a.conflict && conflictButtons ? noteRowButtonRect(r, 0).x - tx - 20 : tw;
         drawText(cr, mark, {kSans, 6.5, a.conflict ? 700 : 500, false, kSecondary}, {tx, r.y + r.h - 64, markW, 44}, 1);
     }
-    if (a.conflict) {
+    if (a.conflict && conflictButtons) {
         drawButton(cr, noteRowButtonRect(r, 0), "Re-apply", false);
         drawButton(cr, noteRowButtonRect(r, 1), "Discard", false);
     }

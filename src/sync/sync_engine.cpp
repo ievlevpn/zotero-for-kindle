@@ -95,6 +95,11 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         if (!fetchAndApply(kind, phase.name, changed, rep, progress, accept)) return;
     }
 
+    if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
+        std::vector<std::string> keys;
+        keys.swap(refetch_);
+        if (!fetchAndApply("items", "annotations", keys, rep, progress)) return;
+    }
     auto gone = api_.deleted(from, &err);
     if (!gone) return void(rep.error = err);
     progress({"deletions", 0, static_cast<int>(gone->items.size() + gone->collections.size())});
@@ -262,9 +267,25 @@ int SyncEngine::conflictUnsynced(const std::string& attachmentKey) {
     int n = 0;
     for (auto a : lib_.annotationsFor(attachmentKey)) {
         if (!a.dirty || a.conflict) continue;
-        a.dirty = false;
-        a.conflict = true;
-        lib_.upsertAnnotation(a);
+        if (a.version > 0) {
+            // An edit of an annotation that is on Zotero: the edit becomes a conflict copy of its
+            // own, and Zotero's copy is downloaded again at the end of the pull.
+            AnnotationRecord mine = a;
+            mine.key = newLocalKey();
+            mine.version = 0;
+            mine.dirty = false;
+            mine.conflict = true;
+            mine.createdHere = true;
+            mine.conflictOf = a.key;
+            lib_.upsertAnnotation(mine);
+            lib_.removeObject("annotation", a.key);
+            lib_.setObjectVersion(a.key, 0);
+            refetch_.push_back(a.key);
+        } else {
+            a.dirty = false;
+            a.conflict = true;
+            lib_.upsertAnnotation(a);
+        }
         ++n;
     }
     return n;
@@ -295,6 +316,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
     }
     if (auto att = lib_.attachment(key)) {
         rep.conflicts += conflictUnsynced(key);
+        refetch_.clear();  // the file is gone from Zotero, and its annotations with it
         for (const auto& a : lib_.annotationsFor(key))
             if (!a.conflict) lib_.removeObject("annotation", a.key);
         for (const auto& a : lib_.pendingDeletions())  // Zotero deleted them with the file
@@ -374,22 +396,58 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
         auto tx = lib_.begin();
         for (const auto& [index, key] : res->successKeys) {
             if (index < 0 || static_cast<size_t>(index) >= end - i) continue;
-            AnnotationRecord a = pending[i + index];
-            if (a.key != key) lib_.removeObject("annotation", a.key);
+            const AnnotationRecord& sent = pending[i + index];
+            // The reader may have changed or deleted it while the upload was on its way (its
+            // own connection): only what was sent is marked sent.
+            auto now = lib_.annotation(sent.key);
+            if (sent.key != key) lib_.removeObject("annotation", sent.key);
+            AnnotationRecord a = now ? *now : sent;
             a.key = key;
             a.version = res->libraryVersion;
-            a.dirty = false;
+            if (!now) {
+                a.deletedHere = a.dirty = true;  // deleted meanwhile: it exists on Zotero now, so send a DELETE
+            } else {
+                a.dirty = a.deletedHere || !sameContent(*now, sent);
+            }
             lib_.upsertAnnotation(a);
             lib_.setObjectVersion(key, res->libraryVersion);
             ++rep.annotations;
         }
         // Our write was the only change since the version we sent (otherwise: 412).
         lib_.setLibraryVersion(res->libraryVersion);
+        // Objects Zotero refused: a 412 means it changed there — fetch it, so the usual rule
+        // (Zotero's copy wins, ours becomes a conflict) applies; anything else would fail
+        // forever, so it stays on the Kindle only, with the reason in the report.
+        std::vector<std::string> changedThere;
+        std::string refusal;
+        for (const auto& [index, message] : res->failed) {
+            if (index < 0 || static_cast<size_t>(index) >= end - i) continue;
+            const AnnotationRecord& sent = pending[i + index];
+            auto code = res->failedCodes.find(index);
+            if (code != res->failedCodes.end() && code->second == 412) {
+                changedThere.push_back(sent.key);
+                continue;
+            }
+            if (auto now = lib_.annotation(sent.key)) {
+                now->localOnly = true;
+                lib_.upsertAnnotation(*now);
+            }
+            if (refusal.empty()) refusal = message;
+        }
         tx.commit();
-        if (!res->failed.empty()) {
-            rep.error = UserError{ErrorKind::Other,
-                                  "Zotero refused " + std::to_string(res->failed.size()) + " annotation(s).",
-                                  res->failed.begin()->second};
+        if (!changedThere.empty()) {
+            UserError err2;
+            auto objects = api_.fetch("items", changedThere, &err2);
+            if (!objects) {
+                rep.error = err2;
+                return false;
+            }
+            auto tx2 = lib_.begin();
+            for (const auto& obj : *objects) apply(obj, rep);
+            tx2.commit();
+        }
+        if (!refusal.empty()) {
+            rep.error = UserError{ErrorKind::Other, "Zotero refused an annotation; it is kept on the Kindle only.", refusal};
             return false;
         }
     }

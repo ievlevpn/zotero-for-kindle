@@ -46,7 +46,8 @@ void drawToast(cairo_t*, Rect, const std::string& text);
 // A highlight or note: shade bar, text (Bookerly, 3 lines), comment, page label, and its sync
 // state ("not synced yet", "on the Kindle only", or a conflict with Re-apply · Discard).
 constexpr int kNoteRowH = 220;
-void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&);
+// conflictButtons: only where a screen handles Re-apply · Discard (the Notes tab).
+void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&, bool conflictButtons = false);
 std::string noteSyncMark(const AnnotationRecord&);  // "" when it is simply in Zotero
 Rect noteRowButtonRect(Rect row, int i);            // a conflict's 0 Re-apply, 1 Discard
 

@@ -209,7 +209,11 @@ std::optional<WriteResult> ZoteroApi::createItems(const json& array, int64_t ifU
             if (it.value().is_string()) out.successKeys[index(it.key())] = it.value().get<std::string>();
     if (j.contains("failed") && j["failed"].is_object())
         for (auto it = j["failed"].begin(); it != j["failed"].end(); ++it)
+        {
             out.failed[index(it.key())] = it.value().is_object() ? it.value().value("message", std::string("failed")) : "failed";
+            if (it.value().is_object() && it.value().contains("code") && it.value()["code"].is_number_integer())
+                out.failedCodes[index(it.key())] = it.value()["code"].get<int>();
+        }
     return out;
 }
 

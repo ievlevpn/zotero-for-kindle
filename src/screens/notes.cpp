@@ -73,7 +73,7 @@ void NotesScreen::draw(Canvas& canvas) {
             drawText(cr, lines_[i].itemTitle.empty() ? "Untitled" : lines_[i].itemTitle, {kSans, 7.5, 700, false, kSecondary},
                      {rects[i].x, rects[i].y + 22, rects[i].w, 44}, 1);
         else
-            drawNoteRow(cr, rects[i], lines_[i].note.annotation);
+            drawNoteRow(cr, rects[i], lines_[i].note.annotation, true);
     }
     drawPageIndicator(cr, {0, kArea.y + kArea.h - kPageIndicatorH, kW, kPageIndicatorH}, pager_.page(), pager_.pages());
     if (!discardKey_.empty()) {
