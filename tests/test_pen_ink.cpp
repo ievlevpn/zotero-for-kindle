@@ -398,3 +398,18 @@ TEST_CASE("notes: an ink annotation's card shows its strokes") {
         for (int x = 40; x < 1000; ++x) ink += (data[y * stride + 4 * x] < 80);
     CHECK(ink > 200);
 }
+
+TEST_CASE("pen ink: a quick pen touch with nothing written is a tap; a dot after writing is ink") {
+    InkRig rig;
+    // Middle of the page: a tap opens the menus, no ink.
+    rig.stroke({{618, 700}});
+    CHECK(rig.reader->menusOpen());
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+    rig.reader->closeMenus(rig.nav);
+
+    // Writing, then a dot: both ink.
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.stroke({{390, 380}});
+    CHECK(rig.reader->pendingInkStrokes() == 2);
+    CHECK_FALSE(rig.reader->menusOpen());
+}

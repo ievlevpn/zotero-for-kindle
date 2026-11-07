@@ -87,6 +87,9 @@ public:
     // Zotero ink annotation (a page turn sends them at once).
     static constexpr int64_t kInkCommitMs = 1500;
     static constexpr int kInkWidthPx = 7;  // about the Scribe wet ink line
+    // A pen touch within this box and time, with nothing written before it, is a tap.
+    static constexpr int kTapSlopPx = 12;
+    static constexpr int64_t kTapMs = 300;
     size_t pendingInkStrokes() const { return inkPending_.size(); }
     // The pen on PDF pages: writes (default) or taps like a finger (kept in the library). Holding
     // the pen's side button taps for that stroke either way.
@@ -159,7 +162,7 @@ private:
     std::map<uint64_t, std::vector<std::vector<Point>>> inkSent_;  // sent, being placed
     std::vector<std::vector<Point>> inkSaved_;           // saved; shown until the page comes back with them
     int inkPage_ = -1;
-    int64_t inkLastMs_ = 0;
+    int64_t inkLastMs_ = 0, inkDownMs_ = 0;
 };
 
 }  // namespace zk
