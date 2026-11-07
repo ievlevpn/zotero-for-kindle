@@ -67,6 +67,7 @@ struct Layout {
     int width = 1236, height = 1547 - 60;  // the page area: set by the reader from the window
     int marginLevel = 1;    // 0 Narrow, 1 Normal, 2 Wide, 3 Extra wide (EPUB)
     bool trimMargins = false;  // PDF: crop the page's white border so the text is larger
+    bool columnView = false;   // PDF: one column at a time, fitted to the width, in slices
     int columns = 1;        // EPUB: 2 in landscape (pages are then spreads of two)
     bool operator==(const Layout&) const = default;
 };
@@ -130,6 +131,8 @@ public:
     virtual bool open(const std::string& path, UserError*) = 0;
     virtual void setLayout(const Layout&) = 0;  // EPUB re-paginates; PDF uses width/height
     virtual int pageCount() = 0;
+    // PDF column view: the engine's pages are views, this many per PDF page (1: pages are pages).
+    virtual int viewsPerPage() { return 1; }
     virtual PageImage render(int page) = 0;
     virtual DocPosition positionOfPage(int page) = 0;
     virtual int pageOf(const DocPosition&) = 0;

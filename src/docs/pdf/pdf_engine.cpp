@@ -56,12 +56,16 @@ bool PdfEngine::open(const std::string& path, UserError* err) {
         return fail("This PDF is damaged and can't be opened.", "no pages");
     }
     doc_ = doc;
+    if (layout_.columnView) sliceColumns();  // the layout came first
     return true;
 }
 
-void PdfEngine::setLayout(const Layout& l) { layout_ = l; }
+void PdfEngine::setLayout(const Layout& l) {
+    layout_ = l;
+    if (l.columnView) sliceColumns();
+}
 
-int PdfEngine::pageCount() {
+int PdfEngine::pdfPages() {
     if (!doc_) return 0;
     int n = 0;
     fz_try(ctx_) { n = fz_count_pages(ctx_, doc_); }
@@ -69,8 +73,162 @@ int PdfEngine::pageCount() {
     return n;
 }
 
+int PdfEngine::pageCount() { return pdfPages() * viewsPerPage(); }
+
+bool PdfEngine::columnsOn() { return layout_.columnView && columns_.analysed && columns_.bottom > columns_.top; }
+
+int PdfEngine::viewsPerPage() { return columnsOn() ? columns_.columns * slices_.count : 1; }
+
+// ---- Column view ----------------------------------------------------------------------------
+
+namespace {
+
+float median(std::vector<float> v) {
+    std::sort(v.begin(), v.end());
+    return v.empty() ? 0 : v[v.size() / 2];
+}
+
+// The most common value of `v` to within 3 pt, and how many are within 4 pt of it.
+std::pair<float, int> commonEdge(const std::vector<float>& v) {
+    std::map<int, int> bins;
+    for (float x : v) ++bins[static_cast<int>(std::lround(x / 3))];
+    int best = 0, bestN = -1;
+    for (const auto& [b, n] : bins)
+        if (n > bestN) best = b, bestN = n;
+    const float edge = best * 3.0f;
+    const int near = static_cast<int>(std::count_if(v.begin(), v.end(), [&](float x) { return std::abs(x - edge) <= 4; }));
+    return {edge, near};
+}
+
+}  // namespace
+
+// Once per document: the text area (the median of sample pages' text boxes, so a stamp or a
+// running header on one page doesn't widen it) and one or two columns. Two when a fifth or more
+// of the lines start at one x right of the middle and a sixth or more end at one x left of it
+// (justified columns); single-column maths papers score under 0.1 on both (spike, 2026-11-08).
+void PdfEngine::analyseColumns() {
+    if (columns_.analysed || !doc_) return;
+    columns_.analysed = true;
+    const int n = pdfPages();
+    std::vector<int> sample;
+    if (n <= 5) {
+        for (int i = 0; i < n; ++i) sample.push_back(i);
+    } else {
+        for (double f : {0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8})
+            if (sample.empty() || sample.back() != static_cast<int>(n * f)) sample.push_back(static_cast<int>(n * f));
+    }
+    struct L {
+        float x0, y0, x1, y1;
+    };
+    std::vector<L> all;
+    std::vector<float> bx0, by0, bx1, by1;
+    for (int page : sample) {
+        std::vector<L> lines;
+        fz_stext_page* st = nullptr;
+        fz_var(st);
+        fz_try(ctx_) {
+            st = fz_new_stext_page_from_page_number(ctx_, doc_, page, nullptr);
+            for (fz_stext_block* b = st->first_block; b; b = b->next) {
+                if (b->type != FZ_STEXT_BLOCK_TEXT) continue;
+                for (fz_stext_line* l = b->u.t.first_line; l; l = l->next)
+                    if (std::abs(l->dir.y) <= 0.1f && l->bbox.x1 - l->bbox.x0 >= 5)
+                        lines.push_back({l->bbox.x0, l->bbox.y0, l->bbox.x1, l->bbox.y1});
+            }
+        }
+        fz_always(ctx_) { fz_drop_stext_page(ctx_, st); }
+        fz_catch(ctx_) { lines.clear(); }
+        if (lines.size() < 8) continue;
+        float x0 = 1e9f, y0 = 1e9f, x1 = -1e9f, y1 = -1e9f;
+        for (const L& l : lines) x0 = std::min(x0, l.x0), y0 = std::min(y0, l.y0), x1 = std::max(x1, l.x1), y1 = std::max(y1, l.y1);
+        bx0.push_back(x0), by0.push_back(y0), bx1.push_back(x1), by1.push_back(y1);
+        all.insert(all.end(), lines.begin(), lines.end());
+    }
+    if (bx0.empty()) {  // a scan: no text to measure, so the inked area, one column
+        for (int page : sample) {
+            float c[4];
+            if (!contentBox(page, c)) continue;
+            bx0.push_back(c[0]), by0.push_back(c[1]), bx1.push_back(c[2]), by1.push_back(c[3]);
+        }
+        if (bx0.empty()) return;
+    } else {
+        columns_.text = true;
+    }
+    const float x0 = median(bx0), y0 = median(by0), x1 = median(bx1), y1 = median(by1);
+    const float w = x1 - x0, mid = (x0 + x1) / 2;
+    if (w <= 0 || y1 <= y0) return;
+    const float pad = 0.015f * w;  // a little white beside the text
+    columns_.x[0] = x0 - pad;
+    columns_.x[1] = x1 + pad;
+    columns_.top = y0 - pad;
+    columns_.bottom = y1 + pad;
+    if (!columns_.text || all.empty()) return;
+    std::vector<float> starts, ends;
+    for (const L& l : all) {
+        if (l.x0 > mid - 0.02f * w && l.x0 < x1 - 0.25f * w) starts.push_back(l.x0);
+        if (l.x1 < mid + 0.02f * w) ends.push_back(l.x1);
+    }
+    if (starts.empty() || ends.empty()) return;
+    const auto [rightEdge, rightN] = commonEdge(starts);
+    const auto [leftEnd, leftN] = commonEdge(ends);
+    const double total = static_cast<double>(all.size());
+    if (rightN / total > 0.2 && leftN / total > 0.15 && leftEnd < rightEdge) {
+        columns_.columns = 2;
+        columns_.x[2] = columns_.x[1];
+        columns_.x[1] = (leftEnd + rightEdge) / 2;  // the middle of the gutter
+    }
+}
+
+// Per layout: each column fitted to the width, cut into as many screen-high slices as it needs,
+// evenly spaced so the last ends at the bottom, overlapping by at least ~2 lines (24 pt).
+void PdfEngine::sliceColumns() {
+    analyseColumns();
+    if (!columnsOn()) return;
+    if (slices_.width == layout_.width && slices_.screenHeight == layout_.height) return;
+    slices_ = {};
+    slices_.width = layout_.width;
+    slices_.screenHeight = layout_.height;
+    const float columnH = columns_.bottom - columns_.top;
+    constexpr float kOverlap = 24;
+    int count = 1;
+    for (int c = 0; c < columns_.columns; ++c) {
+        const float sliceH = (columns_.x[c + 1] - columns_.x[c]) * layout_.height / layout_.width;
+        slices_.height[c] = sliceH;
+        if (columnH > sliceH && sliceH > kOverlap)
+            count = std::max(count, static_cast<int>(std::ceil((columnH - kOverlap) / (sliceH - kOverlap))));
+    }
+    slices_.count = count;
+    for (int c = 0; c < columns_.columns; ++c)
+        slices_.step[c] = count > 1 ? std::max(0.0f, columnH - slices_.height[c]) / (count - 1) : 0;
+}
+
+PdfEngine::Area PdfEngine::viewRect(int page) {
+    const int v = page % viewsPerPage();
+    const int c = v / slices_.count, s = v % slices_.count;
+    const float y = columns_.top + s * slices_.step[c];
+    return {columns_.x[c], y, columns_.x[c + 1], y + slices_.height[c]};
+}
+
+int PdfEngine::viewAt(int pdfPage, float x, float y) {
+    const int views = viewsPerPage();
+    if (views == 1) return pdfPage;
+    const int c = columns_.columns == 2 && x >= columns_.x[1] ? 1 : 0;
+    // The first slice that shows the point with a line's room below it.
+    int s = 0;
+    while (s + 1 < slices_.count && y > columns_.top + s * slices_.step[c] + slices_.height[c] - 12) ++s;
+    return pdfPage * views + c * slices_.count + s;
+}
+
+// ---- Fitting a page (or a view) into the page area ------------------------------------------
+
 bool PdfEngine::fit(int page, double& scale, double& dx, double& dy) {
     if (!doc_) return false;
+    if (columnsOn()) {  // the view's area, its width across the page area
+        const Area v = viewRect(page);
+        scale = layout_.width / static_cast<double>(v.x1 - v.x0);
+        dx = -v.x0 * scale;
+        dy = -v.y0 * scale;
+        return true;
+    }
     fz_rect r = fz_empty_rect;
     bool ok = true;
     fz_page* p = nullptr;
@@ -136,7 +294,7 @@ PageImage PdfEngine::render(int page) {
     fz_try(ctx_) {
         const fz_matrix ctm = fz_concat(fz_scale(static_cast<float>(scale), static_cast<float>(scale)),
                                         fz_translate(static_cast<float>(dx), static_cast<float>(dy)));
-        pix = fz_new_pixmap_from_page_number(ctx_, doc_, page, ctm, fz_device_gray(ctx_), 0);
+        pix = fz_new_pixmap_from_page_number(ctx_, doc_, src(page), ctm, fz_device_gray(ctx_), 0);
     }
     fz_catch(ctx_) { return img; }
     // The pixmap's origin may be offset; copy it into place.
@@ -157,19 +315,26 @@ PageImage PdfEngine::render(int page) {
     return img;
 }
 
-DocPosition PdfEngine::positionOfPage(int page) { return {"p:" + std::to_string(page)}; }
+// Positions are PDF pages (a view's is its page's); a page opens at its first view.
+DocPosition PdfEngine::positionOfPage(int page) { return {"p:" + std::to_string(src(page))}; }
 
 int PdfEngine::pageOf(const DocPosition& pos) {
     if (pos.value.rfind("p:", 0) != 0) return 0;
     try {
-        return std::clamp(std::stoi(pos.value.substr(2)), 0, std::max(0, pageCount() - 1));
+        return std::clamp(std::stoi(pos.value.substr(2)), 0, std::max(0, pdfPages() - 1)) * viewsPerPage();
     } catch (...) {
         return 0;
     }
 }
 
+std::vector<TocEntry> PdfEngine::tocInViews() {
+    std::vector<TocEntry> out = toc_;  // toc_ counts PDF pages
+    for (auto& t : out) t.page *= viewsPerPage();
+    return out;
+}
+
 std::vector<TocEntry> PdfEngine::toc() {
-    if (tocLoaded_ || !doc_) return toc_;
+    if (tocLoaded_ || !doc_) return tocInViews();
     tocLoaded_ = true;
     fz_outline* outline = nullptr;
     fz_try(ctx_) { outline = fz_load_outline(ctx_, doc_); }
@@ -179,13 +344,13 @@ std::vector<TocEntry> PdfEngine::toc() {
             int page = -1;
             fz_try(ctx_) { page = fz_page_number_from_location(ctx_, doc_, o->page); }
             fz_catch(ctx_) { page = -1; }
-            if (o->title && page >= 0) toc_.push_back({o->title, level, positionOfPage(page), page});
+            if (o->title && page >= 0) toc_.push_back({o->title, level, {"p:" + std::to_string(page)}, page});
             walk(o->down, level + 1);
         }
     };
     walk(outline, 0);
     fz_drop_outline(ctx_, outline);
-    return toc_;
+    return tocInViews();
 }
 
 std::string PdfEngine::chapterAt(int page) {
@@ -221,7 +386,7 @@ std::string PdfEngine::pageText(int page) {
 std::vector<SearchHit> PdfEngine::search(const std::string& query, int maxHits) {
     std::vector<SearchHit> out;
     if (!doc_ || query.empty()) return out;
-    const int pages = pageCount();
+    const int pages = pdfPages();
     for (int p = 0; p < pages && static_cast<int>(out.size()) < maxHits; ++p) {
         fz_quad quads[16];
         int found = 0;
@@ -244,7 +409,8 @@ std::vector<SearchHit> PdfEngine::search(const std::string& query, int maxHits) 
                     if (c == '\n') c = ' ';
                 at = pos + query.size();
             }
-            out.push_back({p, snippet, positionOfPage(p)});
+            const fz_rect r = fz_rect_from_quad(quads[k < 16 ? k : 15]);
+            out.push_back({viewAt(p, (r.x0 + r.x1) / 2, r.y0), snippet, {"p:" + std::to_string(p)}});
         }
     }
     return out;
@@ -288,18 +454,20 @@ std::vector<LinkBox> PdfEngine::links(int page) {
     std::vector<LinkBox> out;
     double scale = 1, dx = 0, dy = 0;
     if (page < 0 || page >= pageCount() || !fit(page, scale, dx, dy)) return out;
+    const Rect frame{0, 0, layout_.width, layout_.height};
     fz_page* p = nullptr;
     fz_link* links = nullptr;
     fz_var(p);
     fz_var(links);
     fz_try(ctx_) {
-        p = fz_load_page(ctx_, doc_, page);
+        p = fz_load_page(ctx_, doc_, src(page));
         links = fz_load_links(ctx_, p);
         int i = 0;
         for (fz_link* l = links; l; l = l->next, ++i) {
             const Rect r{static_cast<int>(l->rect.x0 * scale + dx), static_cast<int>(l->rect.y0 * scale + dy),
                          static_cast<int>((l->rect.x1 - l->rect.x0) * scale), static_cast<int>((l->rect.y1 - l->rect.y0) * scale)};
-            if (!r.empty() && l->uri && *l->uri) out.push_back({r, i});
+            const Rect shown = r.intersected(frame);  // a view shows part of the page
+            if (!shown.empty() && l->uri && *l->uri) out.push_back({shown, i});
         }
     }
     fz_always(ctx_) {
@@ -318,7 +486,7 @@ std::optional<LinkInfo> PdfEngine::link(int page, int index) {
     fz_var(p);
     fz_var(links);
     fz_try(ctx_) {
-        p = fz_load_page(ctx_, doc_, page);
+        p = fz_load_page(ctx_, doc_, src(page));
         links = fz_load_links(ctx_, p);
         int i = 0;
         for (fz_link* l = links; l; l = l->next, ++i)
@@ -341,10 +509,10 @@ std::optional<LinkInfo> PdfEngine::link(int page, int index) {
     int target = -1;
     fz_try(ctx_) { target = fz_page_number_from_location(ctx_, doc_, fz_resolve_link(ctx_, doc_, uri.c_str(), &x, &y)); }
     fz_catch(ctx_) { target = -1; }
-    if (target < 0 || target >= pageCount()) return std::nullopt;
+    if (target < 0 || target >= pdfPages()) return std::nullopt;
     info.kind = LinkInfo::Kind::Reference;
-    info.targetPage = target;
-    info.target = positionOfPage(target);
+    info.targetPage = std::isnan(x) || std::isnan(y) ? target * viewsPerPage() : viewAt(target, x, y);
+    info.target = {};  // the view is what to show (a position would open the page's first)
     info.label = "Page " + std::to_string(target + 1);
     info.text = textAt(target, x, y);
     return info;
@@ -424,7 +592,7 @@ int PdfEngine::pageOfPlaced(const DocPosition& pos) {
     if (pos.value.rfind("p:", 0) != 0) return -1;
     try {
         const int page = std::stoi(pos.value.substr(2));
-        return page >= 0 && page < pageCount() ? page : -1;
+        return page >= 0 && page < pdfPages() ? page * viewsPerPage() : -1;
     } catch (...) {
         return -1;
     }
@@ -432,31 +600,52 @@ int PdfEngine::pageOfPlaced(const DocPosition& pos) {
 
 std::string PdfEngine::zoteroPosition(int page) {
     if (page < 0 || page >= pageCount()) return "";
-    return std::to_string(page);  // Zotero's lastPageIndex for a PDF: the page index
+    return std::to_string(src(page));  // Zotero's lastPageIndex for a PDF: the page index
 }
 
 int PdfEngine::pageOfZoteroPosition(const std::string& v) {
     const auto j = nlohmann::json::parse(v, nullptr, false);
     if (!j.is_number_integer()) return -1;
     const int page = j.get<int>();
-    return page >= 0 && page < pageCount() ? page : -1;
+    return page >= 0 && page < pdfPages() ? page * viewsPerPage() : -1;
 }
 
 int PdfEngine::pageOfAnnotation(const AnnotationRecord& a) {
     const PdfPosition p = parsePosition(a.position);
-    return p.pageIndex >= 0 && p.pageIndex < pageCount() ? p.pageIndex : -1;
+    if (p.pageIndex < 0 || p.pageIndex >= pdfPages()) return -1;
+    if (viewsPerPage() == 1) return p.pageIndex;
+    // The view with its first rect (or its first stroke point), in page space.
+    double ux = 0, uy = 0;
+    if (!p.rects.empty()) ux = (p.rects[0][0] + p.rects[0][2]) / 2, uy = std::max(p.rects[0][1], p.rects[0][3]);
+    else if (!p.paths.empty()) ux = p.paths[0][0], uy = p.paths[0][1];
+    else return p.pageIndex * viewsPerPage();
+    fz_matrix userToPage = fz_identity;
+    fz_page* pg = nullptr;
+    fz_var(pg);
+    fz_try(ctx_) {
+        pg = fz_load_page(ctx_, doc_, p.pageIndex);
+        if (pdf_page* pp = pdf_page_from_fz_page(ctx_, pg)) {
+            fz_rect media;
+            pdf_page_transform(ctx_, pp, &media, &userToPage);
+        }
+    }
+    fz_always(ctx_) { fz_drop_page(ctx_, pg); }
+    fz_catch(ctx_) { return p.pageIndex * viewsPerPage(); }
+    const fz_point q = fz_transform_point(fz_make_point(static_cast<float>(ux), static_cast<float>(uy)), userToPage);
+    return viewAt(p.pageIndex, q.x, q.y);
 }
 
 std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<AnnotationRecord>& anns) {
     std::vector<HighlightBox> out;
     double scale, dx, dy;
     if (!fit(page, scale, dx, dy)) return out;
+    const int pdfPage = src(page);
     // PDF user space (origin bottom-left) -> MuPDF page space (origin top-left), per the page.
     fz_matrix userToPage = fz_identity;
     fz_page* p = nullptr;
     fz_var(p);
     fz_try(ctx_) {
-        p = fz_load_page(ctx_, doc_, page);
+        p = fz_load_page(ctx_, doc_, pdfPage);
         if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) {
             fz_rect media;
             pdf_page_transform(ctx_, pp, &media, &userToPage);
@@ -464,13 +653,14 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
     }
     fz_always(ctx_) { fz_drop_page(ctx_, p); }
     fz_catch(ctx_) { return out; }
+    const Rect frame{0, 0, layout_.width, layout_.height};
     auto toDevice = [&](double x, double y) {
         const fz_point q = fz_transform_point(fz_make_point(static_cast<float>(x), static_cast<float>(y)), userToPage);
         return Point{static_cast<int>(std::lround(q.x * scale + dx)), static_cast<int>(std::lround(q.y * scale + dy))};
     };
     for (const auto& a : anns) {
         const PdfPosition pos = parsePosition(a.position);
-        if (pos.pageIndex != page) continue;
+        if (pos.pageIndex != pdfPage) continue;
         if (a.type == "ink") {  // strokes, boxed by their extent
             HighlightBox b{a.key, {}, shadeOf(a.color), false};
             b.kind = HighlightBox::Kind::Ink;
@@ -485,7 +675,7 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
                 }
                 b.paths.push_back(std::move(path));
             }
-            if (!b.paths.empty()) {
+            if (!b.paths.empty() && !extent.intersected(frame).empty()) {
                 b.rect = extent;
                 out.push_back(std::move(b));
             }
@@ -498,6 +688,7 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
             const int x0 = static_cast<int>(std::floor(q.x0 * scale + dx)), y0 = static_cast<int>(std::floor(q.y0 * scale + dy));
             const int x1 = static_cast<int>(std::ceil(q.x1 * scale + dx)), y1 = static_cast<int>(std::ceil(q.y1 * scale + dy));
             if (x1 <= x0 || y1 <= y0) continue;
+            if (Rect{x0, y0, x1 - x0, y1 - y0}.intersected(frame).empty()) continue;  // on another view
             HighlightBox b{a.key, {x0, y0, x1 - x0, y1 - y0}, shadeOf(a.color), a.type == "underline"};
             if (a.type == "text") {
                 b.kind = HighlightBox::Kind::Text;
@@ -518,7 +709,8 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
 
 int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
     int64_t words = 0;
-    for (int p = std::max(0, fromPage); p < std::min(toPage, pageCount()); ++p) {
+    const int views = viewsPerPage();  // PDF pages: from the view's page to the one before the target's
+    for (int p = std::max(0, fromPage / views); p < std::min((toPage + views - 1) / views, pdfPages()); ++p) {
         bool inWord = false;
         for (char c : pageText(p)) {
             const bool space = c == ' ' || c == '\n' || c == '\t';
@@ -592,8 +784,9 @@ std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
     fz_rect media = fz_empty_rect;
     char label[64] = "";
     bool ok = true;
+    const int pdfPage = src(page);
     fz_try(ctx_) {
-        p = fz_load_page(ctx_, doc_, page);
+        p = fz_load_page(ctx_, doc_, pdfPage);
         if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
         st = fz_new_stext_page_from_page(ctx_, p, nullptr);
         fz_page_label(ctx_, p, label, sizeof label);
@@ -666,12 +859,12 @@ std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
         rects.push_back({round2(u.x0), round2(u.y0), round2(u.x1), round2(u.y1)});
         if (i == 0) firstTop = media.y1 - u.y1;
     }
-    sel.position = nlohmann::json{{"pageIndex", page}, {"rects", rects}}.dump();
+    sel.position = nlohmann::json{{"pageIndex", pdfPage}, {"rects", rects}}.dump();
     char sort[40];
-    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", page, startIndex,
+    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", pdfPage, startIndex,
                   static_cast<int>(std::max(0.0, std::floor(firstTop))));
     sel.sortIndex = sort;
-    sel.pageLabel = label[0] ? label : std::to_string(page + 1);
+    sel.pageLabel = label[0] ? label : std::to_string(pdfPage + 1);
     // Drawn exactly as the saved highlight will be.
     AnnotationRecord probe;
     probe.position = sel.position;
@@ -689,8 +882,9 @@ std::optional<InkPlacement> PdfEngine::inkPosition(int page, const std::vector<s
     fz_rect media = fz_empty_rect;
     char label[64] = "";
     bool ok = true;
+    const int pdfPage = src(page);
     fz_try(ctx_) {
-        p = fz_load_page(ctx_, doc_, page);
+        p = fz_load_page(ctx_, doc_, pdfPage);
         if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
         fz_page_label(ctx_, p, label, sizeof label);
     }
@@ -714,11 +908,11 @@ std::optional<InkPlacement> PdfEngine::inkPosition(int page, const std::vector<s
     }
     if (jpaths.empty()) return std::nullopt;
     InkPlacement out;
-    out.position = nlohmann::json{{"pageIndex", page}, {"width", round2(widthPx / scale)}, {"paths", jpaths}}.dump();
+    out.position = nlohmann::json{{"pageIndex", pdfPage}, {"width", round2(widthPx / scale)}, {"paths", jpaths}}.dump();
     char sort[40];
-    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", page, 0, static_cast<int>(std::max(0.0, std::floor(top))));
+    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", pdfPage, 0, static_cast<int>(std::max(0.0, std::floor(top))));
     out.sortIndex = sort;
-    out.pageLabel = label[0] ? label : std::to_string(page + 1);
+    out.pageLabel = label[0] ? label : std::to_string(pdfPage + 1);
     return out;
 }
 

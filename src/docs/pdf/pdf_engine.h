@@ -21,6 +21,7 @@ public:
     bool open(const std::string& path, UserError*) override;
     void setLayout(const Layout&) override;
     int pageCount() override;
+    int viewsPerPage() override;
     PageImage render(int page) override;
     DocPosition positionOfPage(int page) override;
     int pageOf(const DocPosition&) override;
@@ -39,6 +40,30 @@ public:
     int64_t wordsBetween(int fromPage, int toPage) override;
 
 private:
+    // Column view (design 2026-11-08): the engine's pages are views of the PDF's pages.
+    struct Columns {
+        bool analysed = false, text = false;
+        int columns = 1;
+        float x[3] = {0, 0, 0};  // column edges, page space: x[0]..x[1] (and x[1]..x[2])
+        float top = 0, bottom = 0;
+    };
+    struct Slices {
+        int count = 1;
+        float height[2] = {0, 0}, step[2] = {0, 0};  // per column, page space
+        int width = 0, screenHeight = 0;               // the layout they are for
+    };
+    int pdfPages();
+    bool columnsOn();
+    int src(int page) { return page / viewsPerPage(); }
+    void analyseColumns();
+    void sliceColumns();
+    // The view of PDF page `pdfPage` that shows point (x, y) of it (page space).
+    int viewAt(int pdfPage, float x, float y);
+    // The view's area in page space.
+    struct Area {
+        float x0, y0, x1, y1;
+    };
+    Area viewRect(int page);
     std::string pageText(int page);
     // The text at a link's target (x, y in page space; NaN: the page's top): the entry that
     // starts there, in its column, as far as it goes.
@@ -51,9 +76,12 @@ private:
     fz_context* ctx_ = nullptr;
     fz_document* doc_ = nullptr;
     Layout layout_;
-    std::vector<TocEntry> toc_;
+    std::vector<TocEntry> toc_;  // in PDF pages
+    std::vector<TocEntry> tocInViews();
     bool tocLoaded_ = false;
     std::map<int, std::array<float, 4>> contentBoxes_;
+    Columns columns_;
+    Slices slices_;
 };
 
 }  // namespace zk

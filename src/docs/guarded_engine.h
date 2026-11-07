@@ -29,6 +29,7 @@ public:
     }
     void setLayout(const Layout& l) override { guard([&] { e_->setLayout(l); }); }
     int pageCount() override { return guard([&] { return e_->pageCount(); }, 0); }
+    int viewsPerPage() override { return guard([&] { return e_->viewsPerPage(); }, 1); }
     PageImage render(int page) override { return guard([&] { return e_->render(page); }, PageImage{}); }
     DocPosition positionOfPage(int page) override { return guard([&] { return e_->positionOfPage(page); }, DocPosition{}); }
     int pageOf(const DocPosition& p) override { return guard([&] { return e_->pageOf(p); }, 0); }
