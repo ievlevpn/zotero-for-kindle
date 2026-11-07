@@ -16,8 +16,14 @@ constexpr int kW = 1236, kH = 1547;
 constexpr int kGroupH = 70;
 const Rect kArea{0, kHeaderH, kW, kH - kTabBarH - kHeaderH};
 constexpr int kPerPage = 4;  // notes per page; group headers fit in the remaining space
+const Rect kConfirm{kMargin, 560, kW - 2 * kMargin, 300};
 
 }  // namespace
+
+Rect NotesScreen::confirmRect(int i) {
+    const int w = (kConfirm.w - 3 * 40) / 2;
+    return {kConfirm.x + 40 + i * (w + 40), kConfirm.y + kConfirm.h - 130, w, 90};
+}
 
 void NotesScreen::load(Library& lib) {
     allOffline_ = lib.allAnnotationsOffline();
@@ -70,6 +76,18 @@ void NotesScreen::draw(Canvas& canvas) {
             drawNoteRow(cr, rects[i], lines_[i].note.annotation);
     }
     drawPageIndicator(cr, {0, kArea.y + kArea.h - kPageIndicatorH, kW, kPageIndicatorH}, pager_.page(), pager_.pages());
+    if (!discardKey_.empty()) {
+        roundedRect(cr, kConfirm.x + 1.5, kConfirm.y + 1.5, kConfirm.w - 3, kConfirm.h - 3, 18);
+        gray(cr, 255);
+        cairo_fill_preserve(cr);
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 3);
+        cairo_stroke(cr);
+        drawText(cr, "Discard your Kindle change? Zotero's version stays.", {kSans, 9, 500},
+                 {kConfirm.x + 40, kConfirm.y + 40, kConfirm.w - 80, 120}, 2, Align::Center);
+        drawButton(cr, confirmRect(0), "Discard", true);
+        drawButton(cr, confirmRect(1), "Cancel", false);
+    }
 }
 
 void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
@@ -79,10 +97,34 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (!discardKey_.empty()) {
+        if (confirmRect(0).contains(g.pos)) nav.library().discardConflict(discardKey_);
+        if (!kConfirm.contains(g.pos) || confirmRect(0).contains(g.pos) || confirmRect(1).contains(g.pos)) {
+            discardKey_.clear();
+            load(nav.library());
+            nav.damage(kArea, Waveform::Quality);
+        }
+        return;
+    }
     auto rects = lineRects();
-    for (size_t i = 0; i < rects.size(); ++i)
-        if (rects[i].contains(g.pos))
-            if (auto row = nav.library().rowFor(lines_[i].itemKey)) nav.push(std::make_unique<BookScreen>(*row));
+    for (size_t i = 0; i < rects.size(); ++i) {
+        if (!rects[i].contains(g.pos)) continue;
+        const AnnotationRecord& a = lines_[i].note.annotation;
+        if (!lines_[i].header && a.conflict) {
+            if (noteRowButtonRect(rects[i], 0).contains(g.pos)) {
+                nav.library().reapplyConflict(a.key);
+                load(nav.library());
+                nav.damage(kArea, Waveform::Quality);
+                return;
+            }
+            if (noteRowButtonRect(rects[i], 1).contains(g.pos)) {
+                discardKey_ = a.key;
+                nav.damage(kConfirm, Waveform::Fast);
+                return;
+            }
+        }
+        if (auto row = nav.library().rowFor(lines_[i].itemKey)) nav.push(std::make_unique<BookScreen>(*row));
+    }
 }
 
 void NotesScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {

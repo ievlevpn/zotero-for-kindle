@@ -1,6 +1,7 @@
 #pragma once
 // Notes tab: highlights and notes across the library, newest first, grouped by item. With
 // annotations on demand it covers the books opened on the Kindle (and says so when empty).
+// Each note shows its sync state; a conflict has Re-apply and Discard (which asks first).
 
 #include "screens/screen.h"
 #include "ui/pager.h"
@@ -22,12 +23,15 @@ public:
 
     const std::vector<Line>& page() const { return lines_; }
     std::vector<Rect> lineRects() const;
+    bool confirmingDiscard() const { return !discardKey_.empty(); }
+    static Rect confirmRect(int i);  // 0 Discard, 1 Cancel
 
 private:
     void load(Library&);
     std::vector<Line> lines_;
     Pager pager_{0, 1};
     bool allOffline_ = false;
+    std::string discardKey_;  // asking "Discard your Kindle change?" for this conflict
 };
 
 }  // namespace zk
