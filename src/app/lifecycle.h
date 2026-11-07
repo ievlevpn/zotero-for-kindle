@@ -21,12 +21,14 @@ public:
 
     void onBackground();
     void onForeground(int64_t nowMs);
+    bool watch();  // every few seconds: storage still there? Wi-Fi back for a wanted sync?
 
 private:
     SyncControl& sync_;
     SyncStatus& status_;
     std::function<int()> interval_;
     std::function<bool()> wifi_, storage_;
+    bool syncWhenOnline_ = false;  // woke without Wi-Fi: sync once it reconnects
 };
 
 }  // namespace zk

@@ -87,7 +87,7 @@ void HomeScreen::reload(Library& lib) {
 void HomeScreen::onShow(Nav& nav) {
     nowMs_ = nav.nowMs();
     reload(nav.library());
-    if (!status_.syncing() && status_.msSinceSync(nav.nowMs()) > kResyncAfterMs) nav.sync().syncNow();
+    if (!status_.syncing() && (status_.hasError() || status_.msSinceSync(nav.nowMs()) > kResyncAfterMs)) nav.sync().syncNow();
 }
 
 std::string HomeScreen::cardMeta() const {

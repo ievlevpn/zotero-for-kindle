@@ -13,20 +13,31 @@ void Lifecycle::attach(App& app) {
         if (foreground) onForeground(app.nowMs());
         else onBackground();
     });
-    app.setWatchdog(
-        [this] {
-            if (storage_()) return true;
-            log(LogLevel::Warn, "app storage is gone (USB storage mode?): exiting");
-            return false;
-        },
-        kStorageCheckMs);
+    app.setWatchdog([this] { return watch(); }, kStorageCheckMs);
 }
 
-void Lifecycle::onBackground() { sync_.setIntervalMinutes(0); }
+bool Lifecycle::watch() {
+    if (!storage_()) {
+        log(LogLevel::Warn, "app storage is gone (USB storage mode?): exiting");
+        return false;
+    }
+    if (syncWhenOnline_ && wifi_()) {
+        syncWhenOnline_ = false;
+        sync_.syncNow();
+    }
+    return true;
+}
+
+void Lifecycle::onBackground() {
+    sync_.setIntervalMinutes(0);
+    syncWhenOnline_ = false;
+}
 
 void Lifecycle::onForeground(int64_t nowMs) {
     sync_.setIntervalMinutes(interval_());
-    if (wifi_() && !status_.syncing() && status_.msSinceSync(nowMs) > kResyncAfterMs) sync_.syncNow();
+    if (status_.syncing() || (!status_.hasError() && status_.msSinceSync(nowMs) <= kResyncAfterMs)) return;
+    if (wifi_()) sync_.syncNow();
+    else syncWhenOnline_ = true;
 }
 
 }  // namespace zk

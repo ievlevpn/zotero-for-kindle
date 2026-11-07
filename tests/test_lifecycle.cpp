@@ -82,3 +82,31 @@ TEST_CASE("lifecycle: when the app's storage disappears the app quits within sec
     CHECK(rig.app.quitting());
     CHECK(rig.now - start <= 6000);
 }
+
+TEST_CASE("lifecycle: a sync wanted on wake waits for Wi-Fi to reconnect") {
+    Rig rig;
+    rig.wifi = false;  // Wi-Fi takes a few seconds to come back after wake
+    rig.display.lifecycle(InputEvent::Kind::Background);
+    rig.display.lifecycle(InputEvent::Kind::Foreground);
+    rig.app.step(0);
+    rig.app.step(0);
+    CHECK(rig.sync.syncs == 0);
+    rig.wifi = true;
+    for (int i = 0; i < 2000 && rig.sync.syncs == 0; ++i) rig.app.step(0);
+    CHECK(rig.sync.syncs == 1);
+    for (int i = 0; i < 2000; ++i) rig.app.step(0);
+    CHECK(rig.sync.syncs == 1);  // only once
+}
+
+TEST_CASE("lifecycle: a failed last sync is retried on wake even if it was recent") {
+    Rig rig;
+    SyncEvent failed;
+    failed.kind = SyncEvent::Kind::SyncFinished;
+    failed.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", "curl 6"};
+    rig.status.onEvent(failed, rig.now);
+    rig.display.lifecycle(InputEvent::Kind::Background);
+    rig.display.lifecycle(InputEvent::Kind::Foreground);
+    rig.app.step(0);
+    rig.app.step(0);
+    CHECK(rig.sync.syncs == 1);
+}
