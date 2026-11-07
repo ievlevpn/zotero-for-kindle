@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "golden.h"
 #include "screens/home_demo.h"
 #include "ui/text.h"
 
@@ -14,34 +15,6 @@ namespace {
 
 constexpr int kW = 1236, kH = 1547;  // window under the Kindle status bar (S5)
 const char* kGolden = "tests/golden/home.png";
-
-std::vector<uint8_t> grayOf(const Canvas& c) {
-    std::vector<uint8_t> g((size_t)c.width() * c.height());
-    c.toGray(g.data(), c.width(), {0, 0, c.width(), c.height()});
-    return g;
-}
-
-// Compares `c` with a reviewed golden PNG (written instead when ZK_UPDATE_GOLDEN is set).
-void checkGolden(Canvas& c, const char* path) {
-    if (std::getenv("ZK_UPDATE_GOLDEN")) {
-        std::filesystem::create_directories("tests/golden");
-        REQUIRE(cairo_surface_write_to_png(c.surface(), path) == CAIRO_STATUS_SUCCESS);
-        MESSAGE("golden written: review it against mockup C before committing");
-    }
-    cairo_surface_t* png = cairo_image_surface_create_from_png(path);
-    REQUIRE(cairo_surface_status(png) == CAIRO_STATUS_SUCCESS);
-    REQUIRE(cairo_image_surface_get_width(png) == c.width());
-    REQUIRE(cairo_image_surface_get_height(png) == c.height());
-    Canvas golden(c.width(), c.height());
-    cairo_set_source_surface(golden.cr(), png, 0, 0);
-    cairo_paint(golden.cr());
-    cairo_surface_destroy(png);
-    std::vector<uint8_t> a = grayOf(c), b = grayOf(golden);
-    size_t differing = 0;
-    for (size_t i = 0; i < a.size(); ++i)
-        if (std::abs(int(a[i]) - int(b[i])) > 16) ++differing;
-    CHECK(differing <= a.size() / 200);  // <= 0.5% of pixels
-}
 
 }  // namespace
 
@@ -53,7 +26,7 @@ TEST_CASE("home demo matches the reviewed golden image") {
     addFontDir("assets/fonts-device");
     Canvas c(kW, kH);
     drawHomeDemo(c, HomeDemoData{});
-    checkGolden(c, kGolden);
+    test::checkGolden(c, kGolden);
 }
 
 TEST_CASE("home demo tab rects split the bar evenly and don't overlap") {
@@ -83,7 +56,7 @@ TEST_CASE("home demo: long Latin and Cyrillic titles stay inside their rows and 
                 {"EPUB", longLatin, "Adda, Cooper · 2003", "new"}};
     Canvas c(kW, kH);
     drawHomeDemo(c, d);
-    std::vector<uint8_t> g = grayOf(c);
+    std::vector<uint8_t> g = test::grayOf(c);
     auto inkOnRow = [&](int y, int x0, int x1) {
         int ink = 0;
         for (int x = x0; x < x1; ++x) ink += g[(size_t)y * kW + x] < 100;
@@ -95,5 +68,5 @@ TEST_CASE("home demo: long Latin and Cyrillic titles stay inside their rows and 
     }
     Rect bar = homeDemoProgressRect(c);
     for (int y = bar.y - 6; y < bar.y; ++y) CHECK(inkOnRow(y, bar.x, bar.x + bar.w) == 0);
-    checkGolden(c, "tests/golden/home-stress.png");
+    test::checkGolden(c, "tests/golden/home-stress.png");
 }

@@ -112,6 +112,10 @@ ui_lib = static_library('zk-ui',
   'src/ui/gesture.cpp',
   'src/ui/canvas.cpp',
   'src/ui/text.cpp',
+  'src/ui/paint.cpp',
+  'src/ui/widgets.cpp',
+  'src/ui/pager.cpp',
+  'src/ui/text_field.cpp',
   include_directories : ui_incs,
   dependencies : [core_dep, cairo_dep, pango_deps])
 
