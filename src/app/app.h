@@ -123,7 +123,10 @@ private:
     int64_t toastUntil_ = 0;
     bool toastShown_ = false;
     bool closed_ = false;
-    void handlePen(const PenEvent&);
+    // The pen to the visible screen; a stroke it doesn't take is fed to the gestures as a touch.
+    void handlePen(const PenEvent&, std::vector<Gesture>& gestures);
+    static constexpr int kPenFinger = 99;  // the touch id of a pen stroke used as a finger
+    bool penAsTouch_ = false;
     bool palmBlocked(const TouchEvent&);
     bool penNear_ = false;
     int64_t penLeftMs_ = -1;

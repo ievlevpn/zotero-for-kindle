@@ -55,7 +55,9 @@ public:
     virtual void draw(Canvas&) = 0;
     virtual void onGesture(const Gesture&, Nav&) = 0;
     virtual void onKey(const KeyEvent&, Nav&) {}
-    virtual void onPen(const PenEvent&, Nav&) {}  // the stylus (Scribe), in window pixels
+    // The stylus (Scribe), in window pixels. Returning false for a Down makes that stroke a finger
+    // touch instead (taps, swipes): screens that don't write with the pen needn't do anything.
+    virtual bool onPen(const PenEvent&, Nav&) { return false; }
     virtual void onSyncEvent(const SyncEvent&, Nav&) {}
     virtual void onShow(Nav&) {}
     virtual void onTick(Nav&) {}  // every loop iteration while visible (timers)

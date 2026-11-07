@@ -133,14 +133,13 @@ TEST_CASE("pen ink: the eraser end deletes the ink it crosses, and only that") {
     CHECK(nlohmann::json::parse(left[0].position)["paths"][0][1] == 900);
 }
 
-TEST_CASE("pen ink: an EPUB says handwriting is for PDFs and draws nothing") {
+TEST_CASE("pen ink: in an EPUB the pen is a finger and draws nothing") {
     InkRig rig(DocType::Epub);
+    CHECK_FALSE(rig.reader->onPen(pen(PenEvent::Type::Down, {300, 400}), rig.nav));
     rig.stroke({{300, 400}, {380, 430}});
-    rig.stroke({{300, 500}, {380, 530}});
     CHECK(rig.nav.painted.empty());
     CHECK(rig.reader->pendingInkStrokes() == 0);
-    REQUIRE(rig.nav.toasts.size() == 1);
-    CHECK(rig.nav.toasts[0] == "Handwriting works in PDFs.");
+    CHECK(rig.nav.toasts.empty());
 }
 
 TEST_CASE("pen ink: a PDF ink position round-trips to the same device points") {
@@ -187,7 +186,10 @@ struct TouchCounter : Screen {
     int gestures = 0, pens = 0;
     void draw(Canvas&) override {}
     void onGesture(const Gesture&, Nav&) override { ++gestures; }
-    void onPen(const PenEvent&, Nav&) override { ++pens; }
+    bool onPen(const PenEvent&, Nav&) override {
+        ++pens;
+        return false;
+    }
 };
 
 }  // namespace
@@ -232,8 +234,9 @@ namespace {
 struct Scribbler : Screen {
     void draw(Canvas&) override {}
     void onGesture(const Gesture&, Nav&) override {}
-    void onPen(const PenEvent& p, Nav& nav) override {
+    bool onPen(const PenEvent& p, Nav& nav) override {
         nav.paintNow({p.pos.x, p.pos.y, 8, 8}, Waveform::Ink, [](cairo_t*) {});
+        return true;
     }
 };
 
@@ -326,4 +329,26 @@ TEST_CASE("reader: a sync that deleted an annotation elsewhere takes it off the 
     rig.lib.deleteAnnotation("SYNCDEL1");
     rig.reader->onSyncEvent(done, rig.nav);
     REQUIRE(rig.settle([&] { return rig.reader->highlights().empty(); }));
+}
+
+TEST_CASE("pen ink: a pen stroke the screen doesn't write with is a tap") {
+    FakeDisplay display;
+    FakeSync sync;
+    NoKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    auto s = std::make_unique<TouchCounter>();
+    TouchCounter* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    display.pen(PenEvent::Type::Near, {600, 700}, now);
+    display.pen(PenEvent::Type::Down, {600, 700}, now + 10);
+    display.pen(PenEvent::Type::Up, {600, 700}, now + 80);
+    for (int i = 0; i < 6; ++i) {
+        app.step(0);
+        now += 70;
+    }
+    CHECK(screen->gestures == 1);
 }

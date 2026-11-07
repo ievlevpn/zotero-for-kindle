@@ -31,7 +31,7 @@ public:
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onKey(const KeyEvent&, Nav&) override;
-    void onPen(const PenEvent&, Nav&) override;
+    bool onPen(const PenEvent&, Nav&) override;  // strokes it doesn't write with act as a finger
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
     void onTick(Nav&) override;
@@ -162,7 +162,7 @@ private:
     std::optional<PositionQuestion> question_;
     int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
     // Handwriting.
-    bool inkDown_ = false, erasing_ = false, inkToastShown_ = false;
+    bool inkDown_ = false, erasing_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
