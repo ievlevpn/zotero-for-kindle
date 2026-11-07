@@ -104,6 +104,36 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     if (screen == "notes") s = std::make_unique<NotesScreen>();
     if (screen == "settings") s = std::make_unique<SettingsScreen>(loadConfig(defaultPaths().configDir).value_or(Config{}),
                                                                    [](Nav&) {});
+    // reader:<attachmentKey>[:page][:menus] — a downloaded book, as the reader shows it.
+    ReaderScreen* reader = nullptr;
+    int readerPage = -1;
+    bool readerMenus = false;
+    if (screen.rfind("reader:", 0) == 0) {
+        std::vector<std::string> parts;
+        for (size_t at = 0, next; at <= screen.size(); at = next + 1) {
+            next = screen.find(':', at);
+            if (next == std::string::npos) next = screen.size();
+            parts.push_back(screen.substr(at, next - at));
+        }
+        auto att = lib.attachment(parts.size() > 1 ? parts[1] : "");
+        auto row = att ? lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey) : std::nullopt;
+        if (!att || att->localPath.empty() || !row) {
+            log(LogLevel::Error, "%s: not a downloaded attachment", screen.c_str());
+            return 2;
+        }
+        if (parts.size() > 2 && !parts[2].empty()) readerPage = std::atoi(parts[2].c_str());
+        readerMenus = parts.size() > 3 && parts[3] == "menus";
+        auto r = std::make_unique<ReaderScreen>(*row, att->localPath,
+                                                att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub, [] {
+                                                    return std::make_unique<RenderWorker>([](DocType t) {
+                                                        UserError err;
+                                                        return loadEngine(t, kEngineEnv, &err);
+                                                    });
+                                                },
+                                                6);
+        reader = r.get();
+        s = std::move(r);
+    }
     if (!s) {
         log(LogLevel::Error, "unknown screen %s", screen.c_str());
         return 2;
@@ -127,6 +157,26 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         const Screen* top() const override { return nullptr; }
     } nav(lib, sync);
     s->onShow(nav);
+    if (reader) {
+        auto wait = [&](const std::function<bool()>& done) {
+            for (int i = 0; i < 1500 && !done(); ++i) {
+                reader->onTick(nav);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        };
+        wait([&] { return reader->ready() || reader->error(); });
+        if (readerPage >= 0) {
+            reader->turnTo(readerPage);
+            wait([&] { return reader->page() == readerPage; });
+        }
+        if (readerMenus) reader->onGesture(Gesture{GestureType::Tap, {metrics().width / 2, metrics().height / 2}, {}}, nav);
+        Canvas c(metrics().width, metrics().height);
+        s->draw(c);
+        const bool ok = cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS;
+        s.reset();
+        RenderWorker::waitForAll(3000);
+        return ok ? 0 : 1;
+    }
     Canvas c(metrics().width, metrics().height);
     s->draw(c);
     drawTabBar(c.cr(), {0, metrics().height - kTabBarH, metrics().width, kTabBarH}, {"Home", "Library", "Collections", "Notes"},
