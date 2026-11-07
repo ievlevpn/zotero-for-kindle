@@ -3,16 +3,20 @@
 //   zotero --screenshot home OUT.png [--db PATH]   render a screen to a PNG and exit
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <thread>
 
 #include "app/app.h"
+#include "docs/fonts.h"
 #include "app/paths.h"
 #include "app/lifecycle.h"
 #include "app/settings_store.h"
+#include "app/stall_watchdog.h"
 #include "app/startup.h"
 #include "core/log.h"
 #include "net/errors.h"
@@ -65,6 +69,7 @@ class CurrentSync final : public SyncControl {
 public:
     explicit CurrentSync(App& app) : app_(app) {}
     void syncNow() override { app_.sync().syncNow(); }
+    void pushSoon() override { app_.sync().pushSoon(); }
     void syncWhenOnline() override { app_.sync().syncWhenOnline(); }
     void openBook(const std::string& i, const std::string& a) override { app_.sync().openBook(i, a); }
     void setAllHighlightsOffline(bool on) override { app_.sync().setAllHighlightsOffline(on); }
@@ -130,6 +135,14 @@ int main(int argc, char** argv) {
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
     if (argc > 1 && !std::strcmp(argv[1], "--version")) return 0;
+    if (argc > 1 && !std::strcmp(argv[1], "--list-fonts")) {  // what Display offers, and how long finding it takes
+        const auto t0 = std::chrono::steady_clock::now();
+        const auto fonts = readingFonts(readingFontDirs());
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        for (const auto& f : fonts) std::printf("%s\n", f.c_str());
+        std::printf("%zu families in %.0f ms\n", fonts.size(), ms);
+        return 0;
+    }
     if (argc > 3 && !std::strcmp(argv[1], "--screenshot")) {
         std::string db = paths.dbPath;
         if (argc > 5 && !std::strcmp(argv[4], "--db")) db = argv[5];
@@ -224,7 +237,12 @@ int main(int argc, char** argv) {
 
     app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
     app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
-    app.setRoot(3, std::make_unique<NotesScreen>());
+    app.setRoot(3, std::make_unique<NotesScreen>(
+                       [&flow, &app](const ItemRow& r, std::optional<AnnotationRecord> at) {
+                           if (r.fileState != AttachmentRecord::State::Local && !r.attachmentKey.empty())
+                               app.toast("Downloading the book…");  // Notes has no row to show progress in
+                           flow.open(r, app, std::move(at));
+                       }));
     if (config && !startup.imported) {
         startService(*config);
         app.setRoot(0, makeHome());
@@ -236,8 +254,23 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
+    // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
+    // Kindle home). Stays on through shutdown, which must not hang either.
+    StallWatchdog watchdog(15'000, [](int64_t ms, const std::string& doing) {
+        log(LogLevel::Error, "UI stuck for %lld ms (%s): exiting", static_cast<long long>(ms), doing.c_str());
+        std::_Exit(3);
+    });
+    app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    if (std::getenv("ZK_DEBUG_STALL")) {  // proves the escape path on the device: freeze the UI on purpose
+        const int64_t at = app.nowMs() + 5000;
+        app.setWatchdog([at, &app] {
+            if (app.nowMs() >= at) std::this_thread::sleep_for(std::chrono::seconds(60));
+            return true;
+        }, 1000);
+    }
     const int rc = app.run();
+    watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     if (service) service->stop();
     keyboard->hide();

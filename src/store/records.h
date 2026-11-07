@@ -38,6 +38,9 @@ struct AnnotationRecord {
     bool dirty = false;
     bool conflict = false;
     bool createdHere = false;
+    bool deletedHere = false;  // a tombstone: deleted on the Kindle, DELETE not sent yet; hidden everywhere
+    bool localOnly = false;    // its position can't be synced exactly (failed round trip): never uploaded
+    std::string conflictOf;    // a conflict copy: the annotation it was an edit of
     std::string json;
     std::string dateModified;
 };

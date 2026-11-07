@@ -35,6 +35,7 @@ struct Deleted {
 struct WriteResult {
     std::map<int, std::string> successKeys;  // batch index -> key
     std::map<int, std::string> failed;       // batch index -> message
+    std::map<int, int> failedCodes;          // batch index -> Zotero's code (e.g. 400, 412)
     bool preconditionFailed = false;         // 412: the library changed since `ifUnmodifiedSince`
     int64_t libraryVersion = 0;
 };
@@ -57,6 +58,8 @@ public:
                                                      UserError*);
     std::optional<Deleted> deleted(int64_t since, UserError*);
     std::optional<WriteResult> createItems(const nlohmann::json& array /* ≤50 */, int64_t ifUnmodifiedSince, UserError*);
+    // DELETE /items?itemKey=… (≤50 keys). Success carries the new library version; 412 sets preconditionFailed.
+    std::optional<WriteResult> deleteItems(const std::vector<std::string>& keys, int64_t ifUnmodifiedSince, UserError*);
 
 private:
     HttpResponse send(HttpRequest req, UserError* err);

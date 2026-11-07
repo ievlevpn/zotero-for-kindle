@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,7 +18,7 @@
 namespace zk {
 
 struct RenderEvent {
-    enum class Kind { Opened, Page, SearchResults, Error };
+    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
     std::shared_ptr<const PageImage> image;
@@ -27,7 +28,9 @@ struct RenderEvent {
     int64_t wordsLeftInChapter = 0;  // from this page to the next chapter (estimated far ahead)
     std::vector<TocEntry> toc;       // Opened
     std::vector<SearchHit> hits;     // SearchResults
-    uint64_t requestId = 0;          // SearchResults: the id search() returned
+    uint64_t requestId = 0;          // SearchResults, Selection, HitAnnotation: the id the request returned
+    std::optional<Selection> selection;  // Selection (nullopt: not on text)
+    std::string annotationKey;           // HitAnnotation ("" if none)
     UserError error;                 // Error
     DocPosition position;            // of this page
 };
@@ -48,6 +51,10 @@ public:
     void showAnnotation(AnnotationRecord);  // the page the annotation is on (ignored if it can't be placed)
     uint64_t search(std::string query);     // results come back with this request id
     void highlightsFor(std::vector<AnnotationRecord>);
+    // Text between two points on `page`; only the latest request is answered.
+    uint64_t select(int page, Point from, Point to);
+    // The annotation drawn under `p` on `page` (of those given to highlightsFor).
+    uint64_t annotationAt(int page, Point p);
     bool poll(RenderEvent&);  // UI thread, non-blocking
 
     // Waits (up to the timeout) for workers whose readers are gone to finish; before exit.

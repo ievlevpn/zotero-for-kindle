@@ -6,7 +6,8 @@
 
 namespace zk {
 
-enum class GestureType { Tap, LongPress, DragStart, DragMove, DragEnd, Swipe };
+// LongPressUp: the finger lifted after a long press without moving (a drag ends with DragEnd).
+enum class GestureType { Tap, LongPress, DragStart, DragMove, DragEnd, Swipe, LongPressUp };
 enum class Direction { None, Left, Right, Up, Down };
 
 struct Gesture {

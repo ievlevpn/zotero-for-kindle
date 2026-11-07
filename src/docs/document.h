@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -55,6 +56,15 @@ struct HighlightBox {
     bool underline = false;
 };
 
+// Text the reader selected, with everything Zotero needs to place an annotation on it.
+struct Selection {
+    std::string text;         // as Zotero stores annotationText
+    std::vector<Rect> rects;  // device pixels on the page, one per line
+    std::string position;     // Zotero annotationPosition JSON
+    std::string sortIndex, pageLabel;
+    bool roundTrips = true;   // §7.5: the position resolves back to exactly this text
+};
+
 // Where an engine finds its data (crengine's hyphenation dictionaries and CSS, fonts, cache).
 struct EngineEnv {
     std::string dataDir;
@@ -77,6 +87,16 @@ public:
     virtual std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) = 0;
     virtual int pageOfAnnotation(const AnnotationRecord&) = 0;  // -1 if it can't be placed
     virtual int64_t wordsBetween(int fromPage, int toPage) = 0;  // for "time left"
+    // The whole words between two points on a page (in either order); nullopt if `from` is not on
+    // text. A Selection with empty text means the page has no text layer at all (a scan).
+    virtual std::optional<Selection> select(int page, Point from, Point to) = 0;
+    // The key of the topmost annotation drawn under `p` on `page`.
+    virtual std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& anns) {
+        const std::vector<HighlightBox> boxes = highlights(page, anns);
+        for (auto it = boxes.rbegin(); it != boxes.rend(); ++it)
+            if (it->rect.contains(p)) return it->annotationKey;
+        return std::nullopt;
+    }
 };
 
 // Zotero's annotation colours as gray shades for the e-ink page.

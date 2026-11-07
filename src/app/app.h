@@ -4,6 +4,7 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -40,6 +41,10 @@ public:
     // Run after the current loop iteration (safe to replace the calling screen).
     void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
     void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }
+    // Told what each part of a step is doing (the stall watchdog's beat).
+    void setHeartbeat(std::function<void(const char* doing)> f) { heartbeat_ = std::move(f); }
+    // A part of a step that took longer than 0.7 s (default: a warning in the log).
+    void setSlowStepLog(std::function<void(int64_t ms, const char* doing)> f) { slowLog_ = std::move(f); }
     // Checked every `periodMs`; returning false quits the app.
     void setWatchdog(std::function<bool()> ok, int64_t periodMs) {
         watchdog_ = std::move(ok);
@@ -78,6 +83,15 @@ private:
     bool quit_ = false;
     std::function<void(const SyncEvent&, Nav&)> hook_;
     std::vector<std::function<void()>> deferred_;
+    std::function<void(const char*)> heartbeat_;
+    // Events that make a screen reload (a finished sync, …) wait while it is hidden: reloading
+    // every tab's lists at once froze the UI for 1.3 s on the Kindle after each sync.
+    std::map<const Screen*, std::vector<SyncEvent>> held_;
+    void deliverHeld(Screen*);
+    std::function<void(int64_t, const char*)> slowLog_;
+    const char* phase_ = "idle";
+    int64_t phaseStartMs_ = -1;
+    void beat(const char* doing);
     // Screens removed during a step; destroyed after it, so a screen may pop itself and return.
     std::vector<std::unique_ptr<Screen>> graveyard_;
     std::function<void(bool)> lifecycle_;

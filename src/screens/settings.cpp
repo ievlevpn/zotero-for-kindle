@@ -40,6 +40,7 @@ Rect SettingsScreen::toggleRect() const { return {kW - kMargin - 140, kHighlight
 Rect SettingsScreen::flashMinusRect() const { return {kW - kMargin - 460, kFlashY + 10, 120, 80}; }
 Rect SettingsScreen::flashPlusRect() const { return {kW - kMargin - 120, kFlashY + 10, 120, 80}; }
 Rect SettingsScreen::removeRect() const { return {kMargin, kStorageY + 80, kW - 2 * kMargin, 92}; }
+Rect SettingsScreen::closeRect() const { return {kMargin, kAboutY + 140, kW - 2 * kMargin, 92}; }
 
 void SettingsScreen::load(Library& lib) {
     interval_ = loadSettings(lib).syncIntervalMinutes;
@@ -106,6 +107,7 @@ void SettingsScreen::draw(Canvas& canvas) {
 
     drawText(cr, "About", label, {kMargin, kAboutY, w, 50}, 1);
     drawText(cr, "Zotero for Kindle 0.3 · open source (AGPL-3.0)", value, {kMargin, kAboutY + 54, w, 50}, 1);
+    drawButton(cr, closeRect(), "Close Zotero", true);
 }
 
 void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
@@ -118,6 +120,10 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
         if (changeAccount_) changeAccount_(nav);
         return;
     }
+    if (closeRect().contains(g.pos)) {
+        nav.quit();  // the launcher returns to the Kindle home
+        return;
+    }
     for (int i = 0; i < 4; ++i)
         if (intervalRect(i).contains(g.pos)) {
             AppSettings s = loadSettings(nav.library());
@@ -125,7 +131,7 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
             saveSettings(nav.library(), s);
             interval_ = kIntervals[i];
             nav.sync().setIntervalMinutes(interval_);
-            nav.damage({0, kIntervalY, kW, 160}, Waveform::Fast);
+            nav.damage({0, kIntervalY, kW, 160}, Waveform::Ui);
             return;
         }
     if (flashMinusRect().contains(g.pos) || flashPlusRect().contains(g.pos)) {
@@ -133,13 +139,13 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
         st.flashEvery = std::clamp(st.flashEvery + (flashPlusRect().contains(g.pos) ? 1 : -1), 1, 12);
         saveSettings(nav.library(), st);
         flashEvery_ = st.flashEvery;
-        nav.damage({0, kFlashY, kW, 120}, Waveform::Fast);
+        nav.damage({0, kFlashY, kW, 120}, Waveform::Ui);
         return;
     }
     if (toggleRect().contains(g.pos)) {
         allOffline_ = !allOffline_;
         nav.sync().setAllHighlightsOffline(allOffline_);
-        nav.damage({0, kHighlightsY, kW, 200}, Waveform::Fast);
+        nav.damage({0, kHighlightsY, kW, 200}, Waveform::Ui);
         return;
     }
     if (removeRect().contains(g.pos)) {
@@ -149,12 +155,12 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
             confirmRemove_ = false;
             nav.sync().removeDownloads();
         }
-        nav.damage({0, kStorageY, kW, 200}, Waveform::Fast);
+        nav.damage({0, kStorageY, kW, 200}, Waveform::Ui);
         return;
     }
     if (confirmRemove_) {
         confirmRemove_ = false;
-        nav.damage({0, kStorageY, kW, 200}, Waveform::Fast);
+        nav.damage({0, kStorageY, kW, 200}, Waveform::Ui);
     }
 }
 

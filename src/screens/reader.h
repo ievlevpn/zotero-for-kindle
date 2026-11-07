@@ -1,7 +1,8 @@
 #pragma once
 // The reader (spec §6.3): the page, and a small footer (chapter + time left; percentage or
 // page). Taps on the outer 30% turn pages, swipes too; the middle opens the menus. Pages come
-// from a RenderWorker; the UI thread only blits them.
+// from a RenderWorker; the UI thread only blits them. A long-press selects text (drag to extend);
+// the annotation bar over it saves a highlight, underline or note (Plan 5).
 
 #include <functional>
 #include <memory>
@@ -9,11 +10,14 @@
 
 #include "docs/render_worker.h"
 #include "screens/screen.h"
+#include "ui/text_field.h"
 
 namespace zk {
 
 class ReaderMenus;
 class Lipc;
+class AnnotationBar;
+class AnnotationEditor;
 
 class ReaderScreen final : public Screen {
 public:
@@ -65,7 +69,24 @@ public:
     bool menusOpen() const { return menus_ != nullptr; }
     ReaderMenus* menus() { return menus_.get(); }
 
+    // Selection mode (Plan 5).
+    const std::optional<Selection>& selection() const { return selection_; }
+    AnnotationBar* annotationBar() { return bar_.get(); }
+    bool noteOpen() const { return note_.has_value(); }
+    AnnotationEditor* annotationEditor() { return editor_.get(); }
+    static Rect noteRect();
+
 private:
+    void startSelection(Point at, Nav&);
+    void requestSelection(Point to);
+    void onSelection(const RenderEvent&, Nav&);
+    void onBarTap(Point, Nav&);
+    void showBar(Nav&);
+    void saveSelection(const std::string& type, const std::string& comment, Nav&);
+    void closeSelection(Nav&);
+    bool editAt(Point, Nav&);  // a highlight under (or right next to) the tap: open its editor
+    void closeEditor(Nav&);
+    void refreshHighlights(Nav&);
     void turn(int delta, Nav&);
     void openMenus(Nav&);
 
@@ -90,6 +111,16 @@ private:
     bool turning_ = false;
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
+    // Selection mode.
+    bool selecting_ = false, selDragging_ = false, selReleased_ = false;  // the bar waits for the finger to lift
+    Point selAnchor_;
+    uint64_t selPending_ = 0;
+    std::optional<Selection> selection_;
+    std::unique_ptr<AnnotationBar> bar_;
+    std::optional<TextField> note_;
+    std::string colour_ = "#ffd400";  // the colour used last
+    std::unique_ptr<AnnotationEditor> editor_;
+    std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
 };
 
 }  // namespace zk

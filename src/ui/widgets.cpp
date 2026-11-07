@@ -157,22 +157,43 @@ void drawToast(cairo_t* cr, Rect r, const std::string& text) {
     centredText(cr, text, {kSans, 8, 500, false, 255}, {r.x + 40, r.y, r.w - 80, r.h});
 }
 
-void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a) {
+std::string noteSyncMark(const AnnotationRecord& a) {
+    if (a.conflict) return "conflict — Zotero's version kept";
+    if (a.localOnly) return "on the Kindle only";
+    if (a.dirty) return "not synced yet";
+    return {};
+}
+
+Rect noteRowButtonRect(Rect row, int i) {
+    constexpr int w = 200, h = 64, gap = 16;
+    return {row.x + row.w - 2 * w - gap + i * (w + gap), row.y + row.h - h - 14, w, h};
+}
+
+void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons) {
     fillRect(cr, r, 255);
     fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
+    const std::string mark = noteSyncMark(a);
     const int tx = r.x + 34, tw = r.w - 34 - 120;
+    const int bottom = r.y + r.h - (mark.empty() ? 14 : 70);  // room for the mark (and a conflict's buttons)
     int y = r.y + 18;
     if (!a.text.empty()) {
-        TextResult t = drawText(cr, a.text, {kSerif, 8.5, 400}, {tx, y, tw, 132}, 3);
+        const int lines = mark.empty() ? 3 : a.comment.empty() ? 2 : 1;  // a marked row keeps room for its comment
+        TextResult t = drawText(cr, a.text, {kSerif, 8.5, 400}, {tx, y, tw, std::min(132, bottom - y)}, lines);
         y += t.height + 8;
     }
-    if (!a.comment.empty()) drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, r.y + r.h - 14 - y}, 2);
+    if (!a.comment.empty() && bottom - y >= 36)
+        drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, bottom - y}, mark.empty() ? 2 : 1);
     if (!a.pageLabel.empty())
         drawText(cr, "p. " + a.pageLabel, {kSans, 6.5, 400, false, kTertiary}, {r.x + r.w - 110, r.y + 20, 110, 40}, 1,
                  Align::Right);
-    if (a.conflict)
-        drawText(cr, "not synced", {kSans, 6, 500, false, kSecondary}, {r.x + r.w - 160, r.y + r.h - 50, 160, 40}, 1,
-                 Align::Right);
+    if (!mark.empty()) {
+        const int markW = a.conflict && conflictButtons ? noteRowButtonRect(r, 0).x - tx - 20 : tw;
+        drawText(cr, mark, {kSans, 6.5, a.conflict ? 700 : 500, false, kSecondary}, {tx, r.y + r.h - 64, markW, 44}, 1);
+    }
+    if (a.conflict && conflictButtons) {
+        drawButton(cr, noteRowButtonRect(r, 0), "Re-apply", false);
+        drawButton(cr, noteRowButtonRect(r, 1), "Discard", false);
+    }
     hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
 }
 

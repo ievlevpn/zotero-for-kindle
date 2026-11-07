@@ -61,7 +61,6 @@ void BookScreen::draw(Canvas& canvas) {
     TextResult t = drawText(cr, row_.title.empty() ? "Untitled" : row_.title, {kSerif, 12, 700}, {x, 116, w, 150}, 3);
     drawText(cr, row_.byline, {kSans, 8, 400, false, kSecondary}, {x, 116 + t.height + 12, w, 50}, 1);
     drawText(cr, fileLine_, {kSans, 7, 400, false, kTertiary}, {x, 116 + t.height + 62, w, 46}, 1);
-    drawText(cr, "Reading arrives with the next update.", {kSans, 7, 400, false, kTertiary}, {x, cover.y + cover.h - 40, w, 46}, 1);
     hRule(cr, kTopH - 12, 0, kW);
 
     const Rect area = listArea();

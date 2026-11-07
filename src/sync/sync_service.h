@@ -4,11 +4,13 @@
 // waits for the network. stop() returns within ~2 s even mid-request or mid-Retry-After.
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -28,6 +30,7 @@ struct SyncDeps {
     std::function<bool()> wifiUp;  // default: probeNetState() (lipc on the Kindle), on the worker
     int onlinePollMs = 5000;
     int onlineGiveUpMs = 120'000;
+    int pushDelayMs = 10'000;  // pushSoon(): this long after the last change
 };
 
 class SyncService final : public SyncControl {
@@ -41,6 +44,7 @@ public:
     void stop();
 
     void syncNow() override;
+    void pushSoon() override;
     void syncWhenOnline() override;
     void openBook(const std::string& itemKey, const std::string& attachmentKey) override;
     void setAllHighlightsOffline(bool) override;
@@ -51,7 +55,7 @@ public:
 
 private:
     struct Command {
-        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads } kind;
+        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push } kind;
         std::string itemKey, attachmentKey;
         bool flag = false;
     };
@@ -62,6 +66,7 @@ private:
     void emit(SyncEvent);
     bool sleepFor(int seconds);  // false when stopping
     bool sleepForMs(int ms);
+    void pushChanges(Worker&);  // PushStarted/PushFinished around SyncEngine::push, if anything is unsent
 
     SyncDeps deps_;
     std::thread thread_;
@@ -73,6 +78,7 @@ private:
     std::atomic<bool> stopping_{false};
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
     int intervalMinutes_;
+    std::optional<std::chrono::steady_clock::time_point> pushDue_;  // guarded by mutex_
 };
 
 }  // namespace zk

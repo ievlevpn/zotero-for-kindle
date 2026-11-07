@@ -1,5 +1,6 @@
 #include "app/app.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "core/log.h"
@@ -48,7 +49,7 @@ void App::toast(const std::string& text) {
     toast_ = text;
     lastToast_ = text;
     toastUntil_ = clock_() + 3000;
-    pending_.push_back({toastRect(), Waveform::Fast});
+    pending_.push_back({toastRect(), Waveform::Ui});
 }
 
 Rect App::tabBar() const { return {0, canvas_.height() - kTabBarH, canvas_.width(), kTabBarH}; }
@@ -69,7 +70,27 @@ void App::showTop() {
     caller_ = s;
     guard([&] { s->onShow(*this); });
     caller_ = nullptr;
+    deliverHeld(s);
     redrawAll(Waveform::Quality);
+}
+
+void App::deliverHeld(Screen* s) {
+    // Forget screens that are gone (their address may be reused by a new one).
+    for (auto it = held_.begin(); it != held_.end();) {
+        bool alive = false;
+        for (const auto& stack : stacks_)
+            for (const auto& x : stack) alive = alive || x.get() == it->first;
+        it = alive ? std::next(it) : held_.erase(it);
+    }
+    auto it = held_.find(s);
+    if (it == held_.end()) return;
+    std::vector<SyncEvent> events = std::move(it->second);
+    held_.erase(it);
+    for (const auto& e : events) {
+        caller_ = s;
+        guard([&] { s->onSyncEvent(e, *this); });
+        caller_ = nullptr;
+    }
 }
 
 void App::replaceRoot(int tab, std::unique_ptr<Screen> s) {
@@ -130,10 +151,10 @@ void App::guard(const std::function<void()>& f) {
 }
 
 void App::handle(const Gesture& g) {
-    if (g.type == GestureType::LongPress && g.pos.y < kHeaderH) {
-        log(LogLevel::Info, "long press on header: exit");
-        quit_ = true;
-        return;
+    if (g.type == GestureType::Tap || g.type == GestureType::LongPress || g.type == GestureType::Swipe ||
+        g.type == GestureType::DragEnd || g.type == GestureType::LongPressUp) {
+        static const char* names[] = {"tap", "long press", "drag start", "drag move", "drag end", "swipe", "lift"};
+        log(LogLevel::Info, "%s at %d,%d", names[static_cast<int>(g.type)], g.pos.x, g.pos.y);
     }
     Screen* s = visibleTop();
     if (!s) return;
@@ -144,7 +165,7 @@ void App::handle(const Gesture& g) {
             if (!r.contains(g.pos)) continue;
             // Instant feedback on the tab bar (fast waveform), then the new screen.
             drawTabBar(canvas_.cr(), tabBar(), kTabNames, i);
-            display_.present(canvas_, tabBar(), Waveform::Fast);
+            display_.present(canvas_, tabBar(), Waveform::Ui);
             switchTab(i);
         }
         return;
@@ -154,12 +175,26 @@ void App::handle(const Gesture& g) {
     caller_ = nullptr;
 }
 
+void App::beat(const char* doing) {
+    const int64_t now = clock_();
+    // "idle" is the wait for input: only work can be slow.
+    if (phaseStartMs_ >= 0 && now - phaseStartMs_ > 700 && std::string(phase_) != "idle") {
+        if (slowLog_) slowLog_(now - phaseStartMs_, phase_);
+        else log(LogLevel::Warn, "slow UI step: %lld ms in %s", static_cast<long long>(now - phaseStartMs_), phase_);
+    }
+    phase_ = doing;
+    phaseStartMs_ = now;
+    if (heartbeat_) heartbeat_(doing);
+}
+
 void App::step(int timeout_ms) {
+    beat("idle");
     std::vector<InputEvent> events;
     if (!display_.pollEvents(events, timeout_ms)) {
         closed_ = true;
         return;
     }
+    beat("input");
     std::vector<Gesture> gestures;
     for (const InputEvent& e : events) {
         switch (e.kind) {
@@ -193,14 +228,28 @@ void App::step(int timeout_ms) {
         handle(g);
     }
 
+    beat("sync events");
     SyncEvent ev;
     while (sync_->poll(ev)) {
         if (hook_) {
             caller_ = nullptr;
             guard([&] { hook_(ev, *this); });
         }
+        const bool reloads = ev.kind == SyncEvent::Kind::SyncFinished || ev.kind == SyncEvent::Kind::PushFinished ||
+                             ev.kind == SyncEvent::Kind::AnnotationsReady;
         for (auto& stack : stacks_)
             for (auto& s : stack) {
+                if (reloads && s.get() != visibleTop()) {
+                    auto& held = held_[s.get()];
+                    // Keep the latest of each (per book, for annotations).
+                    held.erase(std::remove_if(held.begin(), held.end(),
+                                              [&](const SyncEvent& h) {
+                                                  return h.kind == ev.kind && h.attachmentKey == ev.attachmentKey;
+                                              }),
+                               held.end());
+                    held.push_back(ev);
+                    continue;
+                }
                 caller_ = s.get();
                 guard([&] { s->onSyncEvent(ev, *this); });
                 caller_ = nullptr;
@@ -211,6 +260,7 @@ void App::step(int timeout_ms) {
         toastShown_ = false;
         pending_.push_back({toastRect(), Waveform::Quality});
     }
+    beat("screen tick");
     if (Screen* s = visibleTop()) {
         caller_ = s;
         guard([&] { s->onTick(*this); });
@@ -223,16 +273,18 @@ void App::step(int timeout_ms) {
     auto deferred = std::move(deferred_);
     deferred_.clear();
     for (auto& f : deferred) guard(f);
+    beat("drawing");
     flush();
     while (!graveyard_.empty()) graveyard_.pop_back();  // newest (topmost) first
+    beat("idle");
 }
 
 void App::flush() {
     if (pending_.empty() || !visibleTop()) return;
     const Rect all{0, 0, canvas_.width(), canvas_.height()};
-    Rect fast, quality, full;
+    Rect fast, ui, quality, full;
     for (const auto& [r, w] : pending_) {
-        Rect& u = w == Waveform::Fast ? fast : w == Waveform::Quality ? quality : full;
+        Rect& u = w == Waveform::Fast ? fast : w == Waveform::Ui ? ui : w == Waveform::Quality ? quality : full;
         u = u.united(r.intersected(all));
     }
     pending_.clear();
@@ -247,10 +299,11 @@ void App::flush() {
         toastShown_ = true;
     }
     if (!full.empty()) {
-        display_.present(canvas_, full.united(quality).united(fast), Waveform::Full);
+        display_.present(canvas_, full.united(quality).united(ui).united(fast), Waveform::Full);
         return;
     }
     if (!fast.empty()) display_.present(canvas_, fast, Waveform::Fast);
+    if (!ui.empty()) display_.present(canvas_, ui, Waveform::Ui);
     if (!quality.empty()) display_.present(canvas_, quality, Waveform::Quality);
 }
 

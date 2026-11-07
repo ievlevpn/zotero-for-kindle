@@ -15,6 +15,10 @@ namespace zk {
 
 class Library;
 
+// A fresh key in Zotero's alphabet (8 of 23456789ABCDEFGHIJKLMNPQRSTUVWXYZ) for a Kindle-made annotation.
+std::string newLocalKey();
+bool isZoteroKey(const std::string&);
+
 enum class SortBy { Recent, Title, Author, Year };
 enum class Filter { All, Epub, Pdf, Unread };
 
@@ -113,7 +117,21 @@ public:
     // annotation text/comments; case and diacritics are ignored.
     std::vector<ItemRecord> search(const std::string& query, int limit);
     std::vector<AnnotationRecord> annotationsFor(const std::string& attachmentKey);
-    std::vector<AnnotationRecord> dirtyAnnotations();
+    std::vector<AnnotationRecord> dirtyAnnotations();  // edits and creations; not tombstones
+
+    // Annotation changes made on the Kindle (spec §7.4), pushed by SyncEngine::push.
+    // Stores a new annotation under a fresh key (createdHere, dirty, version 0); returns the key.
+    std::string createAnnotation(AnnotationRecord);
+    // Saves an edit; `version` stays the server version the edit is based on.
+    void editAnnotation(const AnnotationRecord&);
+    // Never-synced annotations are removed; synced ones become tombstones until the push.
+    void deleteAnnotation(const std::string& key);
+    std::vector<AnnotationRecord> pendingDeletions();
+    std::vector<AnnotationRecord> conflicts();
+    void discardConflict(const std::string& key);
+    // Puts a conflict copy's content back as a change to send: onto the annotation it was an
+    // edit of if that still exists, otherwise as a new annotation. Returns the key it now lives under.
+    std::string reapplyConflict(const std::string& key);
     std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB/PDF files only
 
     LibraryStats stats();
@@ -129,6 +147,9 @@ public:
     std::optional<ItemRow> rowFor(const std::string& itemKey);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
+    std::vector<CollectionEntry> allCollections();  // every level, by name
+    // Items whose books were opened on the Kindle, last opened first.
+    std::vector<ItemRow> recentlyOpened(int limit);
     std::vector<NoteRow> recentAnnotations(int offset, int limit);
     int64_t countAnnotations();
     void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);

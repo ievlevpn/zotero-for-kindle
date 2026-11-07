@@ -24,6 +24,7 @@ public:
     Rect accountRect() const;
     Rect flashMinusRect() const;  // "Full refresh every N pages" (reader), 1–12
     Rect flashPlusRect() const;
+    Rect closeRect() const;  // "Close Zotero": back to the Kindle
 
 private:
     void load(Library&);

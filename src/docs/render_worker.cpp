@@ -54,6 +54,13 @@ struct RenderWorker::Impl {
     std::optional<std::pair<uint64_t, std::string>> search;
     uint64_t nextSearchId = 1;
     std::optional<std::vector<AnnotationRecord>> annotations;
+    struct PointRequest {
+        uint64_t id = 0;
+        int page = 0;
+        Point from, to;
+    };
+    std::optional<PointRequest> selectRequest, hitRequest;
+    uint64_t nextPointId = 1;
     std::deque<RenderEvent> events;
     // Worker-only state.
     std::unique_ptr<DocumentEngine> engine;
@@ -71,7 +78,8 @@ struct RenderWorker::Impl {
     }
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
-        return stop || open || layout || target.kind != Target::Kind::None || search || annotations;
+        return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
+               hitRequest;
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
@@ -152,7 +160,8 @@ void RenderWorker::Impl::run() {
                                         (current > 0 && !cache.count(current - 1)));
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
-                    return stop || open || layout || target.kind != Target::Kind::None || search || annotations;
+                    return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
+                           selectRequest || hitRequest;
                 });
             if (stop) break;
         }
@@ -178,6 +187,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     Target t;
     std::optional<std::pair<uint64_t, std::string>> s;
     std::optional<std::vector<AnnotationRecord>> a;
+    std::optional<PointRequest> sel, hit;
     uint64_t gen = 0;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -191,6 +201,10 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         search.reset();
         a = std::move(annotations);
         annotations.reset();
+        sel = selectRequest;
+        selectRequest.reset();
+        hit = hitRequest;
+        hitRequest.reset();
         gen = generation;
     }
     if (o) {
@@ -233,6 +247,22 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         else if (const int p = engine->pageOfAnnotation(t.annotation); p >= 0) page = p;
         current = std::clamp(page, 0, std::max(0, pageCount - 1));
         postCurrent = true;
+    }
+    if (sel) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Selection;
+        ev.requestId = sel->id;
+        ev.page = sel->page;
+        ev.selection = engine->select(sel->page, sel->from, sel->to);
+        emit(std::move(ev));
+    }
+    if (hit) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::HitAnnotation;
+        ev.requestId = hit->id;
+        ev.page = hit->page;
+        ev.annotationKey = engine->annotationAt(hit->page, hit->from, anns).value_or("");
+        emit(std::move(ev));
     }
     if (s) {
         RenderEvent ev;
@@ -354,6 +384,24 @@ uint64_t RenderWorker::search(std::string query) {
 
 void RenderWorker::highlightsFor(std::vector<AnnotationRecord> anns) {
     request(*impl_, [&] { impl_->annotations = std::move(anns); });
+}
+
+uint64_t RenderWorker::select(int page, Point from, Point to) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextPointId++;
+        impl_->selectRequest = Impl::PointRequest{id, page, from, to};
+    });
+    return id;
+}
+
+uint64_t RenderWorker::annotationAt(int page, Point p) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextPointId++;
+        impl_->hitRequest = Impl::PointRequest{id, page, p, p};
+    });
+    return id;
 }
 
 bool RenderWorker::poll(RenderEvent& out) {

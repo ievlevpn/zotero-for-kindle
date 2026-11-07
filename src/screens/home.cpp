@@ -79,9 +79,22 @@ void HomeScreen::reload(Library& lib) {
             }
     }
     if (card_ && !card_->attachmentKey.empty()) cardHighlights_ = lib.annotationsFor(card_->attachmentKey).size();
-    ListQuery recent;
-    recent.limit = 3;
-    recent_ = lib.rows(recent);
+    // Recent: the books read last (after the one in the card), then the newest items if fewer.
+    recent_.clear();
+    auto seen = [&](const std::string& key) {
+        if (card_ && card_->key == key) return true;
+        for (const auto& r : recent_)
+            if (r.key == key) return true;
+        return false;
+    };
+    for (auto& r : lib.recentlyOpened(4))
+        if (recent_.size() < 3 && !seen(r.key)) recent_.push_back(std::move(r));
+    if (recent_.size() < 3) {
+        ListQuery newest;
+        newest.limit = 6;
+        for (auto& r : lib.rows(newest))
+            if (recent_.size() < 3 && !seen(r.key)) recent_.push_back(std::move(r));
+    }
 }
 
 void HomeScreen::onShow(Nav& nav) {
@@ -185,10 +198,10 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     switch (e.kind) {
         case SyncEvent::Kind::SyncStarted:
         case SyncEvent::Kind::SyncProgress:
-            nav.damage({0, 0, kW, kHeaderH}, Waveform::Fast);
+            nav.damage({0, 0, kW, kHeaderH}, Waveform::Ui);
             if (total_ == 0) {
                 reload(nav.library());  // the first items may have arrived
-                nav.damage({0, kCardY, kW, kH - kCardY - kTabBarH}, total_ ? Waveform::Quality : Waveform::Fast);
+                nav.damage({0, kCardY, kW, kH - kCardY - kTabBarH}, total_ ? Waveform::Quality : Waveform::Ui);
             }
             break;
         case SyncEvent::Kind::SyncFinished:
@@ -198,13 +211,19 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         case SyncEvent::Kind::DownloadProgress: {
             auto rects = recentRowRects();
             for (size_t i = 0; i < rects.size(); ++i)
-                if (recent_[i].attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Fast);
+                if (recent_[i].attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Ui);
             break;
         }
         case SyncEvent::Kind::DownloadFinished:
         case SyncEvent::Kind::AnnotationsReady:
             reload(nav.library());
             nav.damage({0, kCardY, kW, kH - kCardY - kTabBarH}, Waveform::Quality);
+            break;
+        case SyncEvent::Kind::PushStarted:  // "Uploading 3 changes…", then the header as before
+            nav.damage({0, 0, kW, kHeaderH}, Waveform::Ui);
+            break;
+        case SyncEvent::Kind::PushFinished:
+            nav.damage({0, 0, kW, kHeaderH}, Waveform::Quality);
             break;
         default: break;
     }

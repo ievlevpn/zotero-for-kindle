@@ -1,5 +1,7 @@
 #include "screens/collections.h"
 
+#include "screens/collection_search.h"
+
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -46,6 +48,8 @@ void CollectionsScreen::onShow(Nav& nav) {
                     all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
 }
 
+Rect CollectionsScreen::searchRect() { return {kW - kMargin - 100, 20, 100, 100}; }
+
 std::vector<Rect> CollectionsScreen::entryRects() const {
     std::vector<Rect> out;
     for (size_t i = 0; i < entries_.size(); ++i)
@@ -57,6 +61,8 @@ void CollectionsScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, kW, kH}, 255);
     drawHeader(cr, "Collections", false);
+    const Rect s = searchRect();
+    searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
     auto rects = entryRects();
     for (size_t i = 0; i < entries_.size(); ++i)
         drawCollectionRow(cr, rects[i], entries_[i].collection.name, entries_[i].items, entries_[i].hasChildren);
@@ -74,6 +80,10 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (searchRect().contains(g.pos)) {
+        nav.push(std::make_unique<CollectionSearchScreen>(openItem_, status_));
+        return;
+    }
     auto rects = entryRects();
     for (size_t i = 0; i < rects.size(); ++i)
         if (rects[i].contains(g.pos)) nav.push(std::make_unique<CollectionScreen>(entries_[i], openItem_, status_));
@@ -174,7 +184,7 @@ void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());
         auto rects = lineRects();
         for (size_t i = 0; i < page_.size(); ++i)
-            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Fast);
+            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Ui);
         return;
     }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;

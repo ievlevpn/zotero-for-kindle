@@ -90,7 +90,7 @@ HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
             continue;
         }
         if (r.curlCode != 0 || r.status < 200 || r.status >= 300) {
-            if (!(r.status == 412 && req.method == "POST")) {
+            if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE"))) {
                 UserError e = classify(r, r.curlCode ? probeNetState() : NetState{}, kHost, false, req.method);
                 log(LogLevel::Warn, "zotero: %s %s -> %s (%s)", req.method.c_str(), req.url.c_str(), e.message.c_str(),
                     e.details.c_str());
@@ -209,7 +209,28 @@ std::optional<WriteResult> ZoteroApi::createItems(const json& array, int64_t ifU
             if (it.value().is_string()) out.successKeys[index(it.key())] = it.value().get<std::string>();
     if (j.contains("failed") && j["failed"].is_object())
         for (auto it = j["failed"].begin(); it != j["failed"].end(); ++it)
+        {
             out.failed[index(it.key())] = it.value().is_object() ? it.value().value("message", std::string("failed")) : "failed";
+            if (it.value().is_object() && it.value().contains("code") && it.value()["code"].is_number_integer())
+                out.failedCodes[index(it.key())] = it.value()["code"].get<int>();
+        }
+    return out;
+}
+
+std::optional<WriteResult> ZoteroApi::deleteItems(const std::vector<std::string>& keys, int64_t ifUnmodifiedSince,
+                                                  UserError* err) {
+    HttpRequest req;
+    req.method = "DELETE";
+    req.url = userUrl("/items?itemKey=" + joinKeys(keys));
+    req.headers = {{"If-Unmodified-Since-Version", std::to_string(ifUnmodifiedSince)}};
+    HttpResponse r = send(req, err);
+    WriteResult out;
+    out.libraryVersion = libraryVersionOf(r);
+    if (r.curlCode == 0 && r.status == 412) {
+        out.preconditionFailed = true;
+        return out;
+    }
+    if (r.curlCode || r.status != 204) return std::nullopt;
     return out;
 }
 

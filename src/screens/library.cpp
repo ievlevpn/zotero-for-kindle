@@ -124,7 +124,7 @@ void LibraryScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && sortButtonRect().contains(g.pos)) {
         menuOpen_ = true;
-        nav.damage(menuRect(), Waveform::Fast);
+        nav.damage(menuRect(), Waveform::Ui);
         return;
     }
     if (g.type == GestureType::Tap && chipsArea().contains(g.pos)) {

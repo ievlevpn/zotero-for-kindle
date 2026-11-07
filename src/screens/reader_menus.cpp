@@ -78,7 +78,7 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
             if (fontRect(i).contains(p) && fontOffset_ + i < fonts().size()) l.font = fonts()[fontOffset_ + i];
         if (fontMoreRect().contains(p) && fonts().size() > 4) {
             fontOffset_ = fontOffset_ + 4 < fonts().size() ? fontOffset_ + 4 : 0;
-            nav.damage(displayPanelRect(), Waveform::Fast);
+            nav.damage(displayPanelRect(), Waveform::Ui);
             return true;
         }
         if (sizeMinusRect().contains(p)) l.sizePt = std::max(kMinSize, l.sizePt - kSizeStep);
@@ -89,7 +89,7 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
     for (int i = 0; i < 3; ++i)
         if (marginRect(i).contains(p)) l.marginPx = kMargins[i];
     reader_.applyLayout(l, nav);
-    nav.damage(displayPanelRect(), Waveform::Fast);
+    nav.damage(displayPanelRect(), Waveform::Ui);
     return true;
 }
 
@@ -127,8 +127,8 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
 
 void ReaderMenus::open(Nav& nav) {
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
-    nav.damage(topBarRect(), Waveform::Fast);
-    nav.damage(panelRect(), Waveform::Fast);
+    nav.damage(topBarRect(), Waveform::Ui);
+    nav.damage(panelRect(), Waveform::Ui);
 }
 
 void ReaderMenus::close(Nav& nav) {
@@ -146,7 +146,7 @@ void ReaderMenus::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind != SyncEvent::Kind::AnnotationsReady || e.attachmentKey != reader_.row().attachmentKey) return;
     syncing_ = false;
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
-    nav.damage(panelRect(), Waveform::Fast);
+    nav.damage(panelRect(), Waveform::Ui);
 }
 
 int ReaderMenus::sliderPage(int x) const {
@@ -159,7 +159,7 @@ void ReaderMenus::setLight(int x, Nav& nav) {
     const Rect s = lightSliderRect();
     light_ = static_cast<int>(std::lround(std::clamp(static_cast<double>(x - s.x) / s.w, 0.0, 1.0) * kMaxLight));
     if (lipc_) lipc_->set("com.lab126.powerd", "flIntensity", std::to_string(light_));
-    nav.damage(lightPanelRect(), Waveform::Fast);
+    nav.damage(lightPanelRect(), Waveform::Ui);
 }
 
 void ReaderMenus::openContents(Nav& nav) {
@@ -183,10 +183,12 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (g.type == GestureType::DragEnd) {
         if (dragPage_) reader_.turnTo(sliderPage(g.pos.x));
         dragPage_.reset();
+        nav.damage(panelRect(), Waveform::Ui);  // the grays back after the fast drag
         return;
     }
     if (g.type != GestureType::Tap) return;
     if (backRect().contains(g.pos)) {
+        nav.sync().syncNow();  // closing the book: send what was changed in it, and get Zotero's news
         nav.pop();
         return;
     }
@@ -199,7 +201,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (buttonRect(2).contains(g.pos)) {
         displayOpen_ = !displayOpen_;
         lightOpen_ = false;
-        nav.damage(displayPanelRect(), displayOpen_ ? Waveform::Fast : Waveform::Quality);
+        nav.damage(displayPanelRect(), displayOpen_ ? Waveform::Ui : Waveform::Quality);
         return;
     }
     if (displayOpen_ && onDisplayTap(g.pos, nav)) return;
@@ -211,13 +213,13 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
             const std::string v = lipc_->get("com.lab126.powerd", "flIntensity");
             light_ = v.empty() ? -1 : std::atoi(v.c_str());
         }
-        nav.damage(lightPanelRect(), lightOpen_ ? Waveform::Fast : Waveform::Quality);
+        nav.damage(lightPanelRect(), lightOpen_ ? Waveform::Ui : Waveform::Quality);
         return;
     }
     if (buttonRect(4).contains(g.pos)) {
         syncing_ = true;
         nav.sync().openBook(reader_.row().key, reader_.row().attachmentKey);
-        nav.damage(panelRect(), Waveform::Fast);
+        nav.damage(panelRect(), Waveform::Ui);
         return;
     }
     if (lightOpen_ && lightPanelRect().contains(g.pos)) {

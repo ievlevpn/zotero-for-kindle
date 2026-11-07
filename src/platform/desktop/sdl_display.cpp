@@ -46,7 +46,7 @@ public:
         if (r.empty()) return;
         canvas.toGray(gray_.data(), kW, r);
         log(LogLevel::Debug, "present %d,%d %dx%d %s", r.x, r.y, r.w, r.h,
-            w == Waveform::Fast ? "fast" : w == Waveform::Quality ? "quality" : "full");
+            w == Waveform::Fast ? "fast" : w == Waveform::Ui ? "ui" : w == Waveform::Quality ? "quality" : "full");
         upload();
     }
 

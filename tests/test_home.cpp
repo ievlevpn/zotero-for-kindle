@@ -113,7 +113,7 @@ TEST_CASE("home: taps go to sync, search, settings and items") {
     REQUIRE(rows.size() == 3);  // what fits under the card at mockup C's sizes
     rig.home.onGesture(tapAt(rows[0].center()), rig.nav);
     REQUIRE(rig.opened.size() == 1);
-    CHECK(rig.opened[0] == "IT000039");  // newest item
+    CHECK(rig.opened[0] == "IT000038");  // newest item not already in the card
     rig.home.onGesture(tapAt(HomeScreen::cardRect().center()), rig.nav);
     CHECK(rig.opened.size() == 2);
 }
@@ -126,7 +126,7 @@ TEST_CASE("home: sync progress repaints only the header; a finished sync repaint
     e.progress = {"annotations", 50, 300};
     rig.home.onSyncEvent(e, rig.nav);
     REQUIRE(rig.nav.damages.size() == 1);
-    CHECK(rig.nav.damages[0].waveform == Waveform::Fast);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect.y + rig.nav.damages[0].rect.h <= kHeaderH);
     rig.nav.damages.clear();
     e.kind = SyncEvent::Kind::SyncFinished;
@@ -173,4 +173,22 @@ TEST_CASE("home: very long Latin and Cyrillic titles stay inside the card and ro
     rig.home.onShow(rig.nav);
     rig.draw();
     test::checkGolden(rig.canvas, "tests/golden/home-stress-real.png");
+}
+
+TEST_CASE("home: an upload repaints the header, fast when it starts and quality when it is done") {
+    Rig rig;
+    rig.nav.damages.clear();
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::PushStarted;
+    e.total = 2;
+    rig.home.onSyncEvent(e, rig.nav);
+    REQUIRE(rig.nav.damages.size() == 1);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
+    CHECK(rig.nav.damages[0].rect.y + rig.nav.damages[0].rect.h <= kHeaderH);
+    CHECK(rig.status.line(0) == "Uploading 2 changes…");
+    rig.nav.damages.clear();
+    e.kind = SyncEvent::Kind::PushFinished;
+    rig.home.onSyncEvent(e, rig.nav);
+    REQUIRE(rig.nav.damages.size() == 1);
+    CHECK(rig.nav.damages[0].waveform == Waveform::Quality);
 }

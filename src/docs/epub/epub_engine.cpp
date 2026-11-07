@@ -8,6 +8,7 @@
 #include <nlohmann/json.hpp>
 #include <unistd.h>
 
+#include <algorithm>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -269,6 +270,84 @@ int64_t EpubEngine::wordsBetween(int fromPage, int toPage) {
         inWord = !space;
     }
     return words;
+}
+
+namespace {
+
+bool isSpace(lChar32 c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0xA0 || c == 0xFEFF; }
+
+lChar32 charAt(const ldomXPointer& p) {
+    if (!p.isText()) return 0;
+    const lString32 text = p.getNode()->getText();
+    return p.getOffset() < text.length() ? text[p.getOffset()] : 0;
+}
+
+// Words are runs of non-space characters (punctuation and quotes included, as a reader expects
+// "considerable." or “Why to be selected whole), within one text node.
+ldomXPointer wordStart(ldomXPointer p) {
+    const lString32 text = p.getNode()->getText();
+    int i = p.getOffset();
+    while (i > 0 && !isSpace(text[i - 1])) --i;
+    return ldomXPointer(p.getNode(), i);
+}
+
+ldomXPointer wordEnd(ldomXPointer p) {
+    const lString32 text = p.getNode()->getText();
+    int i = std::min(p.getOffset(), static_cast<int>(text.length()));
+    if (i < text.length() && isSpace(text[i])) {  // on a space: end after the previous word
+        while (i > 0 && isSpace(text[i - 1])) --i;
+        return ldomXPointer(p.getNode(), i);
+    }
+    while (i < text.length() && !isSpace(text[i])) ++i;
+    return ldomXPointer(p.getNode(), i);
+}
+
+}  // namespace
+
+std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
+    if (!view_ || !dom_ || page < 0 || page >= pageCount()) return std::nullopt;
+    view_->goToPage(page);
+    // The drag stays on this page: a finger over the footer means the page's last line.
+    to.y = std::clamp(to.y, 0, layout_.height - layout_.marginPx / 2 - 1);
+    // A press in a margin selects nothing (crengine would snap it to the nearest text).
+    constexpr int kSlack = 12;
+    const int m = layout_.marginPx;
+    if (from.x < m - kSlack || from.x > layout_.width - m + kSlack || from.y < m - kSlack ||
+        from.y > layout_.height - m / 2 + kSlack)
+        return std::nullopt;
+    ldomXPointer a = view_->getNodeByPoint(lvPoint(from.x, from.y), true, true);
+    if (a.isNull() || !a.isText()) return std::nullopt;
+    if (isSpace(charAt(a)) && a.getOffset() > 0 && !isSpace(a.getNode()->getText()[a.getOffset() - 1]))
+        a = ldomXPointer(a.getNode(), a.getOffset() - 1);  // just after a word: that word
+    if (isSpace(charAt(a))) return std::nullopt;
+    ldomXPointer b = view_->getNodeByPoint(lvPoint(to.x, to.y), false, true);
+    if (b.isNull() || !b.isText()) b = a;
+    ldomXPointerEx first(a), last(b);
+    if (last.compare(first) < 0) std::swap(first, last);
+    ldomXPointer start = wordStart(first), end = wordEnd(last);
+    LVRef<ldomXRange> pageRange = view_->getPageDocumentRange(page);
+    if (!pageRange.isNull()) {
+        if (ldomXPointerEx(start).compare(ldomXPointerEx(pageRange->getStart())) < 0) start = pageRange->getStart();
+        if (ldomXPointerEx(end).compare(ldomXPointerEx(pageRange->getEnd())) > 0) end = pageRange->getEnd();
+    }
+    if (ldomXPointerEx(end).compare(ldomXPointerEx(start)) <= 0) return std::nullopt;
+
+    auto generated = dom_->generate(start, end);
+    if (!generated || generated->text.empty()) return std::nullopt;
+    Selection sel;
+    sel.text = generated->text;
+    sel.sortIndex = generated->sortIndex;
+    sel.position = nlohmann::json{{"type", "FragmentSelector"},
+                                  {"conformsTo", "http://www.idpf.org/epub/linking/cfi/epub-cfi.html"},
+                                  {"value", generated->cfi}}
+                       .dump();
+    sel.roundTrips = dom_->roundTrips(*generated);
+    // Drawn exactly as the saved highlight will be: from the CFI, through highlights().
+    AnnotationRecord probe;
+    probe.position = sel.position;
+    for (const auto& box : highlights(page, {probe})) sel.rects.push_back(box.rect);
+    if (sel.rects.empty()) return std::nullopt;
+    return sel;
 }
 
 }  // namespace zk

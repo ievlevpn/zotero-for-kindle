@@ -1,6 +1,7 @@
 #pragma once
 // An in-memory Zotero Web API v3 server for one user library (id 1), enough for sync tests:
-// version listings, keyed fetches, /deleted, and POST /items with If-Unmodified-Since-Version.
+// version listings, keyed fetches, /deleted, POST /items and DELETE /items?itemKey= with
+// If-Unmodified-Since-Version (and per-object `version` checks on POST).
 
 #include "net/http.h"
 
@@ -25,6 +26,7 @@ public:
     std::function<bool(const HttpRequest&)> failWhen;  // true -> connection timeout
     bool loseNextWriteResponse = false;  // apply the next POST, then answer with a timeout
     int created = 0;
+    std::map<std::string, int> failObjects;  // POST: these keys fail with this code
 
     // --- library editing (each bumps the library version) ---
     void put(json data) {
@@ -128,11 +130,19 @@ public:
                 if (k == "If-Unmodified-Since-Version") ius = std::stoll(v);
             if (ius != libraryVersion) return status(r, 412);
             json body = json::parse(req.body);
-            json success = json::object(), successful = json::object();
+            json success = json::object(), successful = json::object(), failed = json::object();
             ++libraryVersion;
             for (size_t i = 0; i < body.size(); ++i) {
                 json data = body[i];
                 std::string key = data.value("key", "");
+                if (failObjects.count(key)) {
+                    failed[std::to_string(i)] = {{"key", key}, {"code", failObjects[key]}, {"message", "refused"}};
+                    continue;
+                }
+                if (data.contains("version") && items.count(key) && items[key]["version"] != data["version"]) {
+                    failed[std::to_string(i)] = {{"key", key}, {"code", 412}, {"message", "Item has been modified"}};
+                    continue;
+                }
                 if (key.empty()) key = "SRV" + std::to_string(10000 + ++created);
                 data["key"] = key;
                 data["version"] = libraryVersion;
@@ -149,7 +159,20 @@ public:
                 return lost;
             }
             return ok(r, json{{"success", success}, {"successful", successful}, {"unchanged", json::object()},
-                              {"failed", json::object()}});
+                              {"failed", failed}});
+        }
+        if (req.method == "DELETE" && path == "items" && q.count("itemKey")) {
+            int64_t ius = -1;
+            for (const auto& [k, v] : req.headers)
+                if (k == "If-Unmodified-Since-Version") ius = std::stoll(v);
+            if (ius != libraryVersion) return status(r, 412);
+            ++libraryVersion;
+            for (const auto& k : split(q["itemKey"])) {
+                items.erase(k);
+                deletedItems[k] = libraryVersion;
+            }
+            r.headers["last-modified-version"] = std::to_string(libraryVersion);
+            return status(r, 204);
         }
         return status(r, 400);
     }

@@ -16,6 +16,17 @@ test_sources = files(
   'test_parse.cpp',
   'test_api.cpp',
   'test_sync_engine.cpp',
+  'test_annotation_sync.cpp',
+  'test_selection_api.cpp',
+  'test_epub_select.cpp',
+  'test_pdf_select.cpp',
+  'test_annotation_bar.cpp',
+  'test_annotation_edit.cpp',
+  'test_notes_conflicts.cpp',
+  'test_push_triggers.cpp',
+  'test_review_fixes5.cpp',
+  'test_stall_watchdog.cpp',
+  'test_device_requests.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',
@@ -49,7 +60,7 @@ test_sources = files(
 # EPUB internals (CFI) are tested directly on the desktop, where crengine shares Homebrew's
 # freetype/harfbuzz with pango.
 if backend == 'desktop' and is_variable('engine_crengine_dep')
-  test_sources += files('test_cfi.cpp', '../src/docs/epub/cfi.cpp')
+  test_sources += files('test_cfi.cpp', 'test_cfi_gen.cpp', '../src/docs/epub/cfi.cpp')
   test_extra_deps = [engine_crengine_dep, declare_dependency(include_directories : include_directories('../third_party/pugixml', is_system : true))]
 else
   test_extra_deps = []

@@ -83,7 +83,7 @@ TEST_CASE("app shell: tapping a tab shows that tab's screen") {
     CHECK(has(rig.log, "collections:show"));
     CHECK(has(rig.log, "collections:draw"));
     REQUIRE(rig.display.presents.size() >= 2);
-    CHECK(rig.display.presents[0].waveform == Waveform::Fast);  // tab feedback first
+    CHECK(rig.display.presents[0].waveform == Waveform::Ui);  // tab feedback first
     CHECK(rig.display.presents[0].rect.y >= 1547 - kTabBarH);
     CHECK(rig.display.presents.back().waveform == Waveform::Quality);
     CHECK(rig.display.presents.back().rect == Rect{0, 0, 1236, 1547});
@@ -109,7 +109,7 @@ TEST_CASE("app shell: damages in one step are merged into one present per wavefo
     rig.run(1);
     REQUIRE(rig.display.presents.size() == 1);  // two Fast header damages -> one present
     CHECK(rig.display.presents[0].waveform == Waveform::Fast);
-    CHECK(has(rig.log, "library:event"));  // every screen hears sync events
+    CHECK(has(rig.log, "library:event"));  // every screen hears progress at once
 }
 
 TEST_CASE("app shell: every 6th full-screen change flashes; returning from background flashes") {
@@ -130,11 +130,12 @@ TEST_CASE("app shell: every 6th full-screen change flashes; returning from backg
     CHECK(rig.display.presents.back().waveform == Waveform::Full);
 }
 
-TEST_CASE("app shell: a long press on the header quits") {
+TEST_CASE("app shell: a long press at the top goes to the screen (it used to quit; text there is selectable)") {
     Rig rig;
     rig.display.touch(TouchEvent::Type::Down, {600, 60}, rig.now);
     rig.run(12);  // > 500 ms of fake time
-    CHECK(rig.app.quitting());
+    CHECK_FALSE(rig.app.quitting());
+    CHECK(has(rig.log, "home:gesture"));
     rig.display.closed = true;
     CHECK(rig.app.run() == 0);
 }
@@ -164,4 +165,53 @@ TEST_CASE("app shell: closeAll destroys every screen (before the process waits f
     rig.app.closeAll();
     rig.display.closed = true;
     CHECK(rig.app.run() == 0);  // nothing left to show, no crash
+}
+
+TEST_CASE("app shell: every step tells the heartbeat what it is doing") {
+    Rig rig;
+    std::vector<std::string> beats;
+    rig.app.setHeartbeat([&](const char* doing) { beats.push_back(doing); });
+    rig.sync.events.push_back(SyncEvent{});
+    rig.run(1);
+    CHECK(has(beats, "input"));
+    CHECK(has(beats, "sync events"));
+    CHECK(has(beats, "drawing"));
+    CHECK(beats.back() == "idle");
+}
+
+TEST_CASE("app shell: a step slower than 0.7 s is logged with what it was doing") {
+    Rig rig;
+    std::vector<std::string> slow;
+    rig.app.setSlowStepLog([&](int64_t ms, const char* doing) { slow.push_back(std::string(doing) + ":" + std::to_string(ms)); });
+    rig.roots[0]->onTap = [&](const Gesture&, Nav&) { rig.now += 900; };  // a handler that takes 900 ms
+    rig.display.tap({600, 600}, rig.now);
+    rig.run(2);  // down, then up: the tap
+    REQUIRE(slow.size() == 1);
+    CHECK(slow[0].rfind("input:", 0) == 0);
+    rig.run(3);
+    CHECK(slow.size() == 1);
+}
+
+TEST_CASE("app shell: hidden screens hear a finished sync when they are shown, not while hidden") {
+    Rig rig;
+    SyncEvent finished;
+    finished.kind = SyncEvent::Kind::SyncFinished;
+    rig.sync.events.push_back(finished);
+    rig.sync.events.push_back(finished);  // two syncs while away: one reload is enough
+    rig.run(1);
+    CHECK(has(rig.log, "home:event"));         // visible: at once
+    CHECK_FALSE(has(rig.log, "library:event"));  // hidden: later
+    SyncEvent progress;
+    progress.kind = SyncEvent::Kind::DownloadProgress;
+    rig.sync.events.push_back(progress);
+    rig.run(1);
+    CHECK(has(rig.log, "library:event"));  // cheap progress events still reach everyone
+    rig.log.clear();
+    const Rect t = rig.tab(1);
+    rig.display.tap({t.x + t.w / 2, t.y + t.h / 2}, rig.now);
+    rig.run(3);
+    CHECK(std::count(rig.log.begin(), rig.log.end(), "library:event") == 1);
+    auto show = std::find(rig.log.begin(), rig.log.end(), "library:show");
+    auto event = std::find(rig.log.begin(), rig.log.end(), "library:event");
+    CHECK(show < event);
 }

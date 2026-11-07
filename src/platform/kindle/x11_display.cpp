@@ -179,7 +179,7 @@ private:
         XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
         XSync(dpy_, False);
         if (fb_ < 0) return;
-        cfg_.wfm_mode = w == Waveform::Fast ? WFM_DU : WFM_GC16;
+        cfg_.wfm_mode = w == Waveform::Fast ? WFM_DU : w == Waveform::Ui ? WFM_GL16 : WFM_GC16;
         cfg_.is_flashing = w == Waveform::Full;
         fbink_refresh(fb_, r.y + originY_, r.x + originX_, r.w, r.h, &cfg_);
     }

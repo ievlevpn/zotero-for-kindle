@@ -42,6 +42,12 @@ public:
     }
     int pageOfAnnotation(const AnnotationRecord& a) override { return guard([&] { return e_->pageOfAnnotation(a); }, -1); }
     int64_t wordsBetween(int from, int to) override { return guard([&] { return e_->wordsBetween(from, to); }, int64_t{0}); }
+    std::optional<Selection> select(int page, Point from, Point to) override {
+        return guard([&] { return e_->select(page, from, to); }, std::optional<Selection>{});
+    }
+    std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& a) override {
+        return guard([&] { return e_->annotationAt(page, p, a); }, std::optional<std::string>{});
+    }
 
 private:
     template <class F, class T> T guard(F&& f, T fallback) {

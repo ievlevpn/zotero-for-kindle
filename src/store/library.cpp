@@ -5,15 +5,18 @@
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
+#include <ctime>
+#include <random>
+
 namespace zk {
 
 using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 2;
+constexpr int64_t kSchemaVersion = 3;
 
-// Schema version 2 (PRAGMA user_version). Text-heavy columns default to '' so reads never see NULL.
+// Schema version 3 (PRAGMA user_version). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
 // readableKey/readableType: the item's file to open (EPUB preferred), kept by reindex().
 const char* kSchema = R"sql(
@@ -47,7 +50,8 @@ CREATE TABLE annotations (
   comment TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '', pageLabel TEXT NOT NULL DEFAULT '',
   sortIndex TEXT NOT NULL DEFAULT '', position TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '[]',
   version INTEGER NOT NULL DEFAULT 0, dirty INTEGER NOT NULL DEFAULT 0, conflict INTEGER NOT NULL DEFAULT 0,
-  createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '');
+  createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '',
+  deletedHere INTEGER NOT NULL DEFAULT 0, localOnly INTEGER NOT NULL DEFAULT 0, conflictOf TEXT NOT NULL DEFAULT '');
 CREATE INDEX annotations_modified ON annotations(dateModified DESC);
 CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
@@ -105,31 +109,47 @@ std::vector<ItemRecord> readItems(Stmt& st) {
 
 const char* kAnnotationColumns =
     "key, parentKey, type, text, comment, color, pageLabel, sortIndex, position, tags, version, dirty, conflict, "
-    "createdHere, json, dateModified";
+    "createdHere, json, dateModified, deletedHere, localOnly, conflictOf";
+
+// Reads the kAnnotationColumns of the current row, starting at column `at`.
+AnnotationRecord readAnnotation(Stmt& st, int at = 0) {
+    AnnotationRecord a;
+    a.key = st.text(at + 0);
+    a.parentKey = st.text(at + 1);
+    a.type = st.text(at + 2);
+    a.text = st.text(at + 3);
+    a.comment = st.text(at + 4);
+    a.color = st.text(at + 5);
+    a.pageLabel = st.text(at + 6);
+    a.sortIndex = st.text(at + 7);
+    a.position = st.text(at + 8);
+    a.tags = strings(st.text(at + 9));
+    a.version = st.integer(at + 10);
+    a.dirty = st.integer(at + 11) != 0;
+    a.conflict = st.integer(at + 12) != 0;
+    a.createdHere = st.integer(at + 13) != 0;
+    a.json = st.text(at + 14);
+    a.dateModified = st.text(at + 15);
+    a.deletedHere = st.integer(at + 16) != 0;
+    a.localOnly = st.integer(at + 17) != 0;
+    a.conflictOf = st.text(at + 18);
+    return a;
+}
 
 std::vector<AnnotationRecord> readAnnotations(Stmt& st) {
     std::vector<AnnotationRecord> out;
-    while (st.step()) {
-        AnnotationRecord a;
-        a.key = st.text(0);
-        a.parentKey = st.text(1);
-        a.type = st.text(2);
-        a.text = st.text(3);
-        a.comment = st.text(4);
-        a.color = st.text(5);
-        a.pageLabel = st.text(6);
-        a.sortIndex = st.text(7);
-        a.position = st.text(8);
-        a.tags = strings(st.text(9));
-        a.version = st.integer(10);
-        a.dirty = st.integer(11) != 0;
-        a.conflict = st.integer(12) != 0;
-        a.createdHere = st.integer(13) != 0;
-        a.json = st.text(14);
-        a.dateModified = st.text(15);
-        out.push_back(std::move(a));
-    }
+    while (st.step()) out.push_back(readAnnotation(st));
     return out;
+}
+
+// "2026-11-07T09:30:00Z", as Zotero writes dateModified.
+std::string nowUtc() {
+    std::time_t t = std::time(nullptr);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm);
+    return buf;
 }
 
 const char* kAttachmentColumns = "key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state";
@@ -216,6 +236,16 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
+        if (version == 2) {
+            // Version 2 may hold unsent Kindle work, so it is extended in place, never rebuilt.
+            db_.exec(
+                "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
+                "ALTER TABLE annotations ADD COLUMN localOnly INTEGER NOT NULL DEFAULT 0;"
+                "ALTER TABLE annotations ADD COLUMN conflictOf TEXT NOT NULL DEFAULT '';");
+            db_.setUserVersion(kSchemaVersion);
+            db_.exec("COMMIT");
+            return;
+        }
         if (version > 0) {
             // Older schemas are rebuilt: the database is a cache of Zotero and nothing local is
             // lost (no version before 2 ever uploaded or kept unsent work).
@@ -258,7 +288,7 @@ void Library::reindex(const std::string& itemKey) {
         "SELECT i.rowid, i.title, i.creatorsText, i.publication, i.tagsText, "
         "  (SELECT coalesce(group_concat(n.text || ' ' || n.comment || ' ' || n.tags, ' '), '') "
         "   FROM annotations n JOIN attachments a ON n.parentKey = a.key "
-        "   WHERE a.parentKey = i.key OR (a.key = i.key AND a.parentKey = '')) "
+        "   WHERE n.deletedHere = 0 AND (a.parentKey = i.key OR (a.key = i.key AND a.parentKey = ''))) "
         "FROM items i WHERE i.key = ?");
     ins.bind(1, itemKey).step();
     Stmt readable = db_.prepare(
@@ -342,16 +372,18 @@ void Library::upsertAnnotation(const AnnotationRecord& r) {
         const std::string oldAttachment = old.step() ? old.text(0) : std::string{};
         Stmt st = db_.prepare(
             std::string("INSERT INTO annotations (") + kAnnotationColumns +
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
             "type=excluded.type, text=excluded.text, comment=excluded.comment, color=excluded.color, "
             "pageLabel=excluded.pageLabel, sortIndex=excluded.sortIndex, position=excluded.position, "
             "tags=excluded.tags, version=excluded.version, dirty=excluded.dirty, conflict=excluded.conflict, "
-            "createdHere=excluded.createdHere, json=excluded.json, dateModified=excluded.dateModified");
+            "createdHere=excluded.createdHere, json=excluded.json, dateModified=excluded.dateModified, "
+            "deletedHere=excluded.deletedHere, localOnly=excluded.localOnly, conflictOf=excluded.conflictOf");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.type).bind(4, r.text).bind(5, r.comment);
         st.bind(6, r.color).bind(7, r.pageLabel).bind(8, r.sortIndex).bind(9, r.position);
         st.bind(10, json(r.tags).dump()).bind(11, r.version).bind(12, int64_t{r.dirty});
         st.bind(13, int64_t{r.conflict}).bind(14, int64_t{r.createdHere}).bind(15, r.json.empty() ? "{}" : r.json);
-        st.bind(16, r.dateModified);
+        st.bind(16, r.dateModified).bind(17, int64_t{r.deletedHere}).bind(18, int64_t{r.localOnly});
+        st.bind(19, r.conflictOf);
         st.step();
         if (!oldAttachment.empty() && oldAttachment != r.parentKey) touch(itemOfAttachment(oldAttachment));
         touch(itemOfAttachment(r.parentKey));
@@ -490,7 +522,7 @@ void Library::dropUntrackedAnnotations() {
 LibraryStats Library::stats() {
     return guarded([&] {
         Stmt st = db_.prepare(
-            "SELECT (SELECT count(*) FROM items), (SELECT count(*) FROM attachments), (SELECT count(*) FROM annotations), "
+            "SELECT (SELECT count(*) FROM items), (SELECT count(*) FROM attachments), (SELECT count(*) FROM annotations WHERE deletedHere = 0), "
             "(SELECT count(*) FROM collections), (SELECT count(*) FROM annotations WHERE conflict = 1), "
             "(SELECT count(*) FROM annotations WHERE dirty = 1 AND conflict = 0)");
         st.step();
@@ -541,7 +573,7 @@ std::vector<ItemRecord> Library::search(const std::string& query, int limit) {
 std::vector<AnnotationRecord> Library::annotationsFor(const std::string& attachmentKey) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns +
-                              " FROM annotations WHERE parentKey = ? ORDER BY sortIndex, key");
+                              " FROM annotations WHERE parentKey = ? AND deletedHere = 0 ORDER BY sortIndex, key");
         st.bind(1, attachmentKey);
         return readAnnotations(st);
     });
@@ -550,7 +582,7 @@ std::vector<AnnotationRecord> Library::annotationsFor(const std::string& attachm
 std::vector<AnnotationRecord> Library::dirtyAnnotations() {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns +
-                              " FROM annotations WHERE dirty = 1 ORDER BY parentKey, sortIndex");
+                              " FROM annotations WHERE dirty = 1 AND deletedHere = 0 ORDER BY parentKey, sortIndex");
         return readAnnotations(st);
     });
 }
@@ -764,41 +796,53 @@ std::vector<CollectionEntry> Library::childCollections(const std::string& parent
     });
 }
 
+std::vector<CollectionEntry> Library::allCollections() {
+    return guarded([&] {
+        Stmt st = db_.prepare(
+            "SELECT c.key, c.name, c.parentKey, c.version, "
+            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key), "
+            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
+            "FROM collections c ORDER BY c.name COLLATE NOCASE");
+        std::vector<CollectionEntry> out;
+        while (st.step())
+            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+        return out;
+    });
+}
+
+std::vector<ItemRow> Library::recentlyOpened(int limit) {
+    std::vector<std::string> keys = guarded([&] {
+        Stmt st = db_.prepare("SELECT itemKey FROM reading_state WHERE openedMs > 0 ORDER BY openedMs DESC LIMIT ?");
+        st.bind(1, int64_t{limit});
+        std::vector<std::string> out;
+        while (st.step()) out.push_back(st.text(0));
+        return out;
+    });
+    std::vector<ItemRow> rows;
+    for (const auto& k : keys)
+        if (auto r = rowFor(k)) rows.push_back(std::move(*r));
+    return rows;
+}
+
 std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
     return guarded([&] {
         std::string cols;
         for (const char* c : {"key", "parentKey", "type", "text", "comment", "color", "pageLabel", "sortIndex", "position",
-                              "tags", "version", "dirty", "conflict", "createdHere", "json", "dateModified"})
+                              "tags", "version", "dirty", "conflict", "createdHere", "json", "dateModified", "deletedHere",
+                              "localOnly", "conflictOf"})
             cols += std::string(cols.empty() ? "" : ", ") + "n." + c;
         Stmt st = db_.prepare("SELECT " + cols +
                               ", coalesce(i.key, ''), coalesce(i.title, '') FROM annotations n "
                               "LEFT JOIN attachments a ON a.key = n.parentKey "
                               "LEFT JOIN items i ON i.key = CASE WHEN a.parentKey = '' THEN a.key ELSE a.parentKey END "
-                              "ORDER BY n.dateModified DESC, n.key LIMIT ? OFFSET ?");
+                              "WHERE n.deletedHere = 0 ORDER BY n.dateModified DESC, n.key LIMIT ? OFFSET ?");
         st.bind(1, int64_t{limit}).bind(2, int64_t{offset});
         std::vector<NoteRow> out;
-        // readAnnotations consumes the statement; read the two extra columns alongside.
         while (st.step()) {
             NoteRow row;
-            AnnotationRecord& a = row.annotation;
-            a.key = st.text(0);
-            a.parentKey = st.text(1);
-            a.type = st.text(2);
-            a.text = st.text(3);
-            a.comment = st.text(4);
-            a.color = st.text(5);
-            a.pageLabel = st.text(6);
-            a.sortIndex = st.text(7);
-            a.position = st.text(8);
-            a.tags = strings(st.text(9));
-            a.version = st.integer(10);
-            a.dirty = st.integer(11) != 0;
-            a.conflict = st.integer(12) != 0;
-            a.createdHere = st.integer(13) != 0;
-            a.json = st.text(14);
-            a.dateModified = st.text(15);
-            row.itemKey = st.text(16);
-            row.itemTitle = st.text(17);
+            row.annotation = readAnnotation(st);
+            row.itemKey = st.text(19);
+            row.itemTitle = st.text(20);
             out.push_back(std::move(row));
         }
         return out;
@@ -807,7 +851,7 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
 
 int64_t Library::countAnnotations() {
     return guarded([&] {
-        Stmt st = db_.prepare("SELECT count(*) FROM annotations");
+        Stmt st = db_.prepare("SELECT count(*) FROM annotations WHERE deletedHere = 0");
         st.step();
         return st.integer(0);
     });
@@ -864,6 +908,98 @@ std::vector<AttachmentRecord> Library::downloadedAttachments() {
         st.bind(1, static_cast<int64_t>(AttachmentRecord::State::Local));
         return readAttachments(st);
     });
+}
+
+std::string newLocalKey() {
+    static std::mt19937 rng{std::random_device{}()};
+    static const char* alphabet = "23456789ABCDEFGHIJKLMNPQRSTUVWXYZ";
+    std::string k(8, '2');
+    for (auto& c : k) c = alphabet[rng() % 33];
+    return k;
+}
+
+bool isZoteroKey(const std::string& k) {
+    return k.size() == 8 && k.find_first_not_of("23456789ABCDEFGHIJKLMNPQRSTUVWXYZ") == std::string::npos;
+}
+
+std::string Library::createAnnotation(AnnotationRecord a) {
+    do a.key = newLocalKey();
+    while (annotation(a.key) || objectVersion(a.key) > 0);
+    a.version = 0;
+    a.createdHere = true;
+    a.dirty = true;
+    a.conflict = a.deletedHere = false;
+    a.conflictOf.clear();
+    a.dateModified = nowUtc();
+    upsertAnnotation(a);
+    return a.key;
+}
+
+void Library::editAnnotation(const AnnotationRecord& edited) {
+    auto old = annotation(edited.key);
+    if (!old || old->deletedHere) return;
+    AnnotationRecord a = edited;
+    a.version = old->version;
+    a.createdHere = old->createdHere;
+    a.conflict = old->conflict;
+    a.conflictOf = old->conflictOf;
+    a.localOnly = old->localOnly;
+    a.deletedHere = false;
+    a.dirty = !old->conflict;  // a conflict copy is only sent once re-applied
+    a.dateModified = nowUtc();
+    upsertAnnotation(a);
+}
+
+void Library::deleteAnnotation(const std::string& key) {
+    auto a = annotation(key);
+    if (!a) return;
+    if (a->version == 0) {
+        removeObject("annotation", key);
+        return;
+    }
+    a->deletedHere = true;
+    a->dirty = true;
+    upsertAnnotation(*a);
+}
+
+std::vector<AnnotationRecord> Library::pendingDeletions() {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns +
+                              " FROM annotations WHERE deletedHere = 1 ORDER BY key");
+        return readAnnotations(st);
+    });
+}
+
+std::vector<AnnotationRecord> Library::conflicts() {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns +
+                              " FROM annotations WHERE conflict = 1 ORDER BY dateModified DESC, key");
+        return readAnnotations(st);
+    });
+}
+
+void Library::discardConflict(const std::string& key) {
+    auto a = annotation(key);
+    if (a && a->conflict) removeObject("annotation", key);
+}
+
+std::string Library::reapplyConflict(const std::string& key) {
+    auto copy = annotation(key);
+    if (!copy || !copy->conflict) return {};
+    auto tx = begin();
+    removeObject("annotation", key);
+    std::string result;
+    auto original = copy->conflictOf.empty() ? std::nullopt : annotation(copy->conflictOf);
+    if (original && !original->deletedHere) {
+        AnnotationRecord a = *copy;
+        a.key = original->key;
+        editAnnotation(a);  // keeps the original's version, so the server's check still applies
+        result = a.key;
+    } else {
+        result = createAnnotation(*copy);
+    }
+    tx.commit();
+    return result;
 }
 
 }  // namespace zk

@@ -94,6 +94,13 @@ void SyncService::enqueue(Command c) {
 }
 
 void SyncService::syncNow() { enqueue({Command::Kind::Sync, {}, {}, false}); }
+void SyncService::pushSoon() {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        pushDue_ = Clock::now() + std::chrono::milliseconds(deps_.pushDelayMs);
+    }
+    cv_.notify_all();
+}
 void SyncService::syncWhenOnline() { enqueue({Command::Kind::SyncWhenOnline, {}, {}, false}); }
 void SyncService::openBook(const std::string& itemKey, const std::string& attachmentKey) {
     enqueue({Command::Kind::OpenBook, itemKey, attachmentKey, false});
@@ -142,8 +149,7 @@ void SyncService::run() {
         w.lib = std::make_unique<Library>(*w.db);
         Library* lib = w.lib.get();
         w.guard = std::make_unique<WriteGuard>(*w.cancellable, [lib](const std::string& key) {
-            auto a = lib->annotation(key);
-            return a && a->createdHere;
+            return lib->annotation(key).has_value();
         });
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
@@ -168,11 +174,25 @@ void SyncService::run() {
             auto due = [&] {
                 return intervalMinutes_ > 0 && Clock::now() - lastSync >= std::chrono::minutes(intervalMinutes_);
             };
-            cv_.wait_for(lock, std::chrono::seconds(30), [&] { return stopping_ || !commands_.empty() || due(); });
+            auto pushDue = [&] { return pushDue_ && Clock::now() >= *pushDue_; };
+            // Up to 30 s (the interval check), or until a pending push is due; pushSoon() may move
+            // that deadline while we wait, so it is read again on every wake-up.
+            const auto giveUp = Clock::now() + std::chrono::seconds(30);
+            while (!(stopping_ || !commands_.empty() || due() || pushDue())) {
+                auto wake = giveUp;
+                if (pushDue_ && *pushDue_ < wake) wake = *pushDue_;
+                if (cv_.wait_until(lock, wake) == std::cv_status::timeout && Clock::now() >= giveUp) break;
+            }
             if (stopping_) break;
             if (commands_.empty()) {
-                if (!due()) continue;
-                cmd = {Command::Kind::Sync, {}, {}, false};
+                if (pushDue()) {
+                    pushDue_.reset();
+                    cmd = {Command::Kind::Push, {}, {}, false};
+                } else if (due()) {
+                    cmd = {Command::Kind::Sync, {}, {}, false};
+                } else {
+                    continue;
+                }
             } else {
                 cmd = std::move(commands_.front());
                 commands_.pop_front();
@@ -195,10 +215,18 @@ void SyncService::run() {
             }
             switch (cmd.kind) {
                 case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
+                case Command::Kind::Push:
+                    pushChanges(w);
+                    break;
                 case Command::Kind::Sync: {
+                    {
+                        std::lock_guard<std::mutex> lock(mutex_);
+                        pushDue_.reset();  // this sync sends them
+                    }
                     SyncEvent start;
                     start.kind = SyncEvent::Kind::SyncStarted;
                     emit(start);
+                    pushChanges(w);  // ours first, so a pull can't make them look like conflicts
                     SyncReport rep = w.engine->pull([this](const SyncProgress& p) {
                         SyncEvent e;
                         e.kind = SyncEvent::Kind::SyncProgress;
@@ -206,6 +234,7 @@ void SyncService::run() {
                         emit(std::move(e));
                     });
                     lastSync = Clock::now();
+                    if (!rep.error && !stopping_) pushChanges(w);  // e.g. conflicts re-applied meanwhile
                     SyncEvent done;
                     done.kind = SyncEvent::Kind::SyncFinished;
                     done.report = rep;
@@ -294,6 +323,21 @@ void SyncService::run() {
         busy_ = false;
     }
     log(LogLevel::Info, "sync service: stopped");
+}
+
+void SyncService::pushChanges(Worker& w) {
+    const int pending = w.engine->pendingChanges();
+    if (pending == 0 || stopping_) return;
+    SyncEvent start;
+    start.kind = SyncEvent::Kind::PushStarted;
+    start.total = pending;
+    emit(start);
+    SyncReport rep = w.engine->push();
+    SyncEvent done;
+    done.kind = SyncEvent::Kind::PushFinished;
+    done.report = rep;
+    done.error = rep.error;
+    if (!stopping_) emit(std::move(done));
 }
 
 }  // namespace zk

@@ -25,6 +25,7 @@ public:
     std::string chapterAt(int page) override;
     std::vector<SearchHit> search(const std::string& query, int maxHits) override;
     std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) override;
+    std::optional<Selection> select(int page, Point from, Point to) override;
     int pageOfAnnotation(const AnnotationRecord&) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
 
