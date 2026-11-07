@@ -45,6 +45,9 @@ public:
     std::optional<Selection> select(int page, Point from, Point to) override {
         return guard([&] { return e_->select(page, from, to); }, std::optional<Selection>{});
     }
+    std::optional<InkPlacement> inkPosition(int page, const std::vector<std::vector<Point>>& paths, int w) override {
+        return guard([&] { return e_->inkPosition(page, paths, w); }, std::optional<InkPlacement>{});
+    }
     std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& a) override {
         return guard([&] { return e_->annotationAt(page, p, a); }, std::optional<std::string>{});
     }

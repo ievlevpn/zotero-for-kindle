@@ -17,7 +17,8 @@ namespace zk {
 // Fast: black/white only, quickest (DU) — feedback that moves (a selection, a slider, typing).
 // Ui: grays kept, no flash (GL16) — menus, panels, bars, buttons. Quality: page content (GC16).
 // Full: GC16 with a flash, to clear ghosting.
-enum class Waveform { Fast, Ui, Quality, Full };
+// Ink: pen strokes, black on the page, as fast as the panel goes (A2 on the Kindle).
+enum class Waveform { Fast, Ui, Quality, Full, Ink };
 
 // Landscape is for reading only, when the user asks for it (see App::setReadingLandscape).
 enum class Orientation { Portrait, Landscape };
@@ -39,6 +40,9 @@ public:
     // changes to `out`. Returns false when the app should quit (window closed). Redraw after
     // wake is handled inside the display.
     virtual bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) = 0;
+    // The system draws the pen's line itself (Scribe wet ink): on while a screen takes handwriting.
+    virtual bool systemInk() const { return false; }
+    virtual void setSystemInk(bool /*on*/) {}
 };
 
 // Backend chosen at build time (-Dplatform=desktop|kindle).

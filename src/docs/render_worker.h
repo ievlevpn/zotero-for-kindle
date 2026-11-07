@@ -18,7 +18,7 @@
 namespace zk {
 
 struct RenderEvent {
-    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation };
+    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Ink };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
     std::shared_ptr<const PageImage> image;
@@ -31,6 +31,7 @@ struct RenderEvent {
     uint64_t requestId = 0;          // SearchResults, Selection, HitAnnotation: the id the request returned
     std::optional<Selection> selection;  // Selection (nullopt: not on text)
     std::string annotationKey;           // HitAnnotation ("" if none)
+    std::optional<InkPlacement> ink;     // Ink (nullopt: the format has no ink)
     UserError error;                 // Error
     DocPosition position;            // of this page
 };
@@ -55,6 +56,8 @@ public:
     uint64_t select(int page, Point from, Point to);
     // The annotation drawn under `p` on `page` (of those given to highlightsFor).
     uint64_t annotationAt(int page, Point p);
+    // Handwriting on `page` placed for Zotero; every request is answered, in order.
+    uint64_t ink(int page, std::vector<std::vector<Point>> paths, int widthPx);
     bool poll(RenderEvent&);  // UI thread, non-blocking
 
     // Waits (up to the timeout) for workers whose readers are gone to finish; before exit.

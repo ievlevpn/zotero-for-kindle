@@ -36,6 +36,14 @@ public:
     void switchTab(int index) override;
     void damage(Rect, Waveform) override;
     void redrawAll(Waveform) override;
+    void paintNow(Rect, Waveform, const std::function<void(cairo_t*)>&) override;
+    bool systemInk() const override { return display_.systemInk(); }
+    void setSystemInk(bool on) override;
+    // Palm rejection: touches are ignored while the pen is in range and this long after it left.
+    static constexpr int64_t kPalmMs = 700;
+    // Ink reaches the screen at most once per frame, as one update for everything drawn since:
+    // an e-ink update per pen sample queues hundreds of them and the line lags in pieces.
+    static constexpr int64_t kInkFrameMs = 25;
     SyncControl& sync() override { return *sync_; }
     void setSync(SyncControl& s) { sync_ = &s; }
     // Replace a tab's root and show it (e.g. Home after Setup).
@@ -115,6 +123,15 @@ private:
     int64_t toastUntil_ = 0;
     bool toastShown_ = false;
     bool closed_ = false;
+    void handlePen(const PenEvent&);
+    bool palmBlocked(const TouchEvent&);
+    bool penNear_ = false;
+    int64_t penLeftMs_ = -1;
+    std::vector<int> palmFingers_;  // fingers that went down while the pen was near
+    void presentInk(bool force);
+    bool systemInkOn_ = false;
+    Rect inkDirty_;
+    int64_t lastInkPresentMs_ = -1'000'000;
 };
 
 }  // namespace zk

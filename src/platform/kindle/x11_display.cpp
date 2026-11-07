@@ -6,13 +6,17 @@
 #include <poll.h>
 
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
 #include "core/log.h"
 #include "platform/display.h"
 #include "platform/keysym.h"
+#include "platform/kindle/evdev_pen.h"
 #include "platform/kindle/expose_policy.h"
+#include "platform/kindle/wet_ink.h"
 #include "platform/kindle/x_touch.h"
 
 namespace zk {
@@ -38,7 +42,11 @@ public:
         w_ = DisplayWidth(dpy_, scr);
         h_ = DisplayHeight(dpy_, scr);
         win_ = XCreateSimpleWindow(dpy_, RootWindow(dpy_, scr), 0, 0, w_, h_, 0, 0, WhitePixel(dpy_, scr));
-        XStoreName(dpy_, win_, kWindowTitle);
+        // Wet ink draws only over the top window: the status bar would be it, so go full screen.
+        if (std::getenv("ZK_NO_WET_INK") == nullptr) wet_ = WetInk::open();
+        if (wet_) title_.replace(title_.find("PC:T"), 4, "PC:N");
+        if (const char* t = std::getenv("ZK_WINDOW_TITLE"); t && *t) title_ = t;
+        XStoreName(dpy_, win_, title_.c_str());
         XSelectInput(dpy_, win_, ExposureMask | StructureNotifyMask | ButtonPressMask | ButtonReleaseMask |
                                      Button1MotionMask | FocusChangeMask | VisibilityChangeMask | KeyPressMask);
         XMapWindow(dpy_, win_);
@@ -59,10 +67,44 @@ public:
             deviceName_ = state.device_name;
             ppi_ = state.screen_dpi;
         }
+        {
+            // The panel is portrait in its native orientation; the root window shows how it's turned now.
+            const int rw = DisplayWidth(dpy_, scr), rh = DisplayHeight(dpy_, scr);
+            pen_ = std::make_unique<EvdevPen>(std::min(rw, rh), std::max(rw, rh), wet_ != nullptr);
+            updatePenView();
+            if (wet_ && !wet_->connect(win_, std::min(rw, rh), std::max(rw, rh))) {
+                wet_.reset();
+                updatePenView();
+            }
+        }
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
     }
 
+    // How the screen is turned from the digitizer. The raw digitizer (wet ink) stays with the
+    // panel: the framebuffer's rotation says how far the picture is turned, upside down included
+    // (the Scribe turns 180 degrees for the left hand without the window changing size).
+    // fb0 rotate 3 is upright on the Scribe (2026-11-07: raw corners matched the screen).
+    // Otherwise landscape reading is a quarter turn (clockwise assumed; ZK_PEN_TURNS overrides).
+    void updatePenView() {
+        if (!pen_) return;
+        int turns = 0;
+        if (wet_) {
+            if (FILE* f = std::fopen("/sys/class/graphics/fb0/rotate", "r")) {
+                int r = 3;
+                if (std::fscanf(f, "%d", &r) == 1) turns = ((3 - r) % 4 + 4) % 4;
+                std::fclose(f);
+            }
+        } else {
+            const int scr = DefaultScreen(dpy_);
+            turns = DisplayWidth(dpy_, scr) > DisplayHeight(dpy_, scr) ? 1 : 0;
+        }
+        if (turns != penTurns_) log(LogLevel::Info, "pen: screen turned %d quarter(s) from the digitizer", turns);
+        penTurns_ = turns;
+        pen_->setView(turns, {originX_, originY_});
+    }
+
     ~X11Display() override {
+        wet_.reset();  // leaves the handler off before our window goes
         if (image_) {
             image_->data = nullptr;
             XDestroyImage(image_);
@@ -80,7 +122,7 @@ public:
     // changes (O:U upright, O:L landscape; spike 2026-11-07); ConfigureNotify then brings the size.
     void setOrientation(Orientation o) override {
         if (!dpy_) return;
-        std::string title = kWindowTitle;
+        std::string title = title_;
         title.back() = o == Orientation::Landscape ? 'L' : 'U';
         XStoreName(dpy_, win_, title.c_str());
         XFlush(dpy_);
@@ -93,12 +135,24 @@ public:
         putAndRefresh(r, w);
     }
 
+    bool systemInk() const override { return wet_ && wet_->connected(); }
+    void setSystemInk(bool on) override {
+        if (wet_) wet_->setMode(on ? WetInk::Mode::Pen : WetInk::Mode::Paused);
+    }
+
     bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
         if (!dpy_) return false;
         if (!XPending(dpy_)) {
-            pollfd p{ConnectionNumber(dpy_), POLLIN, 0};
-            poll(&p, 1, timeout_ms);
+            pollfd p[2] = {{ConnectionNumber(dpy_), POLLIN, 0}, {pen_ ? pen_->fd() : -1, POLLIN, 0}};
+            poll(p, p[1].fd >= 0 ? 2 : 1, timeout_ms);
         }
+        // The pen first: its strokes are what must not wait (palm touches queued behind it are
+        // then dropped by the app while the pen is near).
+        if (pen_ && wet_ && nowMs() - lastTurnCheckMs_ > 1000) {  // a 180-degree turn sends no event
+            lastTurnCheckMs_ = nowMs();
+            updatePenView();
+        }
+        if (pen_) pen_->read(out, nowMs());
         while (XPending(dpy_)) {
             XEvent ev;
             XNextEvent(dpy_, &ev);
@@ -213,6 +267,7 @@ private:
         image_ = XCreateImage(dpy_, DefaultVisual(dpy_, DefaultScreen(dpy_)), 8, ZPixmap, 0,
                               reinterpret_cast<char*>(backing_.data()), w_, h_, 8, w_);
         if (fb_ >= 0 && fbink_reinit(fb_, &cfg_) < 0) log(LogLevel::Warn, "FBInk reinit after a turn failed");
+        updatePenView();
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
         InputEvent e;
         e.kind = InputEvent::Kind::Resize;
@@ -223,7 +278,10 @@ private:
         XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
         XSync(dpy_, False);
         if (fb_ < 0) return;
-        cfg_.wfm_mode = w == Waveform::Fast ? WFM_DU : w == Waveform::Ui ? WFM_GL16 : WFM_GC16;
+        cfg_.wfm_mode = w == Waveform::Ink    ? WFM_A2
+                   : w == Waveform::Fast ? WFM_DU
+                   : w == Waveform::Ui   ? WFM_GL16
+                                         : WFM_GC16;
         cfg_.is_flashing = w == Waveform::Full;
         fbink_refresh(fb_, r.y + originY_, r.x + originX_, r.w, r.h, &cfg_);
     }
@@ -242,6 +300,11 @@ private:
     FBInkConfig cfg_;
     std::string deviceName_ = "Kindle";
     int ppi_ = 0;
+    std::unique_ptr<EvdevPen> pen_;
+    std::string title_ = kWindowTitle;
+    std::unique_ptr<WetInk> wet_;
+    int penTurns_ = -1;
+    int64_t lastTurnCheckMs_ = 0;
 };
 
 }  // namespace

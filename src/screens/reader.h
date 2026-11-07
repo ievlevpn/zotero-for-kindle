@@ -5,6 +5,7 @@
 // the annotation bar over it saves a highlight, underline or note (Plan 5).
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -30,6 +31,7 @@ public:
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onKey(const KeyEvent&, Nav&) override;
+    void onPen(const PenEvent&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
     void onTick(Nav&) override;
@@ -81,6 +83,13 @@ public:
     AnnotationEditor* annotationEditor() { return editor_.get(); }
     Rect noteRect() const { return noteBox_; }  // the note box, above the keyboard as it was when opened
 
+    // Handwriting (PDF, Scribe): strokes wait this long after the last one, then become one
+    // Zotero ink annotation (a page turn sends them at once).
+    static constexpr int64_t kInkCommitMs = 1500;
+    static constexpr int kInkWidthPx = 7;  // about the Scribe wet ink line
+    size_t pendingInkStrokes() const { return inkPending_.size(); }
+    void commitInk();
+
 private:
     void startSelection(Point at, Nav&);
     void requestSelection(Point to);
@@ -94,6 +103,9 @@ private:
     void refreshHighlights(Nav&);
     void turn(int delta, Nav&);
     void openMenus(Nav&);
+    bool penAllowed() const;
+    void onInk(const RenderEvent&, Nav&);
+    void eraseAlong(const std::vector<Point>&, Nav&);
 
     ItemRow row_;
     std::string path_;
@@ -128,6 +140,15 @@ private:
     std::unique_ptr<AnnotationEditor> editor_;
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
     int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
+    // Handwriting.
+    bool inkDown_ = false, erasing_ = false, inkToastShown_ = false;
+    bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
+    std::vector<Point> inkStroke_, eraserPath_;
+    std::vector<std::vector<Point>> inkPending_;          // drawn, not yet sent
+    std::map<uint64_t, std::vector<std::vector<Point>>> inkSent_;  // sent, being placed
+    std::vector<std::vector<Point>> inkSaved_;           // saved; shown until the page comes back with them
+    int inkPage_ = -1;
+    int64_t inkLastMs_ = 0;
 };
 
 }  // namespace zk

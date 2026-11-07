@@ -7,6 +7,8 @@ test_sources = files(
   'test_canvas.cpp',
   'test_text.cpp',
   'test_x_touch.cpp',
+  'test_pen_decoder.cpp',
+  'test_pen_ink.cpp',
   'test_expose_policy.cpp',
   'test_vendored.cpp',
   'test_http_fake.cpp',

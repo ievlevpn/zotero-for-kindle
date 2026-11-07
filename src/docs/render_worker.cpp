@@ -61,6 +61,13 @@ struct RenderWorker::Impl {
     };
     std::optional<PointRequest> selectRequest, hitRequest;
     uint64_t nextPointId = 1;
+    struct InkRequest {
+        uint64_t id = 0;
+        int page = 0;
+        std::vector<std::vector<Point>> paths;
+        int widthPx = 0;
+    };
+    std::deque<InkRequest> inkRequests;
     std::deque<RenderEvent> events;
     // Worker-only state.
     std::unique_ptr<DocumentEngine> engine;
@@ -79,7 +86,7 @@ struct RenderWorker::Impl {
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
         return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
-               hitRequest;
+               hitRequest || !inkRequests.empty();
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
@@ -161,7 +168,7 @@ void RenderWorker::Impl::run() {
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
-                           selectRequest || hitRequest;
+                           selectRequest || hitRequest || !inkRequests.empty();
                 });
             if (stop) break;
         }
@@ -188,6 +195,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<std::pair<uint64_t, std::string>> s;
     std::optional<std::vector<AnnotationRecord>> a;
     std::optional<PointRequest> sel, hit;
+    std::deque<InkRequest> inks;
     uint64_t gen = 0;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -205,6 +213,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         selectRequest.reset();
         hit = hitRequest;
         hitRequest.reset();
+        inks.swap(inkRequests);
         gen = generation;
     }
     if (o) {
@@ -230,6 +239,15 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         postCurrent = true;
     }
     if (!engine) return;
+    // Ink first: its device points belong to the layout they were drawn on.
+    for (auto& k : inks) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Ink;
+        ev.requestId = k.id;
+        ev.page = k.page;
+        ev.ink = engine->inkPosition(k.page, k.paths, k.widthPx);
+        emit(std::move(ev));
+    }
     if (a) {
         anns = std::move(*a);
         for (auto& [p, e] : cache) e.highlights = engine->highlights(p, anns);
@@ -400,6 +418,15 @@ uint64_t RenderWorker::annotationAt(int page, Point p) {
     request(*impl_, [&] {
         id = impl_->nextPointId++;
         impl_->hitRequest = Impl::PointRequest{id, page, p, p};
+    });
+    return id;
+}
+
+uint64_t RenderWorker::ink(int page, std::vector<std::vector<Point>> paths, int widthPx) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextPointId++;
+        impl_->inkRequests.push_back(Impl::InkRequest{id, page, std::move(paths), widthPx});
     });
     return id;
 }

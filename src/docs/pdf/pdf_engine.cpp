@@ -519,4 +519,47 @@ std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
     return sel;
 }
 
+// The inverse of the ink branch of highlights(): device pixels -> MuPDF page space -> PDF user space.
+std::optional<InkPlacement> PdfEngine::inkPosition(int page, const std::vector<std::vector<Point>>& paths, int widthPx) {
+    double scale, dx, dy;
+    if (!doc_ || paths.empty() || !fit(page, scale, dx, dy)) return std::nullopt;
+    fz_page* p = nullptr;
+    fz_var(p);
+    fz_matrix userToPage = fz_identity;
+    fz_rect media = fz_empty_rect;
+    char label[64] = "";
+    bool ok = true;
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, page);
+        if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
+        fz_page_label(ctx_, p, label, sizeof label);
+    }
+    fz_always(ctx_) { fz_drop_page(ctx_, p); }
+    fz_catch(ctx_) { ok = false; }
+    if (!ok) return std::nullopt;
+    const fz_matrix pageToUser = fz_invert_matrix(userToPage);
+    nlohmann::json jpaths = nlohmann::json::array();
+    double top = 1e18;  // the strokes' highest point, from the top of the page (page space)
+    for (const auto& path : paths) {
+        if (path.empty()) continue;
+        nlohmann::json xy = nlohmann::json::array();
+        for (const Point& d : path) {
+            const fz_point q = fz_make_point(static_cast<float>((d.x - dx) / scale), static_cast<float>((d.y - dy) / scale));
+            top = std::min(top, static_cast<double>(q.y));
+            const fz_point u = fz_transform_point(q, pageToUser);
+            xy.push_back(round2(u.x));
+            xy.push_back(round2(u.y));
+        }
+        jpaths.push_back(std::move(xy));
+    }
+    if (jpaths.empty()) return std::nullopt;
+    InkPlacement out;
+    out.position = nlohmann::json{{"pageIndex", page}, {"width", round2(widthPx / scale)}, {"paths", jpaths}}.dump();
+    char sort[40];
+    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", page, 0, static_cast<int>(std::max(0.0, std::floor(top))));
+    out.sortIndex = sort;
+    out.pageLabel = label[0] ? label : std::to_string(page + 1);
+    return out;
+}
+
 }  // namespace zk

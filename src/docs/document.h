@@ -92,6 +92,12 @@ struct Selection {
     bool roundTrips = true;   // §7.5: the position resolves back to exactly this text
 };
 
+// Handwriting placed on a page, ready to be saved as a Zotero `ink` annotation.
+struct InkPlacement {
+    std::string position;  // Zotero annotationPosition JSON {pageIndex, width, paths}
+    std::string sortIndex, pageLabel;
+};
+
 // Where an engine finds its data (crengine's hyphenation dictionaries and CSS, fonts, cache).
 struct EngineEnv {
     std::string dataDir;
@@ -117,6 +123,12 @@ public:
     // The whole words between two points on a page (in either order); nullopt if `from` is not on
     // text. A Selection with empty text means the page has no text layer at all (a scan).
     virtual std::optional<Selection> select(int page, Point from, Point to) = 0;
+    // Strokes drawn on `page` (device points, pen `widthPx` wide) as a Zotero ink annotation;
+    // nullopt where the format has no ink (EPUB).
+    virtual std::optional<InkPlacement> inkPosition(int /*page*/, const std::vector<std::vector<Point>>& /*paths*/,
+                                                    int /*widthPx*/) {
+        return std::nullopt;
+    }
     // The key of the topmost annotation drawn under `p` on `page`.
     virtual std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& anns) {
         const std::vector<HighlightBox> boxes = highlights(page, anns);
