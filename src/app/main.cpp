@@ -181,7 +181,7 @@ int main(int argc, char** argv) {
     };
 
     app.setEventHook([&flow](const SyncEvent& e, Nav& nav) { flow.onSyncEvent(e, nav); });
-    flow.setReaderFactory([&lib](const ItemRow& row, Nav& nav) -> std::unique_ptr<Screen> {
+    flow.setReaderFactory([&lib, &lipc](const ItemRow& row, Nav& nav) -> std::unique_ptr<Screen> {
         auto att = nav.library().attachment(row.attachmentKey);
         if (!att || att->localPath.empty()) return nullptr;
         const DocType type = att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub;
@@ -193,7 +193,7 @@ int main(int argc, char** argv) {
                     return loadEngine(t, kEngineEnv, &err);
                 });
             },
-            loadSettings(lib).flashEvery);
+            loadSettings(lib).flashEvery, lipc.get());
     });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;

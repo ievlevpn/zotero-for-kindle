@@ -52,9 +52,10 @@ void blit(Canvas& c, const PageImage& img, int y0) {
 
 }  // namespace
 
-ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery)
+ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery,
+                           Lipc* lipc)
     : row_(std::move(row)), path_(std::move(path)), type_(type), makeWorker_(std::move(makeWorker)),
-      flashEvery_(flashEvery > 0 ? flashEvery : 6) {}
+      flashEvery_(flashEvery > 0 ? flashEvery : 6), lipc_(lipc) {}
 
 ReaderScreen::~ReaderScreen() = default;
 
@@ -133,6 +134,20 @@ void ReaderScreen::turnTo(int page) {
     worker_->show(page);
 }
 
+void ReaderScreen::jumpTo(const DocPosition& pos) {
+    menus_.reset();  // we're not visible (a pushed screen called us); the next Page repaints all
+    if (!worker_) return;
+    turning_ = true;
+    worker_->showPosition(pos);
+}
+
+void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
+    menus_.reset();
+    if (!worker_) return;
+    turning_ = true;
+    worker_->showAnnotation(a);
+}
+
 void ReaderScreen::applyLayout(const Layout& l, Nav& nav) {
     if (l == layout_ || !worker_) return;
     layout_ = l;
@@ -141,7 +156,7 @@ void ReaderScreen::applyLayout(const Layout& l, Nav& nav) {
 }
 
 void ReaderScreen::openMenus(Nav& nav) {
-    menus_ = std::make_unique<ReaderMenus>(*this);
+    menus_ = std::make_unique<ReaderMenus>(*this, lipc_);
     menus_->open(nav);
 }
 

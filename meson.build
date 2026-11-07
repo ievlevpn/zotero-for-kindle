@@ -144,6 +144,8 @@ screens_lib = static_library('zk-screens',
   'src/screens/settings.cpp',
   'src/screens/reader.cpp',
   'src/screens/reader_menus.cpp',
+  'src/screens/contents.cpp',
+  'src/screens/book_notes.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
   dependencies : [ui_dep, store_dep, sync_dep, docs_dep])

@@ -13,12 +13,14 @@
 namespace zk {
 
 class ReaderMenus;
+class Lipc;
 
 class ReaderScreen final : public Screen {
 public:
     using WorkerFactory = std::function<std::unique_ptr<RenderWorker>()>;
 
-    ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery);
+    ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery,
+                 Lipc* lipc = nullptr /* frontlight */);
     ~ReaderScreen() override;
 
     void draw(Canvas&) override;
@@ -50,7 +52,11 @@ public:
     Layout layout() const { return layout_; }
     void applyLayout(const Layout&, Nav&);
     void turnTo(int page);
+    void jumpTo(const DocPosition&);            // from Contents (menus close)
+    void jumpToAnnotation(const AnnotationRecord&);  // from Notes
     void closeMenus(Nav&);
+    bool menusOpen() const { return menus_ != nullptr; }
+    ReaderMenus* menus() { return menus_.get(); }
 
 private:
     void turn(int delta, Nav&);
@@ -61,6 +67,7 @@ private:
     DocType type_;
     WorkerFactory makeWorker_;
     int flashEvery_;
+    Lipc* lipc_;
     std::unique_ptr<RenderWorker> worker_;
     std::shared_ptr<const PageImage> image_;
     std::vector<HighlightBox> highlights_;
