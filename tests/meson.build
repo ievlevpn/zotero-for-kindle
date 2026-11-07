@@ -41,6 +41,7 @@ test_sources = files(
   'test_display_settings.cpp',
   'test_reader_highlights.cpp',
   'test_book_search.cpp',
+  'test_reader_real.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 

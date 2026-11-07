@@ -15,4 +15,9 @@ docker run --rm -v "$PWD":/src -w /src zk-kindlehf sh -c "
     meson configure build-kindle $EXTRA
   fi
   ninja -C build-kindle
+  # Stripped copies for the device (the debug builds carry ~40 MB of symbols).
+  mkdir -p build-kindle/dist
+  for f in zotero zk-sync libzk-epub.so libzk-pdf.so; do
+    [ -f build-kindle/\$f ] && \$TC/bin/arm-kindlehf-linux-gnueabihf-strip -o build-kindle/dist/\$f build-kindle/\$f
+  done
 "
