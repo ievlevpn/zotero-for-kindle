@@ -20,6 +20,7 @@ test_sources = files(
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',
+  'test_keysym.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 

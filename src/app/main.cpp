@@ -40,15 +40,16 @@ int main(int argc, char** argv) {
     display->present(canvas, {0, 0, canvas.width(), canvas.height()}, Waveform::Full);
 
     GestureRecognizer gestures;
-    std::vector<TouchEvent> touches;
+    std::vector<InputEvent> events;
     const int tabs = (int)data.tabs.size();
     const Rect header{0, 0, canvas.width(), 140};
     for (;;) {
-        touches.clear();
-        if (!display->pollTouch(touches, 50)) break;
+        events.clear();
+        if (!display->pollEvents(events, 50)) break;
         std::vector<Gesture> out;
-        for (const TouchEvent& t : touches) {
-            auto g = gestures.feed(t);
+        for (const InputEvent& e : events) {
+            if (e.kind != InputEvent::Kind::Touch) continue;
+            auto g = gestures.feed(e.touch);
             out.insert(out.end(), g.begin(), g.end());
         }
         auto ticked = gestures.tick(nowMs());

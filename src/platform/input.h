@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #include "core/geometry.h"
 
@@ -13,6 +14,21 @@ struct TouchEvent {
     int id;  // finger (slot) id
     Point pos;
     int64_t t_ms;
+};
+
+// A key from the system keyboard (Kindle) or the desktop keyboard.
+struct KeyEvent {
+    enum class Code { Text, Backspace, Return, Escape };
+    Code code = Code::Text;
+    std::string text;  // UTF-8, for Code::Text
+};
+
+// Everything the display delivers to the app loop.
+struct InputEvent {
+    enum class Kind { Touch, Key, Background, Foreground };
+    Kind kind = Kind::Touch;
+    TouchEvent touch{};
+    KeyEvent key{};
 };
 
 }  // namespace zk

@@ -91,6 +91,8 @@ sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, 
 # Device services shared by the app and its tests: lipc, keep-awake, storage watch, paths.
 services_lib = static_library('zk-services',
   'src/platform/power.cpp',
+  'src/platform/keysym.cpp',
+  'src/platform/keyboard.cpp',
   'src/app/paths.cpp',
   backend == 'kindle' ? 'src/platform/kindle/kindle_lipc.cpp' : 'src/platform/desktop/null_lipc.cpp',
   include_directories : inc,
@@ -126,13 +128,15 @@ if backend == 'kindle'
   fbink_lib = meson.get_compiler('cpp').find_library('fbink',
     dirs : meson.project_source_root() / 'build-deps/kindle/prefix/lib', static : true)
   platform_lib = static_library('zk-platform', 'src/platform/kindle/x11_display.cpp', 'src/platform/kindle/x_touch.cpp',
+    'src/platform/kindle/kindle_keyboard.cpp',
     include_directories : ui_incs + [include_directories('build-deps/kindle/prefix/include', is_system : true)],
-    dependencies : [ui_dep, dependency('x11'), fbink_lib])
-  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, dependency('x11'), fbink_lib])
+    dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
+  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
 else
   platform_lib = static_library('zk-platform', 'src/platform/desktop/sdl_display.cpp',
-    include_directories : ui_incs, dependencies : [ui_dep, dependency('sdl2')])
-  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, dependency('sdl2')])
+    'src/platform/desktop/sdl_keyboard.cpp',
+    include_directories : ui_incs, dependencies : [ui_dep, services_dep, dependency('sdl2')])
+  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('sdl2')])
 endif
 
 executable('zotero', 'src/app/main.cpp',
