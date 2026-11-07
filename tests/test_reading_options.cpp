@@ -224,8 +224,8 @@ TEST_CASE("reader: a PDF never gets columns; its Display panel trims page margin
     rig.reader->onResize(rig.nav);
     REQUIRE(rig.waitFor([&] { return rig.engineLayout().width == 1236; }));
     rig.openDisplay();
-    rig.reader->onGesture(test::tapAt(ReaderMenus::trimRect(1).center()), rig.nav);  // Trim
+    rig.reader->onGesture(test::tapAt(ReaderMenus::pdfViewRect(1).center()), rig.nav);  // Trim
     REQUIRE(rig.waitFor([&] { return rig.engineLayout().trimMargins; }));
-    rig.reader->onGesture(test::tapAt(ReaderMenus::trimRect(0).center()), rig.nav);  // Keep
+    rig.reader->onGesture(test::tapAt(ReaderMenus::pdfViewRect(0).center()), rig.nav);  // Page
     REQUIRE(rig.waitFor([&] { return !rig.engineLayout().trimMargins; }));
 }

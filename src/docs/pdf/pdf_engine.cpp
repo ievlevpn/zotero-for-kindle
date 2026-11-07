@@ -708,17 +708,22 @@ std::vector<HighlightBox> PdfEngine::highlights(int page, const std::vector<Anno
 }
 
 int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
-    int64_t words = 0;
-    const int views = viewsPerPage();  // PDF pages: from the view's page to the one before the target's
-    for (int p = std::max(0, fromPage / views); p < std::min((toPage + views - 1) / views, pdfPages()); ++p) {
+    // A view counts as its share of its page's words (column view); a page as its words.
+    const int views = viewsPerPage();
+    auto pageWords = [&](int p) {
+        if (auto it = pageWords_.find(p); it != pageWords_.end()) return it->second;
+        int64_t words = 0;
         bool inWord = false;
         for (char c : pageText(p)) {
             const bool space = c == ' ' || c == '\n' || c == '\t';
             if (!space && !inWord) ++words;
             inWord = !space;
         }
-    }
-    return words;
+        return pageWords_[p] = words;
+    };
+    int64_t total = 0;  // in view-shares, divided at the end so they add up to whole pages
+    for (int v = std::max(0, fromPage); v < std::min(toPage, pageCount()); ++v) total += pageWords(v / views);
+    return total / views;
 }
 
 namespace {

@@ -152,3 +152,13 @@ TEST_CASE("pdf columns: back to Page, PDF pages again") {
     CHECK(e->viewsPerPage() == 1);
     CHECK(e->pageCount() == 4);
 }
+
+TEST_CASE("pdf columns: the words of a page are shared among its views") {
+    auto plain = openPdf("columns.pdf", false);
+    auto e = openPdf("columns.pdf", true);
+    const int views = e->viewsPerPage();
+    const int64_t page = plain->wordsBetween(1, 2);
+    REQUIRE(page > 100);
+    CHECK(e->wordsBetween(views, 2 * views) == doctest::Approx(page).epsilon(0.02));
+    CHECK(e->wordsBetween(views, views + 1) == doctest::Approx(static_cast<double>(page) / views).epsilon(0.05));
+}

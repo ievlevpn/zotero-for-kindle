@@ -81,6 +81,7 @@ private:
     bool tocLoaded_ = false;
     std::map<int, std::array<float, 4>> contentBoxes_;
     Columns columns_;
+    std::map<int, int64_t> pageWords_;  // per PDF page
     Slices slices_;
 };
 

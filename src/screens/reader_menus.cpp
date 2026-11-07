@@ -56,8 +56,8 @@ Rect ReaderMenus::marginRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 4;
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
 }
-Rect ReaderMenus::trimRect(int i) {
-    const int w = (W() - 2 * kMargin - 240) / 2;
+Rect ReaderMenus::pdfViewRect(int i) {
+    const int w = (W() - 2 * kMargin - 240) / 3;
     return {kMargin + 240 + i * w, H() - kPanelH - kDisplayH + 244, w - 12, 90};
 }
 Rect ReaderMenus::orientationRect(int i) {
@@ -288,8 +288,11 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
         for (int i = 0; i < 4; ++i)
             if (marginRect(i).contains(p)) l.marginLevel = i;
     } else {
-        for (int i = 0; i < 2; ++i)
-            if (trimRect(i).contains(p)) l.trimMargins = i == 1;
+        for (int i = 0; i < 3; ++i)
+            if (pdfViewRect(i).contains(p)) {
+                l.trimMargins = i == 1;
+                l.columnView = i == 2;
+            }
     }
     reader_.applyLayout(l, nav);
     nav.damage(displayPanelRect(), Waveform::Ui);
@@ -325,8 +328,10 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
         centredText(cr, "Margins", label, {kMargin, marginRect(0).y, 220, 90}, Align::Left);
         for (int i = 0; i < 4; ++i) drawButton(cr, marginRect(i), kMarginNames[i], l.marginLevel == i);
     } else {
-        centredText(cr, "Page margins", label, {kMargin, trimRect(0).y, 220, 90}, Align::Left);
-        for (int i = 0; i < 2; ++i) drawButton(cr, trimRect(i), i ? "Trim" : "Keep", l.trimMargins == (i == 1));
+        centredText(cr, "View", label, {kMargin, pdfViewRect(0).y, 220, 90}, Align::Left);
+        const int view = l.columnView ? 2 : l.trimMargins ? 1 : 0;
+        const char* names[] = {"Page", "Trim", "Columns"};
+        for (int i = 0; i < 3; ++i) drawButton(cr, pdfViewRect(i), names[i], view == i);
     }
     if (showsPenOptions()) {  // PDF: in the row EPUB uses for spacing
         centredText(cr, "Pen", label, {kMargin, penRect(0).y, 220, 90}, Align::Left);
@@ -379,9 +384,10 @@ void ReaderMenus::openContents(Nav& nav) {
     ReaderScreen* r = &reader_;
     auto contents = std::make_unique<ContentsScreen>(reader_.toc(), reader_.page(), [r](const TocEntry& t) { r->jumpTo(t.pos); });
     contents->setBookmarks(reader_.bookmarks());
+    contents->setPageNumbers([r](int page) { return r->shownPage(page); });
     contents->setGoTo([r](Nav& n) {
         Nav* outer = &n;
-        n.push(std::make_unique<GoToPageScreen>(r->pageCount(), r->page(), [r, outer](int page) {
+        n.push(std::make_unique<GoToPageScreen>(r->shownPageCount(), r->shownPage(r->page()) - 1, [r, outer](int page) {
             outer->pop();  // Contents too: straight back to the book, at the page
             r->goToPage(page);
         }));
@@ -500,7 +506,7 @@ void ReaderMenus::draw(Canvas& canvas) {
     hRule(cr, p.y, 0, W(), 190);
     const int shown = dragPage_ ? *dragPage_ : reader_.page();
     const std::string where = reader_.type() == DocType::Pdf
-                                  ? "Page " + std::to_string(shown + 1) + " of " + std::to_string(reader_.pageCount())
+                                  ? "Page " + std::to_string(reader_.shownPage(shown)) + " of " + std::to_string(reader_.shownPageCount())
                                   : "Page " + std::to_string(shown + 1) + " of " + std::to_string(reader_.pageCount());
     drawText(cr, reader_.chapter(), {kSans, 8, 500}, {kMargin, p.y + 28, W() - 2 * kMargin - 380, 50}, 1);
     drawText(cr, where, {kSans, 7.5, 400, false, kSecondary}, {W() - kMargin - 380, p.y + 30, 380, 50}, 1, Align::Right);

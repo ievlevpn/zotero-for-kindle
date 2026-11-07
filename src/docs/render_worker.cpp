@@ -133,6 +133,7 @@ struct RenderWorker::Impl {
         ev.kind = RenderEvent::Kind::Page;
         ev.page = page;
         ev.pageCount = pageCount;
+        ev.viewsPerPage = engine->viewsPerPage();
         ev.image = e.image;
         ev.highlights = e.highlights;
         ev.chapter = engine->chapterAt(page);
@@ -156,6 +157,7 @@ struct RenderWorker::Impl {
         ev.kind = RenderEvent::Kind::Opened;
         ev.page = current;
         ev.pageCount = pageCount;
+        ev.viewsPerPage = engine->viewsPerPage();
         ev.toc = toc;
         emit(std::move(ev));
     }
@@ -330,6 +332,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.requestId = place->first;
         ev.page = engine->pageOfZoteroPosition(place->second);
         ev.pageCount = pageCount;
+        ev.viewsPerPage = engine->viewsPerPage();
         if (ev.page >= 0) {
             ev.chapter = engine->chapterAt(ev.page);
             ev.progress = pageCount > 1 ? static_cast<double>(ev.page) / (pageCount - 1) : 1.0;

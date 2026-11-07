@@ -37,7 +37,9 @@ public:
         return !failOpen;
     }
     void setLayout(const Layout& l) override { layout = l; }
-    int pageCount() override { return static_cast<int>(pages * 9 / layout.sizePt); }
+    // PDF column view: three views per page; positions and Zotero positions stay pages.
+    int viewsPerPage() override { return layout.columnView ? 3 : 1; }
+    int pageCount() override { return static_cast<int>(pages * 9 / layout.sizePt) * viewsPerPage(); }
     PageImage render(int page) override {
         ++renders;
         if (throwOnRender) throw std::bad_alloc();
@@ -49,11 +51,12 @@ public:
         return img;
     }
     DocPosition positionOfPage(int page) override {
+        page /= viewsPerPage();
         return {"pos:" + std::to_string(static_cast<long>(std::lround(page * layout.sizePt * 10)))};
     }
     int pageOf(const DocPosition& p) override {
         if (p.value.rfind("pos:", 0) != 0) return 0;
-        return static_cast<int>(std::lround(std::stol(p.value.substr(4)) / (layout.sizePt * 10)));
+        return static_cast<int>(std::lround(std::stol(p.value.substr(4)) / (layout.sizePt * 10))) * viewsPerPage();
     }
     std::vector<TocEntry> toc() override {
         std::vector<TocEntry> out;
@@ -130,10 +133,10 @@ public:
         return l;
     }
     // Zotero positions: the page number as text.
-    std::string zoteroPosition(int page) override { return std::to_string(page); }
+    std::string zoteroPosition(int page) override { return std::to_string(page / viewsPerPage()); }
     int pageOfZoteroPosition(const std::string& v) override {
         try {
-            const int p = std::stoi(v);
+            const int p = std::stoi(v) * viewsPerPage();
             return p >= 0 && p < pageCount() ? p : -1;
         } catch (...) {
             return -1;

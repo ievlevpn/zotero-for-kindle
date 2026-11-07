@@ -2,6 +2,7 @@
 // A book's table of contents and its bookmarks (two tabs), and Go to…; tapping an entry goes there.
 
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "docs/document.h"
@@ -21,6 +22,9 @@ public:
     std::vector<Rect> entryRects() const;  // of the tab shown
     void setBookmarks(std::vector<TocEntry>);    // the Bookmarks tab (shown once set)
     void setGoTo(std::function<void(Nav&)>);     // the Go to… button
+    // The page number an entry shows (default: its page + 1; PDF column view: its PDF page's).
+    void setPageNumbers(std::function<int(int)>);
+    std::string pageNumberText(const TocEntry&) const;
     static Rect tabRect(int i);                  // 0 Contents, 1 Bookmarks
     static Rect goToRect();
 
@@ -32,6 +36,7 @@ private:
     bool tabs_ = false;
     int tab_ = 0;
     std::function<void(Nav&)> goTo_;
+    std::function<int(int)> pageNumber_;
     int current_;
     std::function<void(const TocEntry&)> pick_;
     Pager pager_{0, 1};

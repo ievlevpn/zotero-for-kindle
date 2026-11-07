@@ -29,6 +29,12 @@ void ContentsScreen::setBookmarks(std::vector<TocEntry> marks) {
     tabs_ = true;
 }
 
+void ContentsScreen::setPageNumbers(std::function<int(int)> f) { pageNumber_ = std::move(f); }
+
+std::string ContentsScreen::pageNumberText(const TocEntry& t) const {
+    return std::to_string(pageNumber_ ? pageNumber_(t.page) : t.page + 1);
+}
+
 void ContentsScreen::setGoTo(std::function<void(Nav&)> f) { goTo_ = std::move(f); }
 
 ContentsScreen::ContentsScreen(std::vector<TocEntry> toc, int currentPage, std::function<void(const TocEntry&)> pick)
@@ -79,7 +85,7 @@ void ContentsScreen::draw(Canvas& canvas) {
         const bool here = static_cast<int>(i) == currentIndex;
         drawText(cr, t.title.empty() ? "…" : t.title, {kSerif, 9, here ? 700 : 400},
                  {rects[k].x + indent, rects[k].y + 30, rects[k].w - indent - 160, 60}, 1);
-        drawText(cr, std::to_string(t.page + 1), {kSans, 7, 400, false, kTertiary}, {rects[k].x + rects[k].w - 150, rects[k].y + 34, 150, 50},
+        drawText(cr, pageNumberText(t), {kSans, 7, 400, false, kTertiary}, {rects[k].x + rects[k].w - 150, rects[k].y + 34, 150, 50},
                  1, Align::Right);
         hRule(cr, rects[k].y + rects[k].h - 2, rects[k].x, rects[k].x + rects[k].w);
     }

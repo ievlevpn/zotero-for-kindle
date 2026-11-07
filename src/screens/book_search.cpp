@@ -78,7 +78,7 @@ void BookSearchScreen::draw(Canvas& canvas) {
     auto rects = hitRects();
     for (size_t i = 0; i < rects.size(); ++i) {
         const Rect r = rects[i];
-        drawText(cr, "p. " + std::to_string(hits_[i].page + 1), {kSans, 7, 500, false, kSecondary}, {r.x, r.y + 18, 200, 40}, 1);
+        drawText(cr, "p. " + std::to_string(reader_.shownPage(hits_[i].page)), {kSans, 7, 500, false, kSecondary}, {r.x, r.y + 18, 200, 40}, 1);
         drawText(cr, hits_[i].snippet, {kSerif, 8.5, 400}, {r.x, r.y + 60, r.w, r.h - 70}, 2);
         hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
     }

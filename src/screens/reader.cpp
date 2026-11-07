@@ -53,6 +53,7 @@ Layout loadLayout(Library& lib, const std::string& itemKey, DocType type, int tw
         else if (j.contains("marginPx") && j["marginPx"].is_number_integer())  // saved before margins were sizes
             l.marginLevel = marginLevelFor(j["marginPx"].get<int>(), 1236);
         l.trimMargins = j.value("trimMargins", false);
+        l.columnView = j.value("columnView", false);
     }
     fitLayout(l, type, twoColumns);
     return l;
@@ -63,7 +64,8 @@ void saveLayout(Library& lib, const std::string& itemKey, const Layout& l) {
                                                         {"sizePt", l.sizePt},
                                                         {"marginLevel", l.marginLevel},
                                                         {"lineSpacingPct", l.lineSpacingPct},
-                                                        {"trimMargins", l.trimMargins}}
+                                                        {"trimMargins", l.trimMargins},
+                                                        {"columnView", l.columnView}}
                                              .dump());
 }
 
@@ -310,6 +312,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
         switch (e.kind) {
             case RenderEvent::Kind::Opened:
                 pageCount_ = e.pageCount;
+                views_ = std::max(1, e.viewsPerPage);
                 toc_ = e.toc;
                 break;
             case RenderEvent::Kind::Error:
@@ -345,12 +348,12 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     break;
                 }
                 remotePage_ = e.page;
-                if (e.page == page_) {  // the page we're on: agreed, nothing to ask
+                if (e.page / views_ == page_ / views_) {  // the page we're on: agreed, nothing to ask
                     nav.library().answerRemotePosition(row_.attachmentKey, true, remoteVersion_);
                     break;
                 }
                 const int pct = static_cast<int>(std::lround(e.progress * 100));
-                std::string text = type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(e.page + 1) + "."
+                std::string text = type_ == DocType::Pdf ? "Your computer is on page " + std::to_string(shownPage(e.page)) + "."
                                                          : "Your computer is at " + std::to_string(pct) + "%" +
                                                                (e.chapter.empty() ? "" : " (" + e.chapter + ")") + ".";
                 question_ = PositionQuestion{e.page, text + "\nGo there?"};
@@ -385,6 +388,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                                 inkSaved_.end());
                 page_ = e.page;
                 pageCount_ = e.pageCount;
+                views_ = std::max(1, e.viewsPerPage);
                 chapter_ = e.chapter;
                 progress_ = e.progress;
                 wordsLeft_ = e.wordsLeftInChapter;
@@ -798,7 +802,7 @@ std::string ReaderScreen::footerLeft() const {
 }
 
 std::string ReaderScreen::footerRight() const {
-    if (type_ == DocType::Pdf) return "p. " + std::to_string(page_ + 1) + " of " + std::to_string(pageCount_);
+    if (type_ == DocType::Pdf) return "p. " + std::to_string(shownPage(page_)) + " of " + std::to_string(shownPageCount());
     return std::to_string(static_cast<int>(progress_ * 100)) + "%";
 }
 
@@ -913,7 +917,7 @@ void ReaderScreen::markJumpOrigin() {
 std::optional<std::string> ReaderScreen::backLabel() const {
     if (back_.empty()) return std::nullopt;
     // The page number only while the layout it was counted in lasts.
-    std::string label = back_.back().page >= 0 ? "‹ Back to page " + std::to_string(back_.back().page + 1) : "‹ Back";
+    std::string label = back_.back().page >= 0 ? "‹ Back to page " + std::to_string(shownPage(back_.back().page)) : "‹ Back";
     if (!chapter_.empty()) label += " · " + chapter_;  // where you are now, as the footer said
     return label;
 }
@@ -941,8 +945,8 @@ int ReaderScreen::markPage(const std::string& position) const {
 
 bool ReaderScreen::bookmarked() const {
     if (page_ < 0) return false;
-    for (const auto& m : marks_)
-        if (markPage(m.position) == page_) return true;
+    for (const auto& m : marks_)  // a page's mark, on all its views (PDF column view)
+        if (const int p = markPage(m.position); p >= 0 && p / views_ == page_ / views_) return true;
     return false;
 }
 
@@ -968,7 +972,8 @@ void ReaderScreen::sendBookmarks() {
 void ReaderScreen::toggleBookmark(Nav& nav) {
     if (bookmarked()) {
         for (const auto& m : marks_)
-            if (markPage(m.position) == page_) nav.library().removeBookmark(row_.attachmentKey, m.position);
+            if (const int p = markPage(m.position); p >= 0 && p / views_ == page_ / views_)
+                nav.library().removeBookmark(row_.attachmentKey, m.position);
     } else {
         nav.library().addBookmark(row_.attachmentKey, {position_.value, chapter_, nav.nowMs()});
     }
@@ -978,8 +983,11 @@ void ReaderScreen::toggleBookmark(Nav& nav) {
 
 void ReaderScreen::goToPage(int page) {
     menus_.reset();
-    turnTo(page);
+    turnTo(page * views_);  // a PDF page: its first view
 }
+
+int ReaderScreen::shownPage(int page) const { return page / views_ + 1; }
+int ReaderScreen::shownPageCount() const { return (pageCount_ + views_ - 1) / views_; }
 
 // --- Links ---------------------------------------------------------------------------------
 

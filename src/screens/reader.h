@@ -63,6 +63,10 @@ public:
     // Bookmarks (on this Kindle only): the page's top-right corner sets or removes one.
     static Rect bookmarkRect();
     bool bookmarked() const;
+    // The page number a person sees (1-based) and how many: PDF pages, also in column view, whose
+    // pages are views of them.
+    int shownPage(int page) const;
+    int shownPageCount() const;
     std::vector<TocEntry> bookmarks() const;  // by page, for Contents
     void goToPage(int page);                  // Go to… (a jump)
     // Links: a tap on one asks the worker what it is; a note, a PDF reference or a web address
@@ -168,6 +172,7 @@ private:
     DocPosition position_;
     std::string chapter_;
     int page_ = -1, pageCount_ = 0, turns_ = 0;
+    int views_ = 1;  // PDF column view: views per PDF page (the engine's pages are views)
     int64_t wordsLeft_ = 0;
     double progress_ = 0;
     bool turning_ = false;

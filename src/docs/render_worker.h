@@ -21,6 +21,7 @@ struct RenderEvent {
     enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink, Link };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
+    int viewsPerPage = 1;  // PDF column view: pages are views, this many per PDF page
     std::shared_ptr<const PageImage> image;
     std::vector<HighlightBox> highlights;
     std::string chapter;
