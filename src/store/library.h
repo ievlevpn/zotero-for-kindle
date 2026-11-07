@@ -118,6 +118,10 @@ public:
 
     LibraryStats stats();
 
+    // Small app state kept with the library (settings JSON, ...).
+    std::string metaValue(const std::string& key);
+    void setMetaValue(const std::string& key, const std::string& value);
+
     // Screens (spec §6): paged lists, counts, collections, notes, reading state, downloads.
     std::vector<ItemRow> rows(const ListQuery&);
     int64_t countRows(const ListQuery&);

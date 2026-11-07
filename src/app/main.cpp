@@ -11,6 +11,8 @@
 
 #include "app/app.h"
 #include "app/paths.h"
+#include "app/settings_store.h"
+#include "app/startup.h"
 #include "core/log.h"
 #include "net/http.h"
 #include "platform/display.h"
@@ -23,6 +25,8 @@
 #include "screens/notes.h"
 #include "screens/open_flow.h"
 #include "screens/search.h"
+#include "screens/settings.h"
+#include "screens/setup.h"
 #include "screens/sync_status.h"
 #include "store/db.h"
 #include "store/library.h"
@@ -55,15 +59,6 @@ public:
     void hide() override {}
     Rect bounds() const override { return {}; }
 };
-
-std::optional<Config> appConfig(const Paths& paths) {
-    if (!paths.droppedConfig.empty()) importDroppedConfig(paths.droppedConfig, paths.configDir);
-    if (auto c = loadConfig(paths.configDir)) return c;
-#ifndef ZK_KINDLE
-    if (auto c = configFromEnvFile("local/credentials.env"); c && c->userId > 0 && !c->apiKey.empty()) return c;
-#endif
-    return std::nullopt;
-}
 
 int screenshot(const std::string& screen, const std::string& out, const std::string& dbPath) {
     Db db = Db::open(dbPath);
@@ -131,37 +126,72 @@ int main(int argc, char** argv) {
     KeepAwake keepAwake(*lipc);
     auto keyboard = makeKeyboard(*lipc);
 
-    std::optional<Config> config = appConfig(paths);
-    std::unique_ptr<SyncService> service;
+    Startup startup = startupConfig(paths);
+#ifndef ZK_KINDLE
+    if (!startup.config)
+        if (auto c = configFromEnvFile("local/credentials.env"); c && c->userId > 0 && !c->apiKey.empty()) startup.config = c;
+#endif
+    std::optional<Config> config = startup.config;
+
+    std::unique_ptr<Display> display = makeDisplay();
     NullSync nullSync;
-    if (config) {
+    App app(*display, lib, nullSync, *keyboard);
+    std::unique_ptr<SyncService> service;
+    auto startService = [&](const Config& c) {
+        if (service) service->stop();
+        app.setSync(nullSync);
         SyncDeps deps;
         deps.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
         deps.dbPath = paths.dbPath;
         deps.filesDir = paths.filesDir;
-        deps.config = *config;
+        deps.config = c;
         deps.keepAwake = &keepAwake;
+        deps.intervalMinutes = loadSettings(lib).syncIntervalMinutes;
         service = std::make_unique<SyncService>(std::move(deps));
-    } else {
-        log(LogLevel::Warn, "no account configured");  // the Setup screen arrives with Task 11
-    }
-    SyncControl& sync = service ? static_cast<SyncControl&>(*service) : nullSync;
+        app.setSync(*service);
+        service->start();
+    };
 
-    std::unique_ptr<Display> display = makeDisplay();
-    App app(*display, lib, sync, *keyboard);
     SyncStatus status;
     OpenFlow flow(wallMs);
     app.setEventHook([&flow](const SyncEvent& e, Nav& nav) { flow.onSyncEvent(e, nav); });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
-    HomeActions home;
-    home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
-    home.openItem = openItem;
-    home.status = flow.statusFn();
-    app.setRoot(0, std::make_unique<HomeScreen>(status, home, wallMs));
+    std::function<std::unique_ptr<Screen>(const Config&, bool)> makeSetup;
+    auto makeHome = [&]() {
+        HomeActions home;
+        home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
+        home.openSettings = [&] {
+            app.push(std::make_unique<SettingsScreen>(*config, [&](Nav& nav) { nav.push(makeSetup(*config, false)); }));
+        };
+        home.openItem = openItem;
+        home.status = flow.statusFn();
+        return std::make_unique<HomeScreen>(status, home, wallMs);
+    };
+    makeSetup = [&](const Config& initial, bool imported) -> std::unique_ptr<Screen> {
+        auto check = [](const Config& c) {
+            CurlHttp http(kCaBundle);
+            return checkAccount(http, c);
+        };
+        auto connected = [&](const Config& c, Nav&) {
+            app.defer([&, c] {
+                config = c;
+                startService(c);
+                app.replaceRoot(0, makeHome());
+            });
+        };
+        return std::make_unique<SetupScreen>(initial, imported, paths.configDir, check, connected);
+    };
+
     app.setRoot(1, std::make_unique<LibraryScreen>(openItem, flow.statusFn()));
     app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
     app.setRoot(3, std::make_unique<NotesScreen>());
-    if (service) service->start();
+    if (config && !startup.imported) {
+        startService(*config);
+        app.setRoot(0, makeHome());
+    } else {
+        // No account yet, or one just dropped over USB: confirm it on the Setup screen first.
+        app.setRoot(0, makeSetup(config.value_or(Config{}), startup.imported));
+    }
     app.start();
     const int rc = app.run();
     if (service) service->stop();

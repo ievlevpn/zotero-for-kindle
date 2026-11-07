@@ -411,6 +411,14 @@ void Library::setMeta(const std::string& key, const std::string& value) {
     st.bind(1, key).bind(2, value).step();
 }
 
+std::string Library::metaValue(const std::string& key) {
+    return guarded([&] { return meta(key); });
+}
+
+void Library::setMetaValue(const std::string& key, const std::string& value) {
+    guarded([&] { setMeta(key, value); });
+}
+
 int64_t Library::libraryVersion() {
     return guarded([&] {
         const std::string v = meta("libraryVersion");

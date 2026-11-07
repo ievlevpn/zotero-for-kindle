@@ -30,7 +30,12 @@ public:
     void switchTab(int index) override;
     void damage(Rect, Waveform) override;
     void redrawAll(Waveform) override;
-    SyncControl& sync() override { return sync_; }
+    SyncControl& sync() override { return *sync_; }
+    void setSync(SyncControl& s) { sync_ = &s; }
+    // Replace a tab's root and show it (e.g. Home after Setup).
+    void replaceRoot(int tab, std::unique_ptr<Screen>);
+    // Run after the current loop iteration (safe to replace the calling screen).
+    void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
     Library& library() override { return lib_; }
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
@@ -50,7 +55,7 @@ private:
 
     Display& display_;
     Library& lib_;
-    SyncControl& sync_;
+    SyncControl* sync_;
     Keyboard& keyboard_;
     std::function<int64_t()> clock_;
     Canvas canvas_;
@@ -62,6 +67,7 @@ private:
     int fullChanges_ = 0;
     bool quit_ = false;
     std::function<void(const SyncEvent&, Nav&)> hook_;
+    std::vector<std::function<void()>> deferred_;
     std::string toast_;
     int64_t toastUntil_ = 0;
     bool toastShown_ = false;

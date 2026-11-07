@@ -19,7 +19,7 @@ const std::vector<std::string> kTabNames = {"Home", "Library", "Collections", "N
 }  // namespace
 
 App::App(Display& display, Library& lib, SyncControl& sync, Keyboard& keyboard, std::function<int64_t()> clock)
-    : display_(display), lib_(lib), sync_(sync), keyboard_(keyboard), clock_(clock ? std::move(clock) : steadyMs),
+    : display_(display), lib_(lib), sync_(&sync), keyboard_(keyboard), clock_(clock ? std::move(clock) : steadyMs),
       canvas_(display.width(), display.height()) {}
 
 void App::setRoot(int tab, std::unique_ptr<Screen> s) {
@@ -57,6 +57,13 @@ void App::showTop() {
     s->onShow(*this);
     caller_ = nullptr;
     redrawAll(Waveform::Quality);
+}
+
+void App::replaceRoot(int tab, std::unique_ptr<Screen> s) {
+    stacks_[tab].clear();
+    stacks_[tab].push_back(std::move(s));
+    tab_ = tab;
+    showTop();
 }
 
 void App::push(std::unique_ptr<Screen> s) {
@@ -152,7 +159,7 @@ void App::step(int timeout_ms) {
     }
 
     SyncEvent ev;
-    while (sync_.poll(ev)) {
+    while (sync_->poll(ev)) {
         if (hook_) {
             caller_ = nullptr;
             hook_(ev, *this);
@@ -174,6 +181,9 @@ void App::step(int timeout_ms) {
         s->onTick(*this);
         caller_ = nullptr;
     }
+    auto deferred = std::move(deferred_);
+    deferred_.clear();
+    for (auto& f : deferred) f();
     flush();
 }
 
