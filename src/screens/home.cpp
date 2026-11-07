@@ -58,9 +58,21 @@ Rect HomeScreen::cardRect() { return {kMargin, kCardY, W() - 2 * kMargin, kCover
 
 Rect HomeScreen::bannerRect() const { return {0, H() - kTabBarH - kBannerH, W(), kBannerH}; }
 
+std::optional<std::string> HomeScreen::updateBannerText() const {
+    if (!update_ || status_.hasError()) return std::nullopt;
+    return "Version " + *update_ + " is available";
+}
+
+Rect HomeScreen::updateBannerRect() const { return updateBannerText() ? bannerRect() : Rect{}; }
+
+Rect HomeScreen::updateDismissRect() const {
+    const Rect b = updateBannerRect();
+    return b.empty() ? Rect{} : Rect{b.x + b.w - kMargin - 120, b.y, 120 + kMargin, b.h};
+}
+
 std::vector<Rect> HomeScreen::recentRowRects() const {
     std::vector<Rect> rows;
-    const int bottom = status_.hasError() ? bannerRect().y : H() - kTabBarH;
+    const int bottom = bannerShown() ? bannerRect().y : H() - kTabBarH;
     for (int i = 0, y = kRowsY; i < static_cast<int>(recent_.size()) && y + kRowH <= bottom; ++i, y += kRowH)
         rows.push_back({kMargin, y, W() - 2 * kMargin, kRowH});
     return rows;
@@ -109,8 +121,17 @@ void HomeScreen::reload(Library& lib) {
 
 void HomeScreen::onShow(Nav& nav) {
     nowMs_ = nav.nowMs();
+    update_ = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
     reload(nav.library());
     if (!status_.syncing() && (status_.hasError() || status_.msSinceSync(nav.nowMs()) > kResyncAfterMs)) nav.sync().syncNow();
+}
+
+void HomeScreen::onTick(Nav& nav) {
+    if (!actions_.updateNotice) return;
+    auto now = actions_.updateNotice();
+    if (now == update_) return;
+    update_ = std::move(now);
+    nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Ui);  // the banner and the rows above it
 }
 
 std::string HomeScreen::cardMeta() const {
@@ -188,7 +209,17 @@ void HomeScreen::draw(Canvas& canvas) {
         for (size_t i = 0; i < rects.size(); ++i)
             drawItemRow(cr, rects[i], recent_[i], actions_.status ? actions_.status(recent_[i].attachmentKey) : "");
     }
-    if (status_.hasError()) drawBanner(cr, bannerRect(), status_.error());
+    if (status_.hasError()) {
+        drawBanner(cr, bannerRect(), status_.error());
+    } else if (const auto text = updateBannerText()) {
+        const Rect b = bannerRect(), x = updateDismissRect();
+        fillRect(cr, b, 235);
+        fillRect(cr, {b.x, b.y, 8, b.h}, kInk);
+        drawText(cr, *text, {kSans, 8, 500}, {b.x + kMargin, b.y + 26, x.x - b.x - kMargin, 50}, 1);
+        drawText(cr, "Tap to see what's new and update.", {kSans, 6.5, 400, false, kSecondary},
+                 {b.x + kMargin, b.y + 84, x.x - b.x - kMargin, 40}, 1);
+        centredText(cr, "×", {kSans, 12, 400}, {x.x, x.y, x.w - kMargin, x.h});
+    }
     if (sheet_) sheet_->draw(cr, sheetArea());
 }
 
@@ -238,6 +269,16 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (updateBannerRect().contains(g.pos)) {
+        if (updateDismissRect().contains(g.pos)) {
+            if (actions_.dismissUpdate) actions_.dismissUpdate();
+            update_.reset();
+            nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
+        } else if (actions_.openUpdate) {
+            actions_.openUpdate();
+        }
+        return;
+    }
     if (closeRect().contains(g.pos)) {
         nav.quit();  // the launcher returns to the Kindle home
         return;

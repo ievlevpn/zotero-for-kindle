@@ -203,3 +203,93 @@ TEST_CASE("home: a close button right of the sync button quits the app") {
     rig.home.onGesture(tapAt(close.center()), rig.nav);
     CHECK(rig.nav.quitted);
 }
+
+// ---- "Version X is available" ----
+
+namespace {
+
+struct UpdateRig : Rig {
+    std::optional<std::string> notice;
+    int updatesOpened = 0, dismissed = 0;
+    std::unique_ptr<HomeScreen> home;  // hides Rig's: built with the update actions
+    UpdateRig() : Rig(40) {}
+    void wire() {
+        HomeActions a{[this] { ++searches; }, [this] { ++settings; },
+                      [this](const ItemRow& r) { opened.push_back(r.key); }, nullptr};
+        a.updateNotice = [this] { return notice; };
+        a.openUpdate = [this] { ++updatesOpened; };
+        a.dismissUpdate = [this] {
+            ++dismissed;
+            notice.reset();
+        };
+        home = std::make_unique<HomeScreen>(status, a, [] { return kNowWall; });
+        home->onShow(nav);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("home: a newer version shows a banner that opens the update") {
+    UpdateRig rig;
+    rig.notice = "0.2.5";
+    rig.wire();
+    REQUIRE(rig.home->updateBannerText());
+    CHECK(*rig.home->updateBannerText() == "Version 0.2.5 is available");
+    const size_t rowsWith = rig.home->recentRowRects().size();
+    rig.home->onGesture(tapAt(rig.home->updateBannerRect().center()), rig.nav);
+    CHECK(rig.updatesOpened == 1);
+    rig.notice.reset();
+    rig.home->onTick(rig.nav);
+    CHECK_FALSE(rig.home->updateBannerText());
+    CHECK(rig.home->recentRowRects().size() >= rowsWith);
+}
+
+TEST_CASE("home: × hides the update banner") {
+    UpdateRig rig;
+    rig.notice = "0.2.5";
+    rig.wire();
+    rig.nav.damages.clear();
+    rig.home->onGesture(tapAt(rig.home->updateDismissRect().center()), rig.nav);
+    CHECK(rig.dismissed == 1);
+    CHECK(rig.updatesOpened == 0);
+    CHECK_FALSE(rig.home->updateBannerText());
+    CHECK_FALSE(rig.nav.damages.empty());
+}
+
+TEST_CASE("home: an update found while Home is shown appears without a tap") {
+    UpdateRig rig;
+    rig.wire();
+    CHECK_FALSE(rig.home->updateBannerText());
+    rig.notice = "0.2.5";
+    rig.nav.damages.clear();
+    rig.home->onTick(rig.nav);
+    CHECK(rig.home->updateBannerText());
+    CHECK_FALSE(rig.nav.damages.empty());
+    rig.nav.damages.clear();
+    rig.home->onTick(rig.nav);  // nothing new: no repaint
+    CHECK(rig.nav.damages.empty());
+}
+
+TEST_CASE("home: a sync error takes the banner's place") {
+    UpdateRig rig;
+    rig.notice = "0.2.5";
+    rig.wire();
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::SyncFinished;
+    e.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", ""};
+    rig.home->onSyncEvent(e, rig.nav);
+    CHECK_FALSE(rig.home->updateBannerText());
+    rig.home->onGesture(tapAt(rig.home->updateBannerRect().center()), rig.nav);
+    CHECK(rig.updatesOpened == 0);
+}
+
+TEST_CASE("home: the update banner matches the reviewed golden") {
+    if (!fonts()) return;
+    UpdateRig rig;
+    rig.notice = "0.2.5";
+    rig.wire();
+    rig.lib.markOpened("IT000006", "EP000006", kNowWall - 26 * 3600 * 1000LL);
+    rig.home->onShow(rig.nav);
+    rig.home->draw(rig.canvas);
+    test::checkGolden(rig.canvas, "tests/golden/home-update.png");
+}

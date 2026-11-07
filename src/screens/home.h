@@ -17,6 +17,10 @@ struct HomeActions {
     std::function<void()> openSettings;
     std::function<void(const ItemRow&)> openItem;
     StatusFn status;  // download progress/errors for the Recent rows
+    // "Version X is available" (UpdateNotice): the version, asked on show and every tick.
+    std::function<std::optional<std::string>()> updateNotice;
+    std::function<void()> openUpdate;
+    std::function<void()> dismissUpdate;  // ×
 };
 
 class HomeScreen final : public Screen {
@@ -27,6 +31,7 @@ public:
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
+    void onTick(Nav&) override;
 
     static Rect syncIndicatorRect();
     static Rect settingsRect();
@@ -34,12 +39,17 @@ public:
     static Rect searchFieldRect();
     static Rect cardRect();
     std::vector<Rect> recentRowRects() const;
+    // The update banner: in the error banner's place when there's no error.
+    std::optional<std::string> updateBannerText() const;
+    Rect updateBannerRect() const;
+    Rect updateDismissRect() const;
     const std::vector<ItemRow>& recent() const { return recent_; }
     const ItemSheet* sheet() const { return sheet_ ? &*sheet_ : nullptr; }
 
 private:
     void reload(Library&);
     Rect bannerRect() const;
+    bool bannerShown() const { return status_.hasError() || updateBannerText().has_value(); }
     std::string cardMeta() const;
 
     SyncStatus& status_;
@@ -54,6 +64,7 @@ private:
     std::optional<ItemSheet> sheet_;  // long-press on the card or a Recent row
     Rect sheetArea() const;
     int64_t total_ = 0;
+    std::optional<std::string> update_;  // the version the banner names
 };
 
 }  // namespace zk

@@ -52,6 +52,7 @@
 #include "ui/widgets.h"
 #include "update/install.h"
 #include "update/release_key.h"
+#include "update/update_notice.h"
 #include "update/updater.h"
 
 using namespace zk;
@@ -282,6 +283,7 @@ int main(int argc, char** argv) {
         }
     }
     Updater updater(updaterConfig);
+    UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     auto startService = [&](const Config& c) {
         if (service) service->stop();
         app.setSync(nullSync);
@@ -299,7 +301,11 @@ int main(int argc, char** argv) {
         service->start();
     };
 
-    app.setEventHook([&flow](const SyncEvent& e, Nav& nav) { flow.onSyncEvent(e, nav); });
+    app.setEventHook([&flow, &updateNotice](const SyncEvent& e, Nav& nav) {
+        flow.onSyncEvent(e, nav);
+        updateNotice.poll(nav.library());
+        if (e.kind == SyncEvent::Kind::SyncFinished) updateNotice.onSyncFinished(nav.library(), !e.error);
+    });
     flow.setReaderFactory([&lib, &lipc](const ItemRow& row, Nav& nav) -> std::unique_ptr<Screen> {
         auto att = nav.library().attachment(row.attachmentKey);
         if (!att || att->localPath.empty()) return nullptr;
@@ -316,24 +322,46 @@ int main(int argc, char** argv) {
     });
     auto openItem = [&flow, &app](const ItemRow& r) { flow.open(r, app); };
     std::function<std::unique_ptr<Screen>(const Config&, bool, bool)> makeSetup;
+    auto pushUpdateScreen = [&](Nav& nav) {
+        nav.push(std::make_unique<UpdateScreen>(
+            updater,
+            [&] {  // installing backs up the library: no sync writing to it meanwhile
+                if (service) service->stop();
+                app.setSync(nullSync);
+            },
+            &keepAwake,
+            [&] {  // the install failed and changed nothing
+                if (config) startService(*config);
+            }));
+    };
+    auto pendingUpdate = [&]() -> std::optional<std::string> {
+        const auto v = updateNotice.pending(lib);
+        return v ? std::optional<std::string>(v->str()) : std::nullopt;
+    };
+    auto openSettings = [&] {
+        app.push(std::make_unique<SettingsScreen>(
+            *config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }, &updater, pushUpdateScreen,
+            pendingUpdate));
+    };
     auto makeHome = [&]() {
         HomeActions home;
         home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
-        home.openSettings = [&] {
-            app.push(std::make_unique<SettingsScreen>(
-                *config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }, &updater, [&](Nav& nav) {
-                    nav.push(std::make_unique<UpdateScreen>(
-                        updater,
-                        [&] {  // installing backs up the library: no sync writing to it meanwhile
-                            if (service) service->stop();
-                            app.setSync(nullSync);
-                        },
-                        &keepAwake,
-                        [&] {  // the install failed and changed nothing
-                            if (config) startService(*config);
-                        }));
-                }));
+        home.openSettings = openSettings;
+        home.updateNotice = [&]() -> std::optional<std::string> {
+            updateNotice.poll(lib);
+            const auto v = updateNotice.available(lib);
+            return v ? std::optional<std::string>(v->str()) : std::nullopt;
         };
+        home.openUpdate = [&] {
+            using Phase = Updater::Status::Phase;
+            const Phase p = updater.status().phase;
+            if (p == Phase::Available || p == Phase::NotInstallable) return pushUpdateScreen(app);
+            // Found before a restart: check again from Settings, which opens the update screen.
+            updater.reset();
+            updater.check();
+            openSettings();
+        };
+        home.dismissUpdate = [&] { updateNotice.dismiss(lib); };
         home.openItem = openItem;
         home.status = flow.statusFn();
         return std::make_unique<HomeScreen>(status, home, wallMs);

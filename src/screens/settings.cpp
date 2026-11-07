@@ -34,9 +34,10 @@ std::string mb(int64_t bytes) {
 }  // namespace
 
 SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount, Updater* updater,
-                               std::function<void(Nav&)> openUpdate)
+                               std::function<void(Nav&)> openUpdate,
+                               std::function<std::optional<std::string>()> pendingUpdate)
     : config_(std::move(c)), changeAccount_(std::move(changeAccount)), updater_(updater),
-      openUpdate_(std::move(openUpdate)) {}
+      openUpdate_(std::move(openUpdate)), pendingUpdate_(std::move(pendingUpdate)) {}
 
 Rect SettingsScreen::accountRect() const { return {W() - kMargin - 240, kAccountY + 20, 240, 80}; }
 Rect SettingsScreen::intervalRect(int i) const { return {kMargin + i * 279, kIntervalY + 60, 259, 80}; }
@@ -47,6 +48,8 @@ Rect SettingsScreen::updateRect() const { return {W() - kMargin - 420, kAboutY +
 
 std::string SettingsScreen::updateLine() const {
     if (!updateResult_.empty()) return updateResult_;
+    if (pendingUpdate_)
+        if (const auto v = pendingUpdate_()) return "Update available: " + *v;
     return "Version " + (updater_ ? updater_->current() : appVersion()).str() + " · open source (AGPL-3.0)";
 }
 
@@ -67,6 +70,8 @@ void SettingsScreen::load(Library& lib) {
 void SettingsScreen::onShow(Nav& nav) {
     load(nav.library());
     confirmRemove_ = false;
+    // A check already running (the Home banner's): its answer opens the update screen as ours would.
+    if (updater_ && updater_->status().phase == Updater::Status::Phase::Checking) checking_ = true;
 }
 
 void SettingsScreen::draw(Canvas& canvas) {

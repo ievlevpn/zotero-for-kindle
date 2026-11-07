@@ -36,6 +36,7 @@ test_sources = files(
   'test_update_install.cpp',
   'test_launcher.cpp',
   'test_update_screen.cpp',
+  'test_update_notice.cpp',
   'test_zotero_storage.cpp',
   'test_item_details.cpp',
   'test_reading_position.cpp',

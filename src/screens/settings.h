@@ -3,6 +3,8 @@
 // downloaded files, about.
 
 #include <functional>
+#include <optional>
+#include <string>
 
 #include "screens/screen.h"
 #include "sync/config.h"
@@ -13,9 +15,11 @@ namespace zk {
 class SettingsScreen final : public Screen {
 public:
     // `updater` (may be null): the About row's Check for updates; `openUpdate` pushes the update
-    // screen when the check finds a newer release.
+    // screen when the check finds a newer release. `pendingUpdate`: a newer version the weekly
+    // check found (UpdateNotice), for the About row.
     SettingsScreen(Config, std::function<void(Nav&)> changeAccount, Updater* updater = nullptr,
-                   std::function<void(Nav&)> openUpdate = nullptr);
+                   std::function<void(Nav&)> openUpdate = nullptr,
+                   std::function<std::optional<std::string>()> pendingUpdate = nullptr);
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
@@ -38,6 +42,7 @@ private:
     std::function<void(Nav&)> changeAccount_;
     Updater* updater_ = nullptr;
     std::function<void(Nav&)> openUpdate_;
+    std::function<std::optional<std::string>()> pendingUpdate_;
     bool checking_ = false;
     std::string updateResult_;
     int interval_ = 10;

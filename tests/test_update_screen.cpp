@@ -331,6 +331,24 @@ TEST_CASE("settings: an up-to-date check says so on the row") {
     CHECK(settings.updateLine() == "You have the latest version.");
 }
 
+TEST_CASE("settings: a newer version found in the background shows on the About row") {
+    Rig rig;
+    SettingsScreen settings(Config{}, [](Nav&) {}, rig.updater.get(), [](Nav&) {},
+                            [] { return std::optional<std::string>("0.3.0"); });
+    settings.onShow(rig.nav);
+    CHECK(settings.updateLine() == "Update available: 0.3.0");
+}
+
+TEST_CASE("settings: a check started elsewhere (the Home banner) opens the update screen") {
+    Rig rig;
+    int opened = 0;
+    rig.updater->check();
+    SettingsScreen settings(Config{}, [](Nav&) {}, rig.updater.get(), [&](Nav&) { ++opened; });
+    settings.onShow(rig.nav);
+    rig.tickUntil(settings, [&] { return opened > 0; });
+    CHECK(opened == 1);
+}
+
 TEST_CASE("app: restart makes run() return 75") {
     struct Restarter : Screen {
         void draw(Canvas&) override {}
