@@ -38,6 +38,17 @@ public:
     static Rect buttonRect(int i);  // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync
     static Rect lightPanelRect();
     static Rect lightSliderRect();
+    static Rect displayPanelRect();
+    static Rect fontRect(int i);  // up to 4 fonts per row; fontMoreRect() shows the next ones
+    static Rect fontMoreRect();
+    static Rect sizeMinusRect();
+    static Rect sizePlusRect();
+    static Rect marginRect(int i);   // Narrow 40, Normal 60, Wide 100 px
+    static Rect spacingRect(int i);  // 100, 120, 140 %
+
+    bool displayOpen() const { return displayOpen_; }
+    bool showsTextOptions() const;
+    const std::vector<std::string>& fonts();
 
     std::string notesLabel() const { return "Notes (" + std::to_string(notes_) + ")"; }
     bool lightOpen() const { return lightOpen_; }
@@ -53,6 +64,12 @@ private:
     size_t notes_ = 0;
     std::optional<int> dragPage_;
     bool lightOpen_ = false;
+    bool displayOpen_ = false;
+    std::vector<std::string> fonts_;
+    bool fontsLoaded_ = false;
+    size_t fontOffset_ = 0;
+    bool onDisplayTap(Point, Nav&);
+    void drawDisplay(cairo_t*);
     int light_ = -1;
     bool syncing_ = false;
 };

@@ -118,6 +118,7 @@ ui_lib = static_library('zk-ui',
   'src/ui/widgets.cpp',
   'src/ui/pager.cpp',
   'src/ui/text_field.cpp',
+  'src/docs/fonts.cpp',
   include_directories : ui_incs,
   dependencies : [core_dep, cairo_dep, pango_deps])
 

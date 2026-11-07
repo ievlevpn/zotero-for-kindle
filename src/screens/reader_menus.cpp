@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "docs/fonts.h"
 #include "platform/lipc.h"
 #include "screens/book_notes.h"
 #include "screens/contents.h"
@@ -22,6 +23,11 @@ constexpr int kW = 1236, kH = 1547;
 constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
 const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
+constexpr int kDisplayH = 470;
+const int kMargins[] = {40, 60, 100};
+const char* kMarginNames[] = {"Narrow", "Normal", "Wide"};
+const int kSpacings[] = {100, 120, 140};
+constexpr double kMinSize = 7, kMaxSize = 16, kSizeStep = 0.5;
 
 }  // namespace
 
@@ -38,6 +44,88 @@ Rect ReaderMenus::buttonRect(int i) {
 Rect ReaderMenus::lightPanelRect() { return {0, kH - kPanelH - kLightH, kW, kLightH}; }
 Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, kH - kPanelH - kLightH + 50, kW - 2 * kMargin - 240, 70}; }
 
+Rect ReaderMenus::displayPanelRect() { return {0, kH - kPanelH - kDisplayH, kW, kDisplayH}; }
+Rect ReaderMenus::fontRect(int i) {
+    const int w = (kW - 2 * kMargin - 110) / 4;
+    return {kMargin + i * w, kH - kPanelH - kDisplayH + 24, w - 12, 90};
+}
+Rect ReaderMenus::fontMoreRect() { return {kW - kMargin - 100, kH - kPanelH - kDisplayH + 24, 100, 90}; }
+Rect ReaderMenus::sizeMinusRect() { return {kMargin + 240, kH - kPanelH - kDisplayH + 134, 160, 90}; }
+Rect ReaderMenus::sizePlusRect() { return {kW - kMargin - 160, kH - kPanelH - kDisplayH + 134, 160, 90}; }
+Rect ReaderMenus::marginRect(int i) {
+    const int w = (kW - 2 * kMargin - 240) / 3;
+    return {kMargin + 240 + i * w, kH - kPanelH - kDisplayH + 244, w - 12, 90};
+}
+Rect ReaderMenus::spacingRect(int i) {
+    const int w = (kW - 2 * kMargin - 240) / 3;
+    return {kMargin + 240 + i * w, kH - kPanelH - kDisplayH + 354, w - 12, 90};
+}
+
+bool ReaderMenus::showsTextOptions() const { return reader_.type() != DocType::Pdf; }
+
+const std::vector<std::string>& ReaderMenus::fonts() {
+    if (!fontsLoaded_) {
+        fonts_ = readingFonts(readingFontDirs());
+        fontsLoaded_ = true;
+    }
+    return fonts_;
+}
+
+bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
+    if (!displayPanelRect().contains(p)) return false;
+    Layout l = reader_.layout();
+    if (showsTextOptions()) {
+        for (int i = 0; i < 4; ++i)
+            if (fontRect(i).contains(p) && fontOffset_ + i < fonts().size()) l.font = fonts()[fontOffset_ + i];
+        if (fontMoreRect().contains(p) && fonts().size() > 4) {
+            fontOffset_ = fontOffset_ + 4 < fonts().size() ? fontOffset_ + 4 : 0;
+            nav.damage(displayPanelRect(), Waveform::Fast);
+            return true;
+        }
+        if (sizeMinusRect().contains(p)) l.sizePt = std::max(kMinSize, l.sizePt - kSizeStep);
+        if (sizePlusRect().contains(p)) l.sizePt = std::min(kMaxSize, l.sizePt + kSizeStep);
+        for (int i = 0; i < 3; ++i)
+            if (spacingRect(i).contains(p)) l.lineSpacingPct = kSpacings[i];
+    }
+    for (int i = 0; i < 3; ++i)
+        if (marginRect(i).contains(p)) l.marginPx = kMargins[i];
+    reader_.applyLayout(l, nav);
+    nav.damage(displayPanelRect(), Waveform::Fast);
+    return true;
+}
+
+void ReaderMenus::drawDisplay(cairo_t* cr) {
+    const Rect d = displayPanelRect();
+    fillRect(cr, d, 255);
+    hRule(cr, d.y, 0, kW, 190);
+    const Layout l = reader_.layout();
+    const TextStyle label{kSans, 8, 500};
+    if (showsTextOptions()) {
+        for (int i = 0; i < 4 && fontOffset_ + i < fonts().size(); ++i) {
+            const std::string& f = fonts()[fontOffset_ + i];
+            const Rect r = fontRect(i);
+            const bool on = f == l.font;
+            gray(cr, on ? kInk : 170);
+            roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, 14);
+            cairo_set_line_width(cr, on ? 5 : 3);
+            cairo_stroke(cr);
+            centredText(cr, f, {f.c_str(), 8, 400}, {r.x + 8, r.y, r.w - 16, r.h});
+        }
+        if (fonts().size() > 4) centredText(cr, "›", {kSans, 14, 400}, fontMoreRect());
+        centredText(cr, "Size", label, {kMargin, sizeMinusRect().y, 220, 90}, Align::Left);
+        drawButton(cr, sizeMinusRect(), "A−", false);
+        drawButton(cr, sizePlusRect(), "A+", false);
+        char size[16];
+        std::snprintf(size, sizeof size, "%.1f pt", l.sizePt);
+        centredText(cr, size, {kSans, 8.5, 400}, {sizeMinusRect().x + 160, sizeMinusRect().y, sizePlusRect().x - sizeMinusRect().x - 160, 90});
+        centredText(cr, "Spacing", label, {kMargin, spacingRect(0).y, 220, 90}, Align::Left);
+        for (int i = 0; i < 3; ++i)
+            drawButton(cr, spacingRect(i), std::to_string(kSpacings[i]) + "%", l.lineSpacingPct == kSpacings[i]);
+    }
+    centredText(cr, "Margins", label, {kMargin, marginRect(0).y, 220, 90}, Align::Left);
+    for (int i = 0; i < 3; ++i) drawButton(cr, marginRect(i), kMarginNames[i], l.marginPx == kMargins[i]);
+}
+
 void ReaderMenus::open(Nav& nav) {
     notes_ = nav.library().annotationsFor(reader_.row().attachmentKey).size();
     nav.damage(topBarRect(), Waveform::Fast);
@@ -48,6 +136,7 @@ void ReaderMenus::close(Nav& nav) {
     nav.damage(topBarRect(), Waveform::Quality);
     nav.damage(panelRect(), Waveform::Quality);
     if (lightOpen_) nav.damage(lightPanelRect(), Waveform::Quality);
+    if (displayOpen_) nav.damage(displayPanelRect(), Waveform::Quality);
 }
 
 void ReaderMenus::onPage(Nav& nav) {
@@ -104,9 +193,17 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     }
     if (contentsIconRect().contains(g.pos) || buttonRect(0).contains(g.pos)) return openContents(nav);
     if (buttonRect(1).contains(g.pos)) return openNotes(nav);
-    if (buttonRect(2).contains(g.pos)) return;  // Display: the display-settings task
+    if (buttonRect(2).contains(g.pos)) {
+        displayOpen_ = !displayOpen_;
+        lightOpen_ = false;
+        nav.damage(displayPanelRect(), displayOpen_ ? Waveform::Fast : Waveform::Quality);
+        return;
+    }
+    if (displayOpen_ && onDisplayTap(g.pos, nav)) return;
     if (buttonRect(3).contains(g.pos)) {
         lightOpen_ = !lightOpen_;
+        if (displayOpen_) nav.damage(displayPanelRect(), Waveform::Quality);
+        displayOpen_ = false;
         if (lightOpen_ && lipc_) {
             const std::string v = lipc_->get("com.lab126.powerd", "flIntensity");
             light_ = v.empty() ? -1 : std::atoi(v.c_str());
@@ -128,7 +225,8 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         reader_.turnTo(sliderPage(g.pos.x));
         return;
     }
-    if (!topBarRect().contains(g.pos) && !panelRect().contains(g.pos)) reader_.closeMenus(nav);
+    if (!topBarRect().contains(g.pos) && !panelRect().contains(g.pos) && !(displayOpen_ && displayPanelRect().contains(g.pos)))
+        reader_.closeMenus(nav);
 }
 
 void ReaderMenus::draw(Canvas& canvas) {
@@ -165,6 +263,8 @@ void ReaderMenus::draw(Canvas& canvas) {
                     {ls.x + ls.w + 20, lp.y + 40, 100, 90}, Align::Left);
     }
 
+    if (displayOpen_) drawDisplay(cr);
+
     // Bottom panel.
     const Rect p = panelRect();
     fillRect(cr, p, 255);
@@ -185,7 +285,7 @@ void ReaderMenus::draw(Canvas& canvas) {
         std::string label = kButtons[i];
         if (i == 1) label = notesLabel();
         if (i == 4 && syncing_) label = "Syncing…";
-        drawButton(cr, buttonRect(i), label, (i == 3 && lightOpen_));
+        drawButton(cr, buttonRect(i), label, (i == 3 && lightOpen_) || (i == 2 && displayOpen_));
     }
 }
 
