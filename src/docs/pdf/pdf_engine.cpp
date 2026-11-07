@@ -1,5 +1,7 @@
 #include "docs/pdf/pdf_engine.h"
 
+#include "docs/annotation_text.h"
+
 extern "C" {
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
@@ -9,6 +11,8 @@ extern "C" {
 #include <unistd.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
 #include <cmath>
 #include <functional>
 
@@ -280,8 +284,154 @@ int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
     return words;
 }
 
-std::optional<Selection> PdfEngine::select(int, Point, Point) {
-    return std::nullopt;  // Plan 5 Task 6
+namespace {
+
+template <class F> void forEachChar(fz_stext_page* st, F&& f) {
+    for (fz_stext_block* blk = st->first_block; blk; blk = blk->next) {
+        if (blk->type != FZ_STEXT_BLOCK_TEXT) continue;
+        for (fz_stext_line* ln = blk->u.t.first_line; ln; ln = ln->next)
+            for (fz_stext_char* ch = ln->first_char; ch; ch = ch->next) f(ln, ch);
+    }
+}
+
+// Reading-order index of the character under `p`, else of the nearest one.
+int charIndexAt(fz_stext_page* st, fz_point p) {
+    int index = 0, best = -1, hit = -1;
+    float bestDistance = 1e30f;
+    forEachChar(st, [&](fz_stext_line*, fz_stext_char* ch) {
+        const fz_rect r = fz_rect_from_quad(ch->quad);
+        if (hit < 0 && fz_is_point_inside_rect(p, r)) hit = index;
+        const float cx = (r.x0 + r.x1) / 2, cy = (r.y0 + r.y1) / 2;
+        const float d = (cx - p.x) * (cx - p.x) + (cy - p.y) * (cy - p.y);
+        if (d < bestDistance) {
+            bestDistance = d;
+            best = index;
+        }
+        ++index;
+    });
+    return hit >= 0 ? hit : best;
+}
+
+// A PDF's line breaks inside a selection are not paragraph breaks: lines are joined with a
+// space, and a word hyphenated at the line end is joined back.
+std::string joinLines(const std::string& text) {
+    std::string out;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\n') {
+            out += text[i];
+            continue;
+        }
+        const bool hyphen = !out.empty() && out.back() == '-' && i + 1 < text.size() &&
+                            std::islower(static_cast<unsigned char>(text[i + 1]));
+        if (hyphen) out.pop_back();
+        else out += ' ';
+    }
+    return out;
+}
+
+double round2(double v) { return std::round(v * 100) / 100; }
+
+}  // namespace
+
+std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
+    double scale, dx, dy;
+    if (!doc_ || !fit(page, scale, dx, dy)) return std::nullopt;
+    fz_point a{static_cast<float>((from.x - dx) / scale), static_cast<float>((from.y - dy) / scale)};
+    fz_point b{static_cast<float>((to.x - dx) / scale), static_cast<float>((to.y - dy) / scale)};
+
+    fz_page* p = nullptr;
+    fz_stext_page* st = nullptr;
+    fz_var(p);
+    fz_var(st);
+    fz_matrix userToPage = fz_identity;
+    fz_rect media = fz_empty_rect;
+    char label[64] = "";
+    bool ok = true;
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, page);
+        if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
+        st = fz_new_stext_page_from_page(ctx_, p, nullptr);
+        fz_page_label(ctx_, p, label, sizeof label);
+    }
+    fz_catch(ctx_) { ok = false; }
+    auto cleanup = [&] {
+        fz_drop_stext_page(ctx_, st);
+        fz_drop_page(ctx_, p);
+    };
+    if (!ok) {
+        cleanup();
+        return std::nullopt;
+    }
+
+    int chars = 0;
+    bool onText = false;
+    const float slack = static_cast<float>(12 / scale);
+    forEachChar(st, [&](fz_stext_line* ln, fz_stext_char*) {
+        ++chars;
+        const fz_rect r = ln->bbox;
+        onText = onText || (a.x >= r.x0 - slack && a.x <= r.x1 + slack && a.y >= r.y0 - slack && a.y <= r.y1 + slack);
+    });
+    if (chars == 0) {  // a scan: no text layer to select from
+        cleanup();
+        return Selection{};
+    }
+    if (!onText) {
+        cleanup();
+        return std::nullopt;
+    }
+    if (charIndexAt(st, b) < charIndexAt(st, a)) std::swap(a, b);
+
+    fz_quad quads[256];
+    int nq = 0;
+    char* copied = nullptr;
+    fz_var(copied);
+    fz_try(ctx_) {
+        fz_snap_selection(ctx_, st, &a, &b, FZ_SELECT_WORDS);
+        nq = fz_highlight_selection(ctx_, st, a, b, quads, 256);
+        copied = fz_copy_selection(ctx_, st, a, b, 0);
+    }
+    fz_catch(ctx_) { ok = false; }
+    // The selection's first character, for the sort index's offset.
+    int startIndex = 0;
+    if (ok && nq > 0) {
+        const fz_rect first = fz_rect_from_quad(quads[0]);
+        int index = 0;
+        startIndex = -1;
+        forEachChar(st, [&](fz_stext_line*, fz_stext_char* ch) {
+            const fz_rect r = fz_rect_from_quad(ch->quad);
+            if (startIndex < 0 && fz_is_point_inside_rect(fz_make_point((r.x0 + r.x1) / 2, (r.y0 + r.y1) / 2), first))
+                startIndex = index;
+            ++index;
+        });
+        startIndex = std::max(startIndex, 0);
+    }
+    const std::string raw = ok && copied ? copied : "";
+    fz_free(ctx_, copied);
+    cleanup();
+    if (!ok || nq == 0) return std::nullopt;
+
+    Selection sel;
+    sel.text = normaliseAnnotationText(joinLines(raw));
+    if (sel.text.empty()) return std::nullopt;
+    const fz_matrix pageToUser = fz_invert_matrix(userToPage);
+    nlohmann::json rects = nlohmann::json::array();
+    double firstTop = 0;
+    for (int i = 0; i < nq; ++i) {
+        const fz_rect u = fz_transform_rect(fz_rect_from_quad(quads[i]), pageToUser);
+        rects.push_back({round2(u.x0), round2(u.y0), round2(u.x1), round2(u.y1)});
+        if (i == 0) firstTop = media.y1 - u.y1;
+    }
+    sel.position = nlohmann::json{{"pageIndex", page}, {"rects", rects}}.dump();
+    char sort[40];
+    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", page, startIndex,
+                  static_cast<int>(std::max(0.0, std::floor(firstTop))));
+    sel.sortIndex = sort;
+    sel.pageLabel = label[0] ? label : std::to_string(page + 1);
+    // Drawn exactly as the saved highlight will be.
+    AnnotationRecord probe;
+    probe.position = sel.position;
+    for (const auto& box : highlights(page, {probe})) sel.rects.push_back(box.rect);
+    return sel;
 }
 
 }  // namespace zk

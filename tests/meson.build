@@ -19,6 +19,7 @@ test_sources = files(
   'test_annotation_sync.cpp',
   'test_selection_api.cpp',
   'test_epub_select.cpp',
+  'test_pdf_select.cpp',
   'test_webdav.cpp',
   'test_config.cpp',
   'test_power.cpp',

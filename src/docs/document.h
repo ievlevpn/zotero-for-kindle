@@ -87,7 +87,8 @@ public:
     virtual std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) = 0;
     virtual int pageOfAnnotation(const AnnotationRecord&) = 0;  // -1 if it can't be placed
     virtual int64_t wordsBetween(int fromPage, int toPage) = 0;  // for "time left"
-    // The whole words between two points on a page (in either order); nullopt if `from` is not on text.
+    // The whole words between two points on a page (in either order); nullopt if `from` is not on
+    // text. A Selection with empty text means the page has no text layer at all (a scan).
     virtual std::optional<Selection> select(int page, Point from, Point to) = 0;
     // The key of the topmost annotation drawn under `p` on `page`.
     virtual std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& anns) {
