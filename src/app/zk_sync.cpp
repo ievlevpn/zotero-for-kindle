@@ -3,8 +3,8 @@
 //   commands: pull | status | search <words> | collections | annotations <attachmentKey>
 //             | fetch <attachmentKey> <dir> | highlights-offline on|off
 //   `annotations` downloads that book's annotations first, as opening a book in the app will.
-// Reads only: there is deliberately no push command yet, and every request goes through the
-// additive-only WriteGuard anyway. Credentials are never printed.
+// Reads only: there is deliberately no push command yet. Every request goes through the
+// WriteGuard, which allows annotation writes and nothing else. Credentials are never printed.
 
 #include "core/log.h"
 #include "net/http.h"
@@ -129,8 +129,7 @@ int main(int argc, char** argv) {
     Library lib(*db);
     CurlHttp curl(ca);
     WriteGuard http(curl, [&](const std::string& key) {
-        auto a = lib.annotation(key);
-        return a && a->createdHere;
+        return lib.annotation(key).has_value();
     });
     ZoteroApi api(http, cfg->userId, cfg->apiKey);
     api.setOnWait([](const UserError& e) { std::printf("%s\n", e.message.c_str()); });
