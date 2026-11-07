@@ -1,5 +1,8 @@
 #include "ui/widgets.h"
 
+#include "ui/item_icons.h"
+#include "ui/metrics.h"
+
 #include <algorithm>
 
 #include "ui/paint.h"
@@ -32,8 +35,7 @@ std::string metaOf(const ItemRow& r) {
 void drawItemRow(cairo_t* cr, Rect row, const ItemRow& item, const std::string& status) {
     fillRect(cr, row, 255);
     const int badgeW = 74;
-    if (!item.badge.empty()) typeBadge(cr, {row.x, row.y + 26, badgeW, 92}, item.badge);
-    else hRule(cr, row.y + 72, row.x + 20, row.x + badgeW - 20, kRule);
+    itemTypeIcon(cr, {row.x, row.y + 26, badgeW, 92}, item.itemType, item.badge);
     const int tx = row.x + badgeW + 38, metaW = 150, tw = row.x + row.w - tx;
     const int bottom = row.y + row.h - 12;
     const TextStyle titleStyle{kSerif, 10, 700};
@@ -200,7 +202,7 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
 Rect headerBackRect() { return {0, 0, 150, kHeaderH}; }
 
 void drawHeader(cairo_t* cr, const std::string& title, bool back) {
-    fillRect(cr, {0, 0, 1236, kHeaderH}, 255);
+    fillRect(cr, {0, 0, metrics().width, kHeaderH}, 255);
     int x = kMargin;
     if (back) {
         gray(cr, kInk);
@@ -212,7 +214,7 @@ void drawHeader(cairo_t* cr, const std::string& title, bool back) {
         cairo_stroke(cr);
         x = kMargin + 64;
     }
-    drawText(cr, title, {kSans, back ? 13.0 : 17.0, 700}, {x, back ? 40 : 18, 1236 - x - kMargin, 100}, 1);
+    drawText(cr, title, {kSans, back ? 13.0 : 17.0, 700}, {x, back ? 40 : 18, metrics().width - x - kMargin, 100}, 1);
 }
 
 void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren) {

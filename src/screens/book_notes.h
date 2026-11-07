@@ -22,6 +22,7 @@ public:
     void onKey(const KeyEvent&, Nav&) override;
     bool wantsKeyboard() const override;
     bool showsTabBar() const override { return false; }
+    bool isReading() const override { return true; }  // turns with the reader
     std::vector<Rect> rowRects() const;
     AnnotationEditor* annotationEditor() { return editor_.get(); }
 

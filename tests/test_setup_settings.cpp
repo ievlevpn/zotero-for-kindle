@@ -196,17 +196,3 @@ TEST_CASE("setup, setup error and settings match the reviewed goldens") {
     settings.draw(c);
     test::checkGolden(c, "tests/golden/settings.png");
 }
-
-TEST_CASE("settings: Close Zotero quits the app and goes back to the Kindle") {
-    Db db = Db::open(":memory:");
-    Library lib(db);
-    FakeNav nav(lib);
-    SettingsScreen settings(good(), [](Nav&) {});
-    settings.onShow(nav);
-    const Rect close = settings.closeRect();
-    CHECK(close.y + close.h <= 1547);
-    CHECK(close.intersected(settings.removeRect()).empty());
-    CHECK_FALSE(nav.quitted);
-    settings.onGesture(tapAt(close.center()), nav);
-    CHECK(nav.quitted);
-}

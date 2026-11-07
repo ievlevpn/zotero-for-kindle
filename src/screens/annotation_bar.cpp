@@ -1,5 +1,8 @@
 #include "screens/annotation_bar.h"
 
+#include "platform/device_profile.h"
+#include "ui/metrics.h"
+
 #include <algorithm>
 
 #include "docs/document.h"
@@ -97,9 +100,19 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
 AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor)
     : annotation_(std::move(a)), bar_(AnnotationBar::Mode::Edit, anchor, annotation_.color) {}
 
-Rect AnnotationEditor::commentRect() { return {40, 690, 1236 - 80, 260}; }
+// Just above the device's keyboard (on the PW5: {40, 690, 1156, 260}).
+Rect AnnotationEditor::commentRect() {
+    const int keyboard = profileFor(metrics().device, 300).keyboardHeightPx;
+    const int top = keyboard > 0 ? metrics().height - keyboard : metrics().height / 2;
+    return {40, top - 290, metrics().width - 80, 260};
+}
 
-Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentRect() : bar_.rect(); }
+Rect AnnotationEditor::commentRectAbove(Rect keyboard) {
+    if (keyboard.empty()) return commentRect();
+    return {40, std::max(0, keyboard.y - 290), metrics().width - 80, 260};
+}
+
+Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentBox_ : bar_.rect(); }
 
 Rect AnnotationEditor::confirmRect(int i) const { return bar_.buttonRect(i); }
 
@@ -114,6 +127,7 @@ void AnnotationEditor::enter(State s, Nav& nav) {
     if (s == State::Comment) {
         comment_ = annotation_.comment;
         nav.keyboard().show();
+        commentBox_ = commentRectAbove(nav.keyboard().bounds());
     } else if (state_ == State::Comment) {
         nav.keyboard().hide();
     }
@@ -146,7 +160,7 @@ void AnnotationEditor::draw(cairo_t* cr) const {
 AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
     switch (state_) {
         case State::Comment:
-            if (commentRect().contains(p)) return Result::Open;
+            if (commentBox_.contains(p)) return Result::Open;
             nav.keyboard().hide();
             return Result::Closed;
         case State::Confirm:
@@ -203,7 +217,7 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
         changed_ = true;
         return Result::Closed;
     }
-    nav.damage(commentRect(), Waveform::Fast);
+    nav.damage(commentBox_, Waveform::Fast);
     return Result::Open;
 }
 

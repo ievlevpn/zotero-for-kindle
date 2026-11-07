@@ -45,7 +45,7 @@ struct Layout {
     double sizePt = 9;
     int marginPx = 60;
     int lineSpacingPct = 120;
-    int width = 1236, height = 1547 - 60;  // the page area above the reader's footer
+    int width = 1236, height = 1547 - 60;  // the page area: set by the reader from the window
     bool operator==(const Layout&) const = default;
 };
 

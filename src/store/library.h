@@ -34,6 +34,7 @@ struct ItemRow {
     std::string key, title, byline, badge /* "EPUB" | "PDF" | "" */, attachmentKey;
     AttachmentRecord::State fileState = AttachmentRecord::State::Remote;
     double progress = -1;  // -1: never opened
+    std::string itemType;  // Zotero's: "book", "journalArticle", "preprint", … ("attachment": a lone file)
 };
 
 struct CollectionEntry {

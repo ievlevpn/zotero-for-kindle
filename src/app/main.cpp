@@ -1,6 +1,7 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
-//   zotero --screenshot home OUT.png [--db PATH]   render a screen to a PNG and exit
+//   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe]
+//                                                  render a screen to a PNG and exit
 
 #include <chrono>
 #include <cstdlib>
@@ -17,6 +18,8 @@
 #include "app/lifecycle.h"
 #include "app/settings_store.h"
 #include "app/stall_watchdog.h"
+#include "platform/device_profile.h"
+#include "ui/metrics.h"
 #include "app/startup.h"
 #include "core/log.h"
 #include "net/errors.h"
@@ -99,6 +102,38 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     if (screen == "library") s = std::make_unique<LibraryScreen>(nullptr);
     if (screen == "collections") s = std::make_unique<CollectionsScreen>(nullptr);
     if (screen == "notes") s = std::make_unique<NotesScreen>();
+    if (screen == "settings") s = std::make_unique<SettingsScreen>(loadConfig(defaultPaths().configDir).value_or(Config{}),
+                                                                   [](Nav&) {});
+    // reader:<attachmentKey>[:page][:menus] — a downloaded book, as the reader shows it.
+    ReaderScreen* reader = nullptr;
+    int readerPage = -1;
+    bool readerMenus = false;
+    if (screen.rfind("reader:", 0) == 0) {
+        std::vector<std::string> parts;
+        for (size_t at = 0, next; at <= screen.size(); at = next + 1) {
+            next = screen.find(':', at);
+            if (next == std::string::npos) next = screen.size();
+            parts.push_back(screen.substr(at, next - at));
+        }
+        auto att = lib.attachment(parts.size() > 1 ? parts[1] : "");
+        auto row = att ? lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey) : std::nullopt;
+        if (!att || att->localPath.empty() || !row) {
+            log(LogLevel::Error, "%s: not a downloaded attachment", screen.c_str());
+            return 2;
+        }
+        if (parts.size() > 2 && !parts[2].empty()) readerPage = std::atoi(parts[2].c_str());
+        readerMenus = parts.size() > 3 && parts[3] == "menus";
+        auto r = std::make_unique<ReaderScreen>(*row, att->localPath,
+                                                att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub, [] {
+                                                    return std::make_unique<RenderWorker>([](DocType t) {
+                                                        UserError err;
+                                                        return loadEngine(t, kEngineEnv, &err);
+                                                    });
+                                                },
+                                                6);
+        reader = r.get();
+        s = std::move(r);
+    }
     if (!s) {
         log(LogLevel::Error, "unknown screen %s", screen.c_str());
         return 2;
@@ -122,9 +157,30 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         const Screen* top() const override { return nullptr; }
     } nav(lib, sync);
     s->onShow(nav);
-    Canvas c(1236, 1547);
+    if (reader) {
+        auto wait = [&](const std::function<bool()>& done) {
+            for (int i = 0; i < 1500 && !done(); ++i) {
+                reader->onTick(nav);
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        };
+        wait([&] { return reader->ready() || reader->error(); });
+        if (readerPage >= 0) {
+            reader->turnTo(readerPage);
+            wait([&] { return reader->page() == readerPage; });
+        }
+        if (readerMenus) reader->onGesture(Gesture{GestureType::Tap, {metrics().width / 2, metrics().height / 2}, {}}, nav);
+        Canvas c(metrics().width, metrics().height);
+        s->draw(c);
+        const bool ok = cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS;
+        s.reset();
+        RenderWorker::waitForAll(3000);
+        return ok ? 0 : 1;
+    }
+    Canvas c(metrics().width, metrics().height);
     s->draw(c);
-    drawTabBar(c.cr(), {0, 1547 - kTabBarH, 1236, kTabBarH}, {"Home", "Library", "Collections", "Notes"}, 0);
+    drawTabBar(c.cr(), {0, metrics().height - kTabBarH, metrics().width, kTabBarH}, {"Home", "Library", "Collections", "Notes"},
+               0);
     return cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 
@@ -135,6 +191,9 @@ int main(int argc, char** argv) {
     addFontDir(fontDir());
     const Paths paths = defaultPaths();
     if (argc > 1 && !std::strcmp(argv[1], "--version")) return 0;
+    // --device pw5|scribe: the window to imitate (the desktop; and --screenshot on any build).
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--device")) setMetrics(!std::strcmp(argv[i + 1], "scribe") ? kScribe : kPw5);
     if (argc > 1 && !std::strcmp(argv[1], "--list-fonts")) {  // what Display offers, and how long finding it takes
         const auto t0 = std::chrono::steady_clock::now();
         const auto fonts = readingFonts(readingFontDirs());
@@ -171,6 +230,15 @@ int main(int argc, char** argv) {
     std::optional<Config> config = startup.config;
 
     std::unique_ptr<Display> display = makeDisplay();
+    {
+        // The window, device and ppi everything lays out from (Plan 6).
+        const DeviceProfile profile = profileFor(display->deviceName(), display->ppi());
+        setMetrics({display->width(), display->height(), display->origin(), profile.ppi, profile.name});
+        log(LogLevel::Info, "device: %s, %d ppi, window %dx%d at (%d,%d)", profile.name.c_str(), profile.ppi,
+            display->width(), display->height(), display->origin().x, display->origin().y);
+        if (profile.ppi != 300)
+            log(LogLevel::Warn, "UI drawn at 300 ppi on a %d ppi screen (no scaling yet)", profile.ppi);
+    }
     NullSync nullSync;
     App app(*display, lib, nullSync, *keyboard);
     std::unique_ptr<SyncService> service;
@@ -254,6 +322,7 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
+    app.setReadingLandscape([&lib] { return loadSettings(lib).landscapeReading; });
     // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
     // Kindle home). Stays on through shutdown, which must not hang either.
     StallWatchdog watchdog(15'000, [](int64_t ms, const std::string& doing) {
@@ -269,6 +338,10 @@ int main(int argc, char** argv) {
             return true;
         }, 1000);
     }
+    for (int i = 1; i + 1 < argc; ++i)  // --open <attachmentKey>: open a book at start (device checks)
+        if (!std::strcmp(argv[i], "--open"))
+            if (auto att = lib.attachment(argv[i + 1]))
+                if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey)) flow.open(*row, app);
     const int rc = app.run();
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");

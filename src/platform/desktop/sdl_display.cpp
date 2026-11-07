@@ -6,12 +6,12 @@
 
 #include "core/log.h"
 #include "platform/display.h"
+#include "ui/metrics.h"
 
 namespace zk {
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;  // the Kindle window under the status bar
 constexpr int kScale = 2;
 
 int64_t nowMs() {
@@ -21,7 +21,8 @@ int64_t nowMs() {
 
 class SdlDisplay final : public Display {
 public:
-    SdlDisplay() {
+    // The window of the Kindle being imitated (metrics(): --device pw5|scribe).
+    SdlDisplay() : kW(metrics().width), kH(metrics().height) {
         SDL_Init(SDL_INIT_VIDEO);
         win_ = SDL_CreateWindow("Zotero for Kindle (desktop)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                 kW / kScale, kH / kScale, 0);
@@ -30,6 +31,22 @@ public:
         tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
         gray_.assign((size_t)kW * kH, 0xff);
     }
+
+    int kW, kH;
+    std::string deviceName() const override { return metrics().device; }  // the Kindle imitated
+    // Turning swaps the window's sides, as the Kindle's window manager does.
+    void setOrientation(Orientation o) override {
+        if (o == orientation_) return;
+        orientation_ = o;
+        std::swap(kW, kH);
+        SDL_SetWindowSize(win_, kW / kScale, kH / kScale);
+        SDL_DestroyTexture(tex_);
+        tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
+        gray_.assign((size_t)kW * kH, 0xff);
+        resized_ = true;
+    }
+    Orientation orientation_ = Orientation::Portrait;
+    bool resized_ = false;
 
     ~SdlDisplay() override {
         SDL_DestroyTexture(tex_);
@@ -51,6 +68,12 @@ public:
     }
 
     bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
+        if (resized_) {
+            resized_ = false;
+            InputEvent e;
+            e.kind = InputEvent::Kind::Resize;
+            out.push_back(e);
+        }
         SDL_Event ev;
         if (!SDL_WaitEventTimeout(&ev, timeout_ms)) return true;
         do {

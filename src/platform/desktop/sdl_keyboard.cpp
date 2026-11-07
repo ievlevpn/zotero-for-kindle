@@ -17,7 +17,9 @@ public:
         SDL_StopTextInput();
         shown_ = false;
     }
-    Rect bounds() const override { return shown_ ? Rect{0, 1547 - 567, 1236, 567} : Rect{}; }
+    Rect bounds() const override {
+        return shown_ ? keyboardFallback(metrics(), profileFor(metrics().device, 300)) : Rect{};
+    }
 
 private:
     bool shown_ = false;

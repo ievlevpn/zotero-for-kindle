@@ -1,5 +1,6 @@
 #include "screens/contents.h"
 
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -10,9 +11,11 @@ namespace zk {
 using namespace theme;
 
 namespace {
-constexpr int kW = 1236, kH = 1547, kLineH = 110;
-const Rect kArea{0, kHeaderH, kW, kH - kHeaderH};
-int perPage() { return (kArea.h - kPageIndicatorH) / kLineH; }
+int W() { return metrics().width; }
+int H() { return metrics().height; }
+constexpr int kLineH = 110;
+Rect contentArea() { return {0, kHeaderH, W(), H() - kHeaderH}; }
+int perPage() { return (contentArea().h - kPageIndicatorH) / kLineH; }
 }  // namespace
 
 ContentsScreen::ContentsScreen(std::vector<TocEntry> toc, int currentPage, std::function<void(const TocEntry&)> pick)
@@ -31,17 +34,17 @@ void ContentsScreen::onShow(Nav&) {
 std::vector<Rect> ContentsScreen::entryRects() const {
     std::vector<Rect> out;
     for (int64_t i = pager_.offset(); i < static_cast<int64_t>(toc_.size()) && i < pager_.offset() + pager_.perPage(); ++i)
-        out.push_back({kMargin, kArea.y + static_cast<int>(i - pager_.offset()) * kLineH, kW - 2 * kMargin, kLineH});
+        out.push_back({kMargin, contentArea().y + static_cast<int>(i - pager_.offset()) * kLineH, W() - 2 * kMargin, kLineH});
     return out;
 }
 
 void ContentsScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "Contents", true);
     if (toc_.empty()) {
         drawText(cr, "This book has no table of contents.", {kSerif, 10, 400, false, kSecondary},
-                 {kMargin, 500, kW - 2 * kMargin, 80}, 1, Align::Center);
+                 {kMargin, 500, W() - 2 * kMargin, 80}, 1, Align::Center);
         return;
     }
     auto rects = entryRects();
@@ -59,12 +62,12 @@ void ContentsScreen::draw(Canvas& canvas) {
                  1, Align::Right);
         hRule(cr, rects[k].y + rects[k].h - 2, rects[k].x, rects[k].x + rects[k].w);
     }
-    drawPageIndicator(cr, {0, kArea.y + kArea.h - kPageIndicatorH, kW, kPageIndicatorH}, pager_.page(), pager_.pages());
+    drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
 }
 
 void ContentsScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type == GestureType::Swipe && (g.dir == Direction::Up ? pager_.next() : g.dir == Direction::Down && pager_.prev())) {
-        nav.damage(kArea, Waveform::Quality);
+        nav.damage(contentArea(), Waveform::Quality);
         return;
     }
     if (g.type != GestureType::Tap) return;

@@ -7,6 +7,7 @@
 
 #include "screens/annotation_bar.h"
 #include "screens/reader_menus.h"
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -18,13 +19,17 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547, kFooterH = 60;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
+constexpr int kFooterH = 60;
 constexpr int kWordsPerMinute = 250;
 
 std::string layoutKey(const std::string& itemKey) { return "layout:" + itemKey; }
 
 Layout loadLayout(Library& lib, const std::string& itemKey) {
     Layout l;
+    l.width = ReaderScreen::pageArea().w;  // the page is the window above the footer
+    l.height = ReaderScreen::pageArea().h;
     auto j = nlohmann::json::parse(lib.metaValue(layoutKey(itemKey)), nullptr, false);
     if (!j.is_object()) return l;
     l.font = j.value("font", l.font);
@@ -121,9 +126,8 @@ ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFa
 
 ReaderScreen::~ReaderScreen() = default;
 
-Rect ReaderScreen::pageArea() { return {0, 0, kW, kH - kFooterH}; }
-Rect ReaderScreen::footerArea() { return {0, kH - kFooterH, kW, kFooterH}; }
-Rect ReaderScreen::noteRect() { return AnnotationEditor::commentRect(); }  // above the system keyboard
+Rect ReaderScreen::pageArea() { return {0, 0, W(), H() - kFooterH}; }
+Rect ReaderScreen::footerArea() { return {0, H() - kFooterH, W(), kFooterH}; }
 
 bool ReaderScreen::wantsKeyboard() const { return note_.has_value() || (editor_ && editor_->wantsKeyboard()); }
 
@@ -240,6 +244,16 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
     worker_->showAnnotation(a);
 }
 
+void ReaderScreen::onResize(Nav& nav) {
+    layout_.width = pageArea().w;
+    layout_.height = pageArea().h;
+    bar_.reset();  // anchored to the old page
+    if (editor_) closeEditor(nav);
+    if (!worker_) return;
+    layoutPending_ = true;
+    worker_->setLayout(layout_, position_);  // keeps the passage; works before the first page too
+}
+
 void ReaderScreen::applyLayout(const Layout& l, Nav& nav) {
     if (l == layout_ || !worker_ || !ready()) return;
     layoutPending_ = true;
@@ -329,8 +343,8 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens the menus.
     if (ready() && editAt(g.pos, nav)) return;
-    if (g.pos.x > kW * 7 / 10) turn(+1, nav);
-    else if (g.pos.x < kW * 3 / 10) turn(-1, nav);
+    if (g.pos.x > W() * 7 / 10) turn(+1, nav);
+    else if (g.pos.x < W() * 3 / 10) turn(-1, nav);
     else if (ready()) openMenus(nav);  // not before the first page
 }
 
@@ -453,6 +467,7 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             bar_.reset();
             note_.emplace();
             nav.keyboard().show();
+            noteBox_ = AnnotationEditor::commentRectAbove(nav.keyboard().bounds());
             nav.damage(noteRect(), Waveform::Ui);
             break;
         default:
@@ -509,22 +524,22 @@ std::string ReaderScreen::footerRight() const {
 
 void ReaderScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     if (error_) {
-        drawBanner(cr, {0, 500, kW, 150}, *error_);
+        drawBanner(cr, {0, 500, W(), 150}, *error_);
         drawButton(cr, {kMargin, 700, 340, 90}, "Back", true);
         return;
     }
     if (!image_) {
-        drawText(cr, "Opening…", {kSerif, 11, 400, false, kSecondary}, {kMargin, 650, kW - 2 * kMargin, 80}, 1, Align::Center);
+        drawText(cr, "Opening…", {kSerif, 11, 400, false, kSecondary}, {kMargin, 650, W() - 2 * kMargin, 80}, 1, Align::Center);
         return;
     }
     blit(canvas, *image_, 0);
     drawHighlights(canvas, highlights_);
     if (selection_) drawSelection(canvas, selection_->rects);
     const Rect f = footerArea();
-    drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, kW - 2 * kMargin - 260, 40}, 1);
-    drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {kW - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
+    drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, W() - 2 * kMargin - 260, 40}, 1);
+    drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {W() - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
     if (bar_) bar_->draw(cr);
     if (editor_) editor_->draw(cr);
     if (note_) {

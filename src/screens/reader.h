@@ -40,9 +40,11 @@ public:
         searchListener_ = std::move(f);
     }
     bool showsTabBar() const override { return false; }
+    bool isReading() const override { return true; }
+    void onResize(Nav&) override;  // turned: the book is laid out for the new page area
     bool wantsKeyboard() const override;
 
-    static Rect pageArea();    // 1236 × 1487 from the top
+    static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
     static Rect footerArea();  // the 60 px below it
 
     int page() const { return page_; }
@@ -74,7 +76,7 @@ public:
     AnnotationBar* annotationBar() { return bar_.get(); }
     bool noteOpen() const { return note_.has_value(); }
     AnnotationEditor* annotationEditor() { return editor_.get(); }
-    static Rect noteRect();
+    Rect noteRect() const { return noteBox_; }  // the note box, above the keyboard as it was when opened
 
 private:
     void startSelection(Point at, Nav&);
@@ -118,6 +120,7 @@ private:
     std::optional<Selection> selection_;
     std::unique_ptr<AnnotationBar> bar_;
     std::optional<TextField> note_;
+    Rect noteBox_;
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened

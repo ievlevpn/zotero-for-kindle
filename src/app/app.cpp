@@ -4,6 +4,7 @@
 #include <chrono>
 
 #include "core/log.h"
+#include "ui/metrics.h"
 #include "store/db.h"
 #include "ui/widgets.h"
 
@@ -42,7 +43,7 @@ void App::setRoot(int tab, std::unique_ptr<Screen> s) {
 Screen* App::visibleTop() const { return stacks_[tab_].empty() ? nullptr : stacks_[tab_].back().get(); }
 
 namespace {
-Rect toastRect() { return {kMargin, 1547 - kTabBarH - 130, 1236 - 2 * kMargin, 100}; }
+
 }  // namespace
 
 void App::toast(const std::string& text) {
@@ -51,6 +52,8 @@ void App::toast(const std::string& text) {
     toastUntil_ = clock_() + 3000;
     pending_.push_back({toastRect(), Waveform::Ui});
 }
+
+Rect App::toastRect() const { return {kMargin, canvas_.height() - kTabBarH - 130, canvas_.width() - 2 * kMargin, 100}; }
 
 Rect App::tabBar() const { return {0, canvas_.height() - kTabBarH, canvas_.width(), kTabBarH}; }
 
@@ -72,6 +75,35 @@ void App::showTop() {
     caller_ = nullptr;
     deliverHeld(s);
     redrawAll(Waveform::Quality);
+    applyOrientation();
+}
+
+void App::applyOrientation() {
+    Screen* s = visibleTop();
+    const bool landscape = s && s->isReading() && readingLandscape_ && readingLandscape_();
+    const Orientation want = landscape ? Orientation::Landscape : Orientation::Portrait;
+    if (want == orientation_) return;
+    orientation_ = want;
+    log(LogLevel::Info, "orientation: %s", landscape ? "landscape" : "portrait");
+    display_.setOrientation(want);  // a Resize event follows
+}
+
+void App::resized() {
+    if (display_.width() == canvas_.width() && display_.height() == canvas_.height()) return;
+    Metrics m = metrics();
+    m.width = display_.width();
+    m.height = display_.height();
+    m.origin = display_.origin();
+    setMetrics(m);
+    log(LogLevel::Info, "window now %dx%d at (%d,%d)", m.width, m.height, m.origin.x, m.origin.y);
+    canvas_.resize(m.width, m.height);
+    pending_.clear();
+    if (Screen* s = visibleTop()) {
+        caller_ = s;
+        guard([&] { s->onResize(*this); });
+        caller_ = nullptr;
+    }
+    redrawAll(Waveform::Full);
 }
 
 void App::deliverHeld(Screen* s) {
@@ -213,6 +245,9 @@ void App::step(int timeout_ms) {
             case InputEvent::Kind::Background:
                 log(LogLevel::Info, "background");
                 if (lifecycle_) lifecycle_(false);
+                break;
+            case InputEvent::Kind::Resize:
+                resized();
                 break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");

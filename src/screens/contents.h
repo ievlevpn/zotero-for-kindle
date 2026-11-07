@@ -17,6 +17,7 @@ public:
     void onGesture(const Gesture&, Nav&) override;
     void onShow(Nav&) override;
     bool showsTabBar() const override { return false; }
+    bool isReading() const override { return true; }  // turns with the reader
     std::vector<Rect> entryRects() const;
 
 private:

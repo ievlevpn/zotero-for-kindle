@@ -651,7 +651,7 @@ namespace {
 
 const char* kRowColumns =
     "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
-    "coalesce(rs.progress, -1)";
+    "coalesce(rs.progress, -1), i.itemType";
 const char* kRowJoins =
     " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key ";
 
@@ -672,6 +672,7 @@ std::vector<ItemRow> readRows(Stmt& st) {
         r.badge = st.text(5);
         r.fileState = static_cast<AttachmentRecord::State>(st.integer(6));
         r.progress = st.real(7);
+        r.itemType = st.text(8);
         out.push_back(std::move(r));
     }
     return out;
@@ -869,7 +870,8 @@ void Library::markOpened(const std::string& itemKey, const std::string& attachme
 std::optional<ReadingState> Library::lastOpened() {
     return guarded([&]() -> std::optional<ReadingState> {
         Stmt st = db_.prepare(
-            "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state ORDER BY openedMs DESC LIMIT 1");
+            "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state WHERE openedMs > 0 "
+            "ORDER BY openedMs DESC LIMIT 1");
         if (!st.step()) return std::nullopt;
         return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
     });

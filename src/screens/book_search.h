@@ -25,6 +25,7 @@ public:
     void onTick(Nav&) override;
     bool wantsKeyboard() const override { return true; }
     bool showsTabBar() const override { return false; }
+    bool isReading() const override { return true; }  // turns with the reader
 
     bool searching() const { return searching_; }
     const std::vector<SearchHit>& hits() const { return hits_; }
@@ -39,7 +40,7 @@ private:
     std::vector<SearchHit> hits_;
     bool searching_ = false, searched_ = false, gotResults_ = false;
     uint64_t requestId_ = 0;  // results for any other request (an earlier query, another screen) are ignored
-    int areaBottom_ = 1547;
+    int areaBottom_ = 0;  // set in onShow: the keyboard's top, or the window's bottom
 };
 
 }  // namespace zk

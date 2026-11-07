@@ -2,6 +2,7 @@
 
 #include "screens/collection_search.h"
 
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -13,11 +14,12 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kLineH = 130;  // collection lines are shorter than item rows
-const Rect kArea{0, kHeaderH + 10, kW, kH - kTabBarH - kHeaderH - 10};
+Rect contentArea() { return {0, kHeaderH + 10, W(), H() - kTabBarH - kHeaderH - 10}; }
 
-int collectionsPerPage() { return (kArea.h - kPageIndicatorH) / kLineH; }
+int collectionsPerPage() { return (contentArea().h - kPageIndicatorH) / kLineH; }
 
 bool turnPage(const Gesture& g, Pager& pager) {
     if (g.type != GestureType::Swipe) return false;
@@ -48,18 +50,18 @@ void CollectionsScreen::onShow(Nav& nav) {
                     all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
 }
 
-Rect CollectionsScreen::searchRect() { return {kW - kMargin - 100, 20, 100, 100}; }
+Rect CollectionsScreen::searchRect() { return {W() - kMargin - 100, 20, 100, 100}; }
 
 std::vector<Rect> CollectionsScreen::entryRects() const {
     std::vector<Rect> out;
     for (size_t i = 0; i < entries_.size(); ++i)
-        out.push_back({kMargin, kArea.y + static_cast<int>(i) * kLineH, kW - 2 * kMargin, kLineH});
+        out.push_back({kMargin, contentArea().y + static_cast<int>(i) * kLineH, W() - 2 * kMargin, kLineH});
     return out;
 }
 
 void CollectionsScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "Collections", false);
     const Rect s = searchRect();
     searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
@@ -67,16 +69,16 @@ void CollectionsScreen::draw(Canvas& canvas) {
     for (size_t i = 0; i < entries_.size(); ++i)
         drawCollectionRow(cr, rects[i], entries_[i].collection.name, entries_[i].items, entries_[i].hasChildren);
     if (all_.empty())
-        drawText(cr, "No collections yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, kW - 2 * kMargin, 100}, 1,
+        drawText(cr, "No collections yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100}, 1,
                  Align::Center);
-    drawPageIndicator(cr, {0, kArea.y + kArea.h - kPageIndicatorH, kW, kPageIndicatorH}, pager_.page(), pager_.pages());
+    drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
 }
 
 void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
     if (turnPage(g, pager_)) {
         entries_.assign(all_.begin() + pager_.offset(),
                         all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
-        nav.damage(kArea, Waveform::Quality);
+        nav.damage(contentArea(), Waveform::Quality);
         return;
     }
     if (g.type != GestureType::Tap) return;
@@ -92,7 +94,7 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
 void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     onShow(nav);
-    nav.damage(kArea, Waveform::Quality);
+    nav.damage(contentArea(), Waveform::Quality);
 }
 
 // ---- one collection --------------------------------------------------------------------------
@@ -110,7 +112,7 @@ void CollectionScreen::load(Library& lib) {
     q.sort = SortBy::Title;
     const int64_t items = lib.countRows(q);
     // Paging counts lines; one "line" per subcollection or item, ~6 per page.
-    const int perPage = (kArea.h - kPageIndicatorH) / kRowH;
+    const int perPage = (contentArea().h - kPageIndicatorH) / kRowH;
     const int64_t offset = pager_.offset();
     pager_ = Pager(static_cast<int64_t>(subs_.size()) + items, perPage);
     while (pager_.offset() < offset && pager_.next()) {
@@ -118,7 +120,7 @@ void CollectionScreen::load(Library& lib) {
     page_.clear();
     int64_t i = pager_.offset();
     int used = 0;
-    const int room = kArea.h - kPageIndicatorH;
+    const int room = contentArea().h - kPageIndicatorH;
     for (; i < static_cast<int64_t>(subs_.size()) && used + kLineH <= room; ++i, used += kLineH)
         page_.push_back({true, subs_[static_cast<size_t>(i)], {}});
     if (used + kRowH <= room) {
@@ -133,10 +135,10 @@ void CollectionScreen::onShow(Nav& nav) { load(nav.library()); }
 
 std::vector<Rect> CollectionScreen::lineRects() const {
     std::vector<Rect> out;
-    int y = kArea.y;
+    int y = contentArea().y;
     for (const auto& l : page_) {
         const int h = l.isCollection ? kLineH : kRowH;
-        out.push_back({kMargin, y, kW - 2 * kMargin, h});
+        out.push_back({kMargin, y, W() - 2 * kMargin, h});
         y += h;
     }
     return out;
@@ -144,7 +146,7 @@ std::vector<Rect> CollectionScreen::lineRects() const {
 
 void CollectionScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, entry_.collection.name, true);
     auto rects = lineRects();
     for (size_t i = 0; i < page_.size(); ++i) {
@@ -155,9 +157,9 @@ void CollectionScreen::draw(Canvas& canvas) {
             drawItemRow(cr, rects[i], page_[i].item, status_ ? status_(page_[i].item.attachmentKey) : "");
     }
     if (page_.empty())
-        drawText(cr, "This collection is empty.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, kW - 2 * kMargin, 100},
+        drawText(cr, "This collection is empty.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100},
                  1, Align::Center);
-    drawPageIndicator(cr, {0, kArea.y + kArea.h - kPageIndicatorH, kW, kPageIndicatorH}, pager_.page(), pager_.pages());
+    drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
 }
 
 void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
@@ -167,7 +169,7 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (turnPage(g, pager_)) {
         load(nav.library());
-        nav.damage(kArea, Waveform::Quality);
+        nav.damage(contentArea(), Waveform::Quality);
         return;
     }
     if (g.type != GestureType::Tap) return;
@@ -189,7 +191,7 @@ void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     load(nav.library());
-    nav.damage(kArea, Waveform::Quality);
+    nav.damage(contentArea(), Waveform::Quality);
 }
 
 }  // namespace zk

@@ -10,4 +10,9 @@ Rect parseKeyboardBounds(const std::string& v, int windowTop) {
     return {x, y - windowTop, w, h};
 }
 
+Rect keyboardFallback(const Metrics& m, const DeviceProfile& p) {
+    const int h = p.keyboardHeightPx > 0 ? p.keyboardHeightPx : m.height - m.height / 2;
+    return {0, m.height - h, m.width, h};
+}
+
 }  // namespace zk

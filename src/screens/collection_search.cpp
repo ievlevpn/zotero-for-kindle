@@ -6,6 +6,7 @@
 
 #include "screens/collections.h"
 #include "screens/search.h"
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -17,7 +18,9 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kLineH = 130;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
+constexpr int kLineH = 130;
 
 std::string folded(const std::string& s) {
     gchar* f = g_utf8_casefold(s.c_str(), -1);
@@ -29,12 +32,12 @@ std::string folded(const std::string& s) {
 }  // namespace
 
 CollectionSearchScreen::CollectionSearchScreen(std::function<void(const ItemRow&)> openItem, StatusFn status)
-    : openItem_(std::move(openItem)), status_(std::move(status)) {}
+    : openItem_(std::move(openItem)), status_(std::move(status)), bottom_(H()) {}
 
 void CollectionSearchScreen::onShow(Nav& nav) {
     nav.keyboard().show();
     const Rect kb = nav.keyboard().bounds();
-    bottom_ = kb.empty() ? 1547 : kb.y;
+    bottom_ = kb.empty() ? H() : kb.y;
 }
 
 std::vector<Rect> CollectionSearchScreen::resultRects() const {
@@ -42,7 +45,7 @@ std::vector<Rect> CollectionSearchScreen::resultRects() const {
     for (size_t i = 0; i < shown_.size(); ++i) {
         const int y = kHeaderH + 10 + static_cast<int>(i) * kLineH;
         if (y + kLineH > bottom_) break;
-        out.push_back({kMargin, y, kW - 2 * kMargin, kLineH});
+        out.push_back({kMargin, y, W() - 2 * kMargin, kLineH});
     }
     return out;
 }
@@ -64,7 +67,7 @@ void CollectionSearchScreen::search(Nav& nav) {
             shown_.push_back({e, path});
         }
     }
-    nav.damage({0, kHeaderH, kW, bottom_ - kHeaderH}, Waveform::Quality);
+    nav.damage({0, kHeaderH, W(), bottom_ - kHeaderH}, Waveform::Quality);
 }
 
 void CollectionSearchScreen::leave(Nav& nav) {
@@ -87,7 +90,7 @@ void CollectionSearchScreen::onTick(Nav& nav) {
 
 void CollectionSearchScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, 1547}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "", true);
     const Rect f = SearchScreen::fieldRect();
     gray(cr, kInk);
@@ -103,7 +106,7 @@ void CollectionSearchScreen::draw(Canvas& canvas) {
         drawCollectionRow(cr, rects[i], shown_[i].path, shown_[i].entry.items, shown_[i].entry.hasChildren);
     if (!searched_.empty() && shown_.empty())
         drawText(cr, "No collection called “" + searched_ + "”", {kSerif, 11, 400, false, kSecondary},
-                 {kMargin, kHeaderH + 120, kW - 2 * kMargin, 100}, 2, Align::Center);
+                 {kMargin, kHeaderH + 120, W() - 2 * kMargin, 100}, 2, Align::Center);
 }
 
 void CollectionSearchScreen::onGesture(const Gesture& g, Nav& nav) {

@@ -45,6 +45,7 @@ public:
     static Rect sizePlusRect();
     static Rect marginRect(int i);   // Narrow 40, Normal 60, Wide 100 px
     static Rect spacingRect(int i);  // 100, 120, 140 %
+    static Rect orientationRect(int i);  // 0 Portrait, 1 Landscape (landscape is for reading only)
 
     bool displayOpen() const { return displayOpen_; }
     bool showsTextOptions() const;
@@ -70,6 +71,7 @@ private:
     void drawDisplay(cairo_t*);
     int light_ = -1;
     bool syncing_ = false;
+    bool landscape_ = false;  // the setting, read when the menus open and changed by the row
 };
 
 }  // namespace zk

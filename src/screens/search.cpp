@@ -1,5 +1,6 @@
 #include "screens/search.h"
 
+#include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
 #include "ui/theme.h"
@@ -11,7 +12,8 @@ using namespace theme;
 
 namespace {
 
-constexpr int kW = 1236, kH = 1547;
+int W() { return metrics().width; }
+int H() { return metrics().height; }
 constexpr int kNoteH = 56;
 constexpr int kMaxResults = 200;
 
@@ -23,13 +25,13 @@ SearchScreen::SearchScreen(std::function<void(const ItemRow&)> openItem, StatusF
 
 void SearchScreen::onSyncEvent(const SyncEvent& e, Nav& nav) { list_.onDownloadEvent(e, areaCache_, nav); }
 
-Rect SearchScreen::fieldRect() { return {kMargin + 70, 30, kW - 2 * kMargin - 70, 92}; }
+Rect SearchScreen::fieldRect() { return {kMargin + 70, 30, W() - 2 * kMargin - 70, 92}; }
 
 Rect SearchScreen::resultsArea(Nav& nav) const {
     const Rect kb = nav.keyboard().bounds();
     const int top = kHeaderH + kNoteH;
-    const int bottom = kb.empty() ? kH : kb.y;
-    return {0, top, kW, bottom - top};
+    const int bottom = kb.empty() ? H() : kb.y;
+    return {0, top, W(), bottom - top};
 }
 
 std::string SearchScreen::note(Nav& nav) const {
@@ -57,7 +59,7 @@ void SearchScreen::search(Nav& nav) {
     list_.setSource([q](Library& lib, int64_t offset, int limit) { return lib.searchRows(q, static_cast<int>(offset), limit); },
                     [q](Library& lib) { return static_cast<int64_t>(lib.searchRows(q, 0, kMaxResults).size()); },
                     nav.library());
-    nav.damage({0, kHeaderH, kW, kH - kHeaderH}, Waveform::Quality);
+    nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
 }
 
 void SearchScreen::leave(Nav& nav) {
@@ -86,7 +88,7 @@ void SearchScreen::onTick(Nav& nav) {
 
 void SearchScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, kW, kH}, 255);
+    fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, "", true);
     const Rect f = fieldRect();
     gray(cr, kInk);
@@ -98,11 +100,11 @@ void SearchScreen::draw(Canvas& canvas) {
     centredText(cr, empty ? "Search your library…" : field_.text() + "|", {kSans, 9, 400, false, empty ? kTertiary : kInk},
                 {f.x + 96, f.y, f.w - 120, f.h}, Align::Left);
     if (!searched_.empty() && !noteCache_.empty())
-        drawText(cr, noteCache_, {kSans, 6.5, 400, false, kTertiary}, {kMargin, kHeaderH + 6, kW - 2 * kMargin, kNoteH}, 1);
+        drawText(cr, noteCache_, {kSans, 6.5, 400, false, kTertiary}, {kMargin, kHeaderH + 6, W() - 2 * kMargin, kNoteH}, 1);
     if (!searched_.empty()) {
         list_.draw(cr, areaCache_);
         if (list_.rows().empty())
-            drawText(cr, emptyMessage(), {kSerif, 11, 400, false, kSecondary}, {kMargin, areaCache_.y + 120, kW - 2 * kMargin, 100},
+            drawText(cr, emptyMessage(), {kSerif, 11, 400, false, kSecondary}, {kMargin, areaCache_.y + 120, W() - 2 * kMargin, 100},
                      2, Align::Center);
     }
 }

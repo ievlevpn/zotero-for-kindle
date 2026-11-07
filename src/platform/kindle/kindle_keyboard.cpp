@@ -6,8 +6,6 @@ namespace zk {
 
 namespace {
 
-constexpr int kWindowTop = 101;  // our window sits under the status bar (S5)
-
 class KindleKeyboard final : public Keyboard {
 public:
     explicit KindleKeyboard(Lipc& lipc) : lipc_(lipc) {}
@@ -17,8 +15,9 @@ public:
         if (shown_) return;
         // The argument names our window's ID from its title (S3).
         lipc_.set("com.lab126.keyboard", "open", "org.zotero.kindle:abc:0");
-        bounds_ = parseKeyboardBounds(lipc_.get("com.lab126.keyboard", "bounds"), kWindowTop);
-        if (bounds_.w == 0) bounds_ = {0, 1547 - 567, 1236, 567};  // S3's measured size
+        // Our window sits under the status bar: its measured top, not the PW5's 101.
+        bounds_ = parseKeyboardBounds(lipc_.get("com.lab126.keyboard", "bounds"), metrics().origin.y);
+        if (bounds_.w == 0) bounds_ = keyboardFallback(metrics(), profileFor(metrics().device, metrics().ppi));
         shown_ = true;
     }
     void hide() override {

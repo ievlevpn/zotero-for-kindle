@@ -21,5 +21,13 @@ scp $OPTS -q -r third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gu
 ssh $OPTS "$KINDLE" '[ -f /mnt/us/zotero/share/crengine/hyph/English_US.pattern ] || { echo "error: crengine data not installed" >&2; exit 1; }'
 scp $OPTS -q assets/launcher/icon.png "$KINDLE:/mnt/us/zotero/share/icon.png"
 scp $OPTS -q assets/launcher/Zotero.sh "$KINDLE:/mnt/us/documents/Zotero.sh"
-ssh $OPTS "$KINDLE" 'chmod +x /mnt/us/zotero/bin/* /mnt/us/documents/Zotero.sh; [ -f /mnt/us/zotero/share/cacert.pem ] || echo "warning: /mnt/us/zotero/share/cacert.pem missing (HTTPS will fail)"'
+# The CA bundle for HTTPS (tools/build-net-deps.sh fetches it), if the device has none yet.
+if ! ssh $OPTS "$KINDLE" '[ -f /mnt/us/zotero/share/cacert.pem ]'; then
+    if [ -f build-deps/kindle/prefix/share/cacert.pem ]; then
+        scp $OPTS -q build-deps/kindle/prefix/share/cacert.pem "$KINDLE:/mnt/us/zotero/share/cacert.pem"
+    else
+        echo "warning: /mnt/us/zotero/share/cacert.pem missing (HTTPS will fail)"
+    fi
+fi
+ssh $OPTS "$KINDLE" 'chmod +x /mnt/us/zotero/bin/* /mnt/us/documents/Zotero.sh'
 echo "deployed to $KINDLE:/mnt/us/zotero/bin"

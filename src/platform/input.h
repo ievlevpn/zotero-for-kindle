@@ -25,7 +25,7 @@ struct KeyEvent {
 
 // Everything the display delivers to the app loop.
 struct InputEvent {
-    enum class Kind { Touch, Key, Background, Foreground };
+    enum class Kind { Touch, Key, Background, Foreground, Resize /* the window changed size: re-read it */ };
     Kind kind = Kind::Touch;
     TouchEvent touch{};
     KeyEvent key{};
