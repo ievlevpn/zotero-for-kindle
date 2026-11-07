@@ -3,6 +3,7 @@
 //   commands: pull | status | search <words> | collections | annotations <attachmentKey>
 //             | fetch <attachmentKey> <dir> | highlights-offline on|off
 //             | push | annotate-test <attachmentKey> [page] | annotate-test-edit <key>
+//             | position-test <attachmentKey>
 //             | annotate-test-cleanup
 //   `annotations` downloads that book's annotations first, as opening a book in the app will.
 //   `annotate-test` highlights the first text of a page (3 by default) of a fetched file, as the
@@ -230,6 +231,37 @@ int main(int argc, char** argv) {
                 printError(*rep.error);
                 return 1;
             }
+        } else if (cmd == "position-test" && args.size() == 2) {
+            // Zotero's reading position for a fetched file -> its page here -> one page on -> sent back.
+            auto a = lib.attachment(args[1]);
+            if (!a || a->state != AttachmentRecord::State::Local || a->localPath.empty()) {
+                std::printf("error: %s is not downloaded (run fetch first).\n", args[1].c_str());
+                return 1;
+            }
+            UserError err;
+            auto engine = loadEngine(a->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub, kEngineEnv, &err);
+            if (!engine || !engine->open(a->localPath, &err)) {
+                printError(err);
+                return 1;
+            }
+            engine->setLayout(Layout{});
+            auto rp = lib.readingPosition(a->key);
+            const std::string remote = rp ? rp->remote : "";
+            const int page = remote.empty() ? 0 : engine->pageOfZoteroPosition(remote);
+            std::printf("Zotero's position: %s -> page %d of %d\n", remote.empty() ? "(none)" : remote.c_str(), page + 1,
+                        engine->pageCount());
+            if (page < 0) return 1;
+            const std::string next = engine->zoteroPosition(page + 1);
+            std::printf("one page on: %s (back to page %d)\n", next.c_str(), engine->pageOfZoteroPosition(next) + 1);
+            lib.setLocalPosition(a->key, next);
+            SyncEngine sync(api, lib);
+            SyncReport rep = sync.push();
+            if (rep.error) {
+                printError(*rep.error);
+                return 1;
+            }
+            std::printf("sent; Zotero's setting is now version %lld\n",
+                        static_cast<long long>(lib.readingPosition(a->key)->remoteVersion));
         } else if (cmd == "annotate-test" && (args.size() == 2 || args.size() == 3)) {
             auto a = lib.attachment(args[1]);
             if (!a || a->state != AttachmentRecord::State::Local || a->localPath.empty()) {
