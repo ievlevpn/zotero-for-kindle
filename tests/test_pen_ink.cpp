@@ -296,3 +296,34 @@ TEST_CASE("pen ink: the system's wet ink pauses while the eraser end is near") {
     rig.reader->onPen(pen(PenEvent::Type::Leave, {300, 400}, true), rig.nav);
     CHECK(rig.nav.systemInkOn);
 }
+
+TEST_CASE("reader: a sync that deleted an annotation elsewhere takes it off the open page; an empty one repaints nothing") {
+    InkRig rig;
+    AnnotationRecord a;
+    a.key = "SYNCDEL1";
+    a.parentKey = rig.row.attachmentKey;
+    a.type = "highlight";
+    a.color = "#ffd400";
+    a.pageLabel = "0";
+    a.position = R"({"fake":0})";
+    rig.lib.upsertAnnotation(a);
+    SyncEvent done;
+    done.kind = SyncEvent::Kind::SyncFinished;
+    rig.reader->onSyncEvent(done, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->highlights().size() == 1; }));
+
+    // Nothing changed: no new page from the worker, no repaint.
+    rig.settle([] { return false; });  // let the worker go quiet
+    rig.nav.damages.clear();
+    rig.reader->onSyncEvent(done, rig.nav);
+    for (int i = 0; i < 40; ++i) {
+        rig.reader->onTick(rig.nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(rig.nav.damages.empty());
+
+    // Deleted in Zotero on the computer: the sync removes it from the library.
+    rig.lib.deleteAnnotation("SYNCDEL1");
+    rig.reader->onSyncEvent(done, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->highlights().empty(); }));
+}

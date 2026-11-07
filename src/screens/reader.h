@@ -101,6 +101,7 @@ private:
     bool editAt(Point, Nav&);  // a highlight under (or right next to) the tap: open its editor
     void closeEditor(Nav&);
     void refreshHighlights(Nav&);
+    void sendAnnotations(Nav&, bool onlyIfChanged);
     void turn(int delta, Nav&);
     void openMenus(Nav&);
     bool penAllowed() const;
@@ -143,6 +144,7 @@ private:
     // Handwriting.
     bool inkDown_ = false, erasing_ = false, inkToastShown_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
+    std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     std::optional<Point> wipeFrom_;  // a stroke we ignored started here (wet ink may show it)
     std::vector<Point> inkStroke_, eraserPath_;
     std::vector<std::vector<Point>> inkPending_;          // drawn, not yet sent

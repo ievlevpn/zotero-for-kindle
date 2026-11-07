@@ -249,7 +249,7 @@ void ReaderScreen::onShow(Nav& nav) {
         worker_->showAnnotation(*openAt_);
         openAt_.reset();
     }
-    worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
+    sendAnnotations(nav, false);
 }
 
 void ReaderScreen::onTick(Nav& nav) {
@@ -527,8 +527,19 @@ void ReaderScreen::closeEditor(Nav& nav) {
     nav.damage(pageArea(), Waveform::Quality);
 }
 
-void ReaderScreen::refreshHighlights(Nav& nav) {
-    if (worker_) worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
+void ReaderScreen::refreshHighlights(Nav& nav) { sendAnnotations(nav, false); }
+
+// What the page shows of this book's annotations, as one string: a sync that changed nothing of
+// them leaves the page alone (no repaint after every background sync).
+void ReaderScreen::sendAnnotations(Nav& nav, bool onlyIfChanged) {
+    if (!worker_) return;
+    std::vector<AnnotationRecord> anns = pageAnnotations(nav.library(), row_.attachmentKey);
+    std::string shown;
+    for (const auto& a : anns)
+        shown += a.key + '\x1f' + a.type + '\x1f' + a.color + '\x1f' + a.comment + '\x1f' + a.position + '\x1e';
+    if (onlyIfChanged && shown == shownAnnotations_) return;
+    shownAnnotations_ = std::move(shown);
+    worker_->highlightsFor(std::move(anns));
 }
 
 void ReaderScreen::startSelection(Point at, Nav&) {
@@ -630,8 +641,9 @@ void ReaderScreen::closeSelection(Nav& nav) {
 }
 
 void ReaderScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
-    if (e.kind == SyncEvent::Kind::AnnotationsReady && e.attachmentKey == row_.attachmentKey && worker_)
-        worker_->highlightsFor(pageAnnotations(nav.library(), row_.attachmentKey));
+    if (e.kind == SyncEvent::Kind::AnnotationsReady && e.attachmentKey == row_.attachmentKey) sendAnnotations(nav, false);
+    // A sync also brings what changed elsewhere (an annotation deleted in Zotero on the computer).
+    if (e.kind == SyncEvent::Kind::SyncFinished) sendAnnotations(nav, true);
     if (menus_) menus_->onSyncEvent(e, nav);
 }
 
