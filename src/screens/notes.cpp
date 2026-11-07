@@ -19,8 +19,8 @@ int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kGroupH = 70;
 Rect contentArea() { return {0, kHeaderH, W(), H() - kTabBarH - kHeaderH}; }
-// Notes per page: as many as fit with room left for two group headers (4 on the PW5).
-int perPage() { return std::max(1, (contentArea().h - kPageIndicatorH - 2 * kGroupH) / kNoteRowH); }
+// Notes per page: as many as fit if each comes from a different book (its own header): 4 on the PW5.
+int perPage() { return std::max(1, (contentArea().h - kPageIndicatorH) / (kNoteRowH + kGroupH)); }
 Rect confirmBox() { return {kMargin, 560, W() - 2 * kMargin, 300}; }
 
 }  // namespace

@@ -71,7 +71,8 @@ public:
     bool wantsKeyboard() const { return commenting(); }
     Rect rect() const;              // what is drawn now: the bar, the question or the comment box
     Rect confirmRect(int i) const;  // 0 Delete, 1 Cancel
-    static Rect commentRect();      // above the system keyboard
+    static Rect commentRect();                // above the device's keyboard (when lipc says nothing)
+    static Rect commentRectAbove(Rect keyboard);  // above this keyboard; commentRect() if it is empty
 
     // True once since the last call if the annotation changed (the page's highlights need redoing).
     bool takeChanged();
@@ -88,6 +89,7 @@ private:
     AnnotationBar bar_;
     State state_ = State::Bar;
     std::string comment_;
+    Rect commentBox_;  // placed when the comment opens, above the keyboard as it is then
     bool changed_ = false;
 };
 

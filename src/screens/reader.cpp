@@ -128,7 +128,6 @@ ReaderScreen::~ReaderScreen() = default;
 
 Rect ReaderScreen::pageArea() { return {0, 0, W(), H() - kFooterH}; }
 Rect ReaderScreen::footerArea() { return {0, H() - kFooterH, W(), kFooterH}; }
-Rect ReaderScreen::noteRect() { return AnnotationEditor::commentRect(); }  // above the system keyboard
 
 bool ReaderScreen::wantsKeyboard() const { return note_.has_value() || (editor_ && editor_->wantsKeyboard()); }
 
@@ -458,6 +457,7 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             bar_.reset();
             note_.emplace();
             nav.keyboard().show();
+            noteBox_ = AnnotationEditor::commentRectAbove(nav.keyboard().bounds());
             nav.damage(noteRect(), Waveform::Ui);
             break;
         default:

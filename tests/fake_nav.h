@@ -20,11 +20,13 @@ public:
     // The device's keyboard at the bottom of the window (the PW5's: {0, 980, 1236, 567}).
     Rect bounds() const override {
         if (!shown) return {};
+        if (!fixed.empty()) return fixed;  // what lipc reported, when a test says so
         const int h = profileFor(metrics().device, 300).keyboardHeightPx;
         return {0, metrics().height - h, metrics().width, h};
     }
     bool shown = false;
     int shows = 0, hides = 0;
+    Rect fixed;
 };
 
 class FakeNav : public Nav {

@@ -74,7 +74,7 @@ public:
     AnnotationBar* annotationBar() { return bar_.get(); }
     bool noteOpen() const { return note_.has_value(); }
     AnnotationEditor* annotationEditor() { return editor_.get(); }
-    static Rect noteRect();
+    Rect noteRect() const { return noteBox_; }  // the note box, above the keyboard as it was when opened
 
 private:
     void startSelection(Point at, Nav&);
@@ -118,6 +118,7 @@ private:
     std::optional<Selection> selection_;
     std::unique_ptr<AnnotationBar> bar_;
     std::optional<TextField> note_;
+    Rect noteBox_;
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened

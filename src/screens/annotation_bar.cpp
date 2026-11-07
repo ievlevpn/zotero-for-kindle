@@ -107,7 +107,12 @@ Rect AnnotationEditor::commentRect() {
     return {40, top - 290, metrics().width - 80, 260};
 }
 
-Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentRect() : bar_.rect(); }
+Rect AnnotationEditor::commentRectAbove(Rect keyboard) {
+    if (keyboard.empty()) return commentRect();
+    return {40, std::max(0, keyboard.y - 290), metrics().width - 80, 260};
+}
+
+Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentBox_ : bar_.rect(); }
 
 Rect AnnotationEditor::confirmRect(int i) const { return bar_.buttonRect(i); }
 
@@ -122,6 +127,7 @@ void AnnotationEditor::enter(State s, Nav& nav) {
     if (s == State::Comment) {
         comment_ = annotation_.comment;
         nav.keyboard().show();
+        commentBox_ = commentRectAbove(nav.keyboard().bounds());
     } else if (state_ == State::Comment) {
         nav.keyboard().hide();
     }
@@ -154,7 +160,7 @@ void AnnotationEditor::draw(cairo_t* cr) const {
 AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
     switch (state_) {
         case State::Comment:
-            if (commentRect().contains(p)) return Result::Open;
+            if (commentBox_.contains(p)) return Result::Open;
             nav.keyboard().hide();
             return Result::Closed;
         case State::Confirm:
@@ -211,7 +217,7 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
         changed_ = true;
         return Result::Closed;
     }
-    nav.damage(commentRect(), Waveform::Fast);
+    nav.damage(commentBox_, Waveform::Fast);
     return Result::Open;
 }
 
