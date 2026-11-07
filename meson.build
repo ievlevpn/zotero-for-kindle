@@ -128,6 +128,7 @@ fs = import('fs')
 cxx = meson.get_compiler('cpp')
 deps_prefix = meson.project_source_root() / 'build-deps' / backend / 'prefix'
 docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/shade.cpp', 'src/docs/render_worker.cpp',
+  'src/docs/annotation_text.cpp',
   include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
 docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, dependency('threads'), cxx.find_library('dl', required : false)])
 
@@ -216,6 +217,7 @@ if fs.exists(deps_prefix / 'lib' / 'libcrengine.a')
     'src/docs/epub/epub_module.cpp',
     'src/docs/epub/epub_engine.cpp',
     'src/docs/epub/cfi.cpp',
+    'src/docs/annotation_text.cpp',
     'third_party/pugixml/pugixml.cpp',
     'src/docs/shade.cpp',
     name_prefix : 'lib', name_suffix : 'so',
@@ -235,6 +237,7 @@ if fs.exists(deps_prefix / 'lib' / 'libmupdf.a')
   shared_module('zk-pdf',
     'src/docs/pdf/pdf_module.cpp',
     'src/docs/pdf/pdf_engine.cpp',
+    'src/docs/annotation_text.cpp',
     'src/docs/shade.cpp',
     name_prefix : 'lib', name_suffix : 'so',
     include_directories : [inc, include_directories('third_party', is_system : true),
