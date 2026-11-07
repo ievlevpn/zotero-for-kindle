@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "update/manifest.h"
 #include "update/release_key.h"
 #include "update/signature.h"
 #include "update/version.h"
@@ -69,4 +70,21 @@ TEST_CASE("update: sha512 of a file") {
           "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f");
     std::remove(path.c_str());
     CHECK_FALSE(sha512FileHex(path));
+}
+
+TEST_CASE("update: the release key is set") {
+    bool zero = true;
+    for (uint8_t b : kReleasePublicKey) zero = zero && b == 0;
+    CHECK_FALSE(zero);
+}
+
+TEST_CASE("update: a packaged manifest verifies") {
+    // Only after tools/sign-release.sh dist VERSION (tools/release.sh): the real key, the real zip.
+    std::ifstream manifest("dist/update.json", std::ios::binary), sig("dist/update.json.sig", std::ios::binary);
+    if (!manifest || !sig) return;
+    const std::string m((std::istreambuf_iterator<char>(manifest)), {}), s((std::istreambuf_iterator<char>(sig)), {});
+    CHECK(verifySignature(m, s, kReleasePublicKey));
+    auto parsed = parseManifest(m);
+    REQUIRE(parsed);
+    CHECK(sha512FileHex("dist/zotero-for-kindle.zip") == parsed->sha512);
 }
