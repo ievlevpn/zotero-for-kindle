@@ -14,12 +14,13 @@ CA=build-deps/kindle/prefix/share/cacert.pem
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 Z="$STAGE/zotero"
-mkdir -p "$Z/bin" "$Z/lib" "$Z/share/crengine" "$STAGE/documents"
+mkdir -p "$Z/bin" "$Z/lib" "$Z/share/crengine" "$Z/share/fonts" "$STAGE/documents"
 cp "$D/zotero" "$D/zk-sync" "$Z/bin/"
 cp "$D"/libzk-*.so "$Z/lib/"
 cp -R third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gui/data/epub.css \
     third_party/crengine/cr3gui/data/html5.css "$Z/share/crengine/"
 cp assets/launcher/icon.png "$CA" "$Z/share/"
+cp assets/fonts-fast/* "$Z/share/fonts/"  # Fast Font (MIT), with its LICENSE
 cp assets/launcher/Zotero.sh "$STAGE/documents/"
 cp LICENSE "$Z/"
 chmod +x "$Z"/bin/* "$STAGE/documents/Zotero.sh"

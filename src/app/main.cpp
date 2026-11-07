@@ -67,11 +67,10 @@ int64_t wallMs() {
 
 #ifdef ZK_KINDLE
 const char* kCaBundle = "/mnt/us/zotero/share/cacert.pem";
-const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", {"/usr/java/lib/fonts", "/mnt/us/zotero/fonts"},
-                           "/mnt/us/zotero/cache/cre"};
+const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", readingFontDirs(), "/mnt/us/zotero/cache/cre"};
 #else
 const char* kCaBundle = "";
-const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", {"assets/fonts-device", "local/fonts"}, "local/cache/cre"};
+const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", readingFontDirs(), "local/cache/cre"};
 #endif
 
 // The lifecycle talks to whichever sync is current (none before Setup, the service after).

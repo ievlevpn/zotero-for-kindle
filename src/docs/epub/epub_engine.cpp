@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <regex>
 #include <fstream>
+#include <set>
 #include <mutex>
 #include <sstream>
 
@@ -24,22 +25,30 @@ constexpr double kDpi = 300.0;
 
 std::string utf8(const lString32& s) { return UnicodeToUtf8(s).c_str(); }
 
-// crengine's font manager and hyphenation are process-wide: set them up once.
+// crengine's font manager and hyphenation are process-wide: set them up once. Font folders are
+// registered the first time an engine names them.
+void registerFonts(const std::vector<std::string>& dirs) {
+    static std::mutex m;
+    static std::set<std::string> done;
+    std::lock_guard<std::mutex> lock(m);
+    for (const auto& dir : dirs) {
+        if (!done.insert(dir).second) continue;
+        DIR* d = opendir(dir.c_str());
+        if (!d) continue;
+        while (dirent* e = readdir(d)) {
+            const std::string name = e->d_name;
+            const std::string ext = name.size() > 4 ? name.substr(name.size() - 4) : "";
+            if (ext == ".ttf" || ext == ".otf" || ext == ".TTF" || ext == ".OTF")
+                fontMan->RegisterFont(lString8((dir + "/" + name).c_str()));
+        }
+        closedir(d);
+    }
+}
+
 void initCrengine(const EngineEnv& env) {
     static std::once_flag once;
     std::call_once(once, [&] {
         InitFontManager(lString8::empty_str);
-        for (const auto& dir : env.fontDirs) {
-            DIR* d = opendir(dir.c_str());
-            if (!d) continue;
-            while (dirent* e = readdir(d)) {
-                const std::string name = e->d_name;
-                const std::string ext = name.size() > 4 ? name.substr(name.size() - 4) : "";
-                if (ext == ".ttf" || ext == ".otf" || ext == ".TTF" || ext == ".OTF")
-                    fontMan->RegisterFont(lString8((dir + "/" + name).c_str()));
-            }
-            closedir(d);
-        }
         // The trailing slash matters: crengine treats a path without one as a single file
         // (why spike S1's dictionaries never loaded).
         HyphMan::initDictionaries(Utf8ToUnicode(lString8((env.dataDir + "/hyph/").c_str())));
@@ -51,6 +60,7 @@ void initCrengine(const EngineEnv& env) {
             ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), 64 * 1024 * 1024);
         }
     });
+    registerFonts(env.fontDirs);
 }
 
 // META-INF/encryption.xml that encrypts more than fonts = DRM.
@@ -92,6 +102,10 @@ EpubEngine::~EpubEngine() {
 
 void EpubEngine::applyLayout() {
     if (!view_) return;
+    // Fast Font bolds word beginnings with an OpenType feature: it needs HarfBuzz shaping, which
+    // costs time, so only while one is chosen.
+    const kerning_mode_t kerning = layout_.font.rfind("Fast ", 0) == 0 ? KERNING_MODE_HARFBUZZ : KERNING_MODE_DISABLED;
+    if (fontMan->GetKerningMode() != kerning) fontMan->SetKerningMode(kerning);
     view_->setDefaultFontFace(lString8(layout_.font.c_str()));
     view_->setFontSize(static_cast<int>(layout_.sizePt * kDpi / 72.0 + 0.5));
     view_->setPageMargins(lvRect(layout_.marginPx, layout_.marginPx, layout_.marginPx, layout_.marginPx / 2));

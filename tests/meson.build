@@ -39,6 +39,7 @@ test_sources = files(
   'test_update_notice.cpp',
   'test_scaled_display.cpp',
   'test_layout_kt4.cpp',
+  'test_fast_fonts.cpp',
   'test_zotero_storage.cpp',
   'test_item_details.cpp',
   'test_reading_position.cpp',
