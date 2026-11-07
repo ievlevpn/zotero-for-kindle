@@ -144,6 +144,7 @@ screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep
 app_lib = static_library('zk-app',
   'src/app/app.cpp',
   'src/app/startup.cpp',
+  'src/app/lifecycle.cpp',
   include_directories : ui_incs,
   dependencies : [screens_dep, services_dep, sync_dep])
 app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep])

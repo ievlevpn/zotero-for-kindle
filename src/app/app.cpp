@@ -46,6 +46,7 @@ void App::start() {
     pending_.clear();
     pending_.push_back({{0, 0, canvas_.width(), canvas_.height()}, Waveform::Full});
     flush();
+    log(LogLevel::Info, "first screen presented");
 }
 
 void App::showTop() {
@@ -144,10 +145,14 @@ void App::step(int timeout_ms) {
                     caller_ = nullptr;
                 }
                 break;
-            case InputEvent::Kind::Background: log(LogLevel::Info, "background"); break;
+            case InputEvent::Kind::Background:
+                log(LogLevel::Info, "background");
+                if (lifecycle_) lifecycle_(false);
+                break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");
                 redrawAll(Waveform::Full);
+                if (lifecycle_) lifecycle_(true);
                 break;
         }
     }
@@ -180,6 +185,10 @@ void App::step(int timeout_ms) {
         caller_ = s;
         s->onTick(*this);
         caller_ = nullptr;
+    }
+    if (watchdog_ && clock_() - lastWatchdogMs_ >= watchdogPeriodMs_) {
+        lastWatchdogMs_ = clock_();
+        if (!watchdog_()) quit_ = true;
     }
     auto deferred = std::move(deferred_);
     deferred_.clear();

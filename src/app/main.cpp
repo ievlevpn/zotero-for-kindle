@@ -11,9 +11,11 @@
 
 #include "app/app.h"
 #include "app/paths.h"
+#include "app/lifecycle.h"
 #include "app/settings_store.h"
 #include "app/startup.h"
 #include "core/log.h"
+#include "net/errors.h"
 #include "net/http.h"
 #include "platform/display.h"
 #include "platform/keyboard.h"
@@ -52,6 +54,22 @@ const char* kCaBundle = "/mnt/us/zotero/share/cacert.pem";
 #else
 const char* kCaBundle = "";
 #endif
+
+// The lifecycle talks to whichever sync is current (none before Setup, the service after).
+class CurrentSync final : public SyncControl {
+public:
+    explicit CurrentSync(App& app) : app_(app) {}
+    void syncNow() override { app_.sync().syncNow(); }
+    void openBook(const std::string& i, const std::string& a) override { app_.sync().openBook(i, a); }
+    void setAllHighlightsOffline(bool on) override { app_.sync().setAllHighlightsOffline(on); }
+    void removeDownloads() override { app_.sync().removeDownloads(); }
+    void setIntervalMinutes(int m) override { app_.sync().setIntervalMinutes(m); }
+    bool poll(SyncEvent& e) override { return app_.sync().poll(e); }
+    bool busy() const override { return app_.sync().busy(); }
+
+private:
+    App& app_;
+};
 
 class NullKeyboard final : public Keyboard {
 public:
@@ -192,8 +210,14 @@ int main(int argc, char** argv) {
         // No account yet, or one just dropped over USB: confirm it on the Setup screen first.
         app.setRoot(0, makeSetup(config.value_or(Config{}), startup.imported));
     }
+    CurrentSync current(app);
+    Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
+                        [] { return probeNetState().wifiConnected; },
+                        [&paths] { return storageAvailable(paths.filesDir); });
+    lifecycle.attach(app);
     app.start();
     const int rc = app.run();
+    log(LogLevel::Info, "zotero exiting");
     if (service) service->stop();
     keyboard->hide();
     return rc;

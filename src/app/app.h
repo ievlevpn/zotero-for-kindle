@@ -36,6 +36,12 @@ public:
     void replaceRoot(int tab, std::unique_ptr<Screen>);
     // Run after the current loop iteration (safe to replace the calling screen).
     void defer(std::function<void()> f) { deferred_.push_back(std::move(f)); }
+    void setLifecycleHook(std::function<void(bool foreground)> f) { lifecycle_ = std::move(f); }
+    // Checked every `periodMs`; returning false quits the app.
+    void setWatchdog(std::function<bool()> ok, int64_t periodMs) {
+        watchdog_ = std::move(ok);
+        watchdogPeriodMs_ = periodMs;
+    }
     Library& library() override { return lib_; }
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
@@ -68,6 +74,9 @@ private:
     bool quit_ = false;
     std::function<void(const SyncEvent&, Nav&)> hook_;
     std::vector<std::function<void()>> deferred_;
+    std::function<void(bool)> lifecycle_;
+    std::function<bool()> watchdog_;
+    int64_t watchdogPeriodMs_ = 0, lastWatchdogMs_ = 0;
     std::string toast_;
     int64_t toastUntil_ = 0;
     bool toastShown_ = false;
