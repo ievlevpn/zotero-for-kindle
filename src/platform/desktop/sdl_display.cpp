@@ -33,6 +33,7 @@ public:
     }
 
     const int kW, kH;
+    std::string deviceName() const override { return metrics().device; }  // the Kindle imitated
 
     ~SdlDisplay() override {
         SDL_DestroyTexture(tex_);
