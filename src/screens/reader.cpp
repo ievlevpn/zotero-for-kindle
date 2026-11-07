@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "screens/annotation_bar.h"
 #include "screens/reader_menus.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -78,6 +79,30 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
     cairo_surface_mark_dirty(c.surface());
 }
 
+// The selection, shown inverted (white text on black), as Kindle shows it.
+void drawSelection(Canvas& c, const std::vector<Rect>& rects) {
+    if (rects.empty()) return;
+    cairo_surface_flush(c.surface());
+    unsigned char* data = cairo_image_surface_get_data(c.surface());
+    const int stride = cairo_image_surface_get_stride(c.surface());
+    for (const Rect& box : rects) {
+        const Rect r = box.intersected(ReaderScreen::pageArea());
+        for (int y = r.y; y < r.y + r.h; ++y) {
+            auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
+            for (int x = r.x; x < r.x + r.w; ++x) row[x] = 0xff000000u | (~row[x] & 0x00ffffffu);
+        }
+    }
+    cairo_surface_mark_dirty(c.surface());
+}
+
+Rect boundsOf(const std::vector<Rect>& rects) {
+    Rect out;
+    for (const Rect& r : rects) out = out.united(r);
+    return out;
+}
+
+constexpr const char* kColourKey = "annotationColour";
+
 }  // namespace
 
 ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery,
@@ -89,12 +114,14 @@ ReaderScreen::~ReaderScreen() = default;
 
 Rect ReaderScreen::pageArea() { return {0, 0, kW, kH - kFooterH}; }
 Rect ReaderScreen::footerArea() { return {0, kH - kFooterH, kW, kFooterH}; }
+Rect ReaderScreen::noteRect() { return {40, 690, kW - 80, 260}; }  // above the system keyboard
 
-bool ReaderScreen::wantsKeyboard() const { return false; }
+bool ReaderScreen::wantsKeyboard() const { return note_.has_value(); }
 
 void ReaderScreen::onShow(Nav& nav) {
     if (worker_) return;  // back from a pushed panel: the book stays open
     layout_ = loadLayout(nav.library(), row_.key);
+    if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
     DocPosition start;
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
     worker_ = makeWorker_();
@@ -120,10 +147,22 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::SearchResults:
                 if (searchListener_) searchListener_(e.requestId, e.hits);
                 break;
+            case RenderEvent::Kind::Selection:
+                onSelection(e, nav);
+                break;
+            case RenderEvent::Kind::HitAnnotation:
+                break;
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
+                if (e.page != page_ && (selecting_ || selection_)) {  // the page changed under the selection
+                    if (note_) nav.keyboard().hide();
+                    selecting_ = selDragging_ = false;
+                    selection_.reset();
+                    bar_.reset();
+                    note_.reset();
+                }
                 image_ = e.image;
                 highlights_ = e.highlights;
                 page_ = e.page;
@@ -208,6 +247,43 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         menus_->onGesture(g, nav);
         return;
     }
+    if (note_) {  // typing a note: a tap elsewhere gives up on it
+        if (g.type == GestureType::Tap && !noteRect().contains(g.pos)) closeSelection(nav);
+        return;
+    }
+    if (selecting_ || selection_) {
+        switch (g.type) {
+            case GestureType::DragStart:
+                selDragging_ = true;
+                if (bar_) {
+                    nav.damage(bar_->rect(), Waveform::Fast);
+                    bar_.reset();
+                }
+                requestSelection(g.pos);
+                return;
+            case GestureType::DragMove:
+                requestSelection(g.pos);
+                return;
+            case GestureType::DragEnd:
+                selDragging_ = false;
+                requestSelection(g.pos);
+                return;
+            case GestureType::Tap:
+                if (bar_ && bar_->rect().contains(g.pos)) onBarTap(g.pos, nav);
+                else closeSelection(nav);
+                return;
+            case GestureType::LongPress:
+                closeSelection(nav);
+                break;  // and select anew below
+            case GestureType::Swipe:
+                closeSelection(nav);
+                return;
+        }
+    }
+    if (g.type == GestureType::LongPress) {
+        if (ready() && pageArea().contains(g.pos)) startSelection(g.pos, nav);
+        return;
+    }
     if (g.type == GestureType::Swipe) {
         if (g.dir == Direction::Left) turn(+1, nav);
         if (g.dir == Direction::Right) turn(-1, nav);
@@ -220,7 +296,105 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
 }
 
 void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
+    if (note_) {
+        if (k.code == KeyEvent::Code::Escape) return closeSelection(nav);
+        note_->apply(k);
+        if (note_->submitted()) return saveSelection("highlight", note_->text(), nav);
+        nav.damage(noteRect(), Waveform::Fast);
+        return;
+    }
     if (menus_) menus_->onKey(k, nav);
+}
+
+void ReaderScreen::startSelection(Point at, Nav&) {
+    if (!worker_ || page_ < 0) return;
+    selecting_ = true;
+    selDragging_ = false;
+    selAnchor_ = at;
+    requestSelection(at);
+}
+
+void ReaderScreen::requestSelection(Point to) {
+    if (worker_ && selecting_) selPending_ = worker_->select(page_, selAnchor_, to);
+}
+
+void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
+    if (!selecting_ || e.requestId != selPending_ || e.page != page_) return;
+    if (!e.selection) {
+        if (!selection_) selecting_ = false;    // the long-press wasn't on text
+        else if (!selDragging_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
+        return;
+    }
+    if (e.selection->text.empty()) {
+        selecting_ = false;
+        selection_.reset();
+        nav.toast("This page has no selectable text.");
+        return;
+    }
+    const Rect before = selection_ ? boundsOf(selection_->rects) : Rect{};
+    selection_ = e.selection;
+    nav.damage(before.united(boundsOf(selection_->rects)), Waveform::Fast);
+    if (!selDragging_) showBar(nav);
+}
+
+void ReaderScreen::showBar(Nav& nav) {
+    if (!selection_) return;
+    bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_);
+    nav.damage(bar_->rect(), Waveform::Fast);
+}
+
+void ReaderScreen::onBarTap(Point p, Nav& nav) {
+    const AnnotationBar::Hit hit = bar_->hit(p);
+    switch (hit.action) {
+        case AnnotationBar::Action::Colour:
+            colour_ = zoteroColours()[hit.colour].hex;
+            bar_->setColour(colour_);
+            nav.damage(bar_->rect(), Waveform::Fast);
+            break;
+        case AnnotationBar::Action::Highlight:
+            saveSelection("highlight", "", nav);
+            break;
+        case AnnotationBar::Action::Underline:
+            saveSelection("underline", "", nav);
+            break;
+        case AnnotationBar::Action::Note:
+            nav.damage(bar_->rect(), Waveform::Fast);
+            bar_.reset();
+            note_.emplace();
+            nav.keyboard().show();
+            nav.damage(noteRect(), Waveform::Fast);
+            break;
+        default:
+            break;
+    }
+}
+
+void ReaderScreen::saveSelection(const std::string& type, const std::string& comment, Nav& nav) {
+    if (!selection_) return closeSelection(nav);
+    AnnotationRecord a;
+    a.parentKey = row_.attachmentKey;
+    a.type = type;
+    a.text = selection_->text;
+    a.comment = comment;
+    a.color = colour_;
+    a.sortIndex = selection_->sortIndex;
+    a.position = selection_->position;
+    a.pageLabel = selection_->pageLabel;
+    a.localOnly = !selection_->roundTrips;  // §7.5: never upload a place that doesn't round-trip
+    nav.library().createAnnotation(a);
+    nav.library().setMetaValue(kColourKey, colour_);
+    if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
+    if (worker_) worker_->highlightsFor(nav.library().annotationsFor(row_.attachmentKey));
+    closeSelection(nav);
+}
+
+void ReaderScreen::closeSelection(Nav& nav) {
+    if (note_) nav.keyboard().hide();
+    selecting_ = selDragging_ = false;
+    selection_.reset();
+    bar_.reset();
+    note_.reset();
+    nav.damage(pageArea(), Waveform::Quality);
 }
 
 void ReaderScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
@@ -255,9 +429,26 @@ void ReaderScreen::draw(Canvas& canvas) {
     }
     blit(canvas, *image_, 0);
     drawHighlights(canvas, highlights_);
+    if (selection_) drawSelection(canvas, selection_->rects);
     const Rect f = footerArea();
     drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, kW - 2 * kMargin - 260, 40}, 1);
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {kW - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
+    if (bar_) bar_->draw(cr);
+    if (note_) {
+        const Rect n = noteRect();
+        roundedRect(cr, n.x + 1.5, n.y + 1.5, n.w - 3, n.h - 3, 18);
+        gray(cr, 255);
+        cairo_fill_preserve(cr);
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 3);
+        cairo_stroke(cr);
+        drawText(cr, "Note", {kSans, 8, 500}, {n.x + 30, n.y + 24, n.w - 60, 50}, 1);
+        const bool empty = note_->text().empty();
+        drawText(cr, empty ? "Type a note…" : note_->text(), {kSerif, 9, 400, false, empty ? kTertiary : kInk},
+                 {n.x + 30, n.y + 84, n.w - 60, 110}, 2);
+        drawText(cr, "Return saves", {kSans, 6, 400, false, kTertiary}, {n.x + 30, n.y + n.h - 56, n.w - 60, 40}, 1,
+                 Align::Right);
+    }
     if (menus_) menus_->draw(canvas);
 }
 
