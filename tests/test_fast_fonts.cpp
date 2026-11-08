@@ -15,14 +15,14 @@ namespace {
 
 EngineEnv env() { return {"third_party/crengine/cr3gui/data", readingFontDirs(), "/tmp/zk-cre-cache-fast"}; }
 
-// Share of dark pixels on page 8 of Alice in `font`.
-double ink(DocumentEngine& epub, const std::string& font) {
+// Share of dark pixels on page 8 of Alice (or `page`) in `font`.
+double ink(DocumentEngine& epub, const std::string& font, int page = 8) {
     Layout l;
     l.width = 1236;
     l.height = 1487;
     l.font = font;
     epub.setLayout(l);
-    const PageImage img = epub.render(8);
+    const PageImage img = epub.render(page);
     const auto dark = std::count_if(img.gray.begin(), img.gray.end(), [](uint8_t g) { return g < 100; });
     return static_cast<double>(dark) / static_cast<double>(img.gray.size());
 }
@@ -93,4 +93,17 @@ TEST_CASE("fast fonts: two books on two threads, one switching shaping, don't co
     }
     stop = true;
     other.join();
+}
+
+TEST_CASE("fonts: the chosen font wins over the fonts a book's style sheet names") {
+    if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
+    UserError err;
+    auto epub = loadEngine(DocType::Epub, env(), &err);
+    REQUIRE(epub);
+    REQUIRE(epub->open("tests/data/epub/publisher-fonts.epub", &err));
+    // The book asks for "Times New Roman", serif and Arial: neither is here, so without the
+    // choice winning both renders would fall back alike.
+    const double bookerly = ink(*epub, "Bookerly", 0), fast = ink(*epub, "Fast Serif", 0);
+    MESSAGE("ink: Bookerly ", bookerly, ", Fast Serif ", fast);
+    CHECK(fast > bookerly * 1.25);
 }

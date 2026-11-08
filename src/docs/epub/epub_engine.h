@@ -56,6 +56,7 @@ private:
     EngineEnv env_;
     Layout layout_;
     std::unique_ptr<LVDocView> view_;
+    std::string baseCss_;  // crengine's epub.css; applyLayout adds the chosen font
     std::unique_ptr<EpubDom> dom_;
     std::vector<TocEntry> toc_;
 };

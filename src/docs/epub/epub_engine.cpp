@@ -123,6 +123,15 @@ void EpubEngine::applyLayout() {
     const kerning_mode_t kerning = isFastFont(layout_.font) ? KERNING_MODE_HARFBUZZ : KERNING_MODE_DISABLED;
     if (fontMan->GetKerningMode() != kerning) fontMan->SetKerningMode(kerning);
     view_->setDefaultFontFace(lString8(layout_.font.c_str()));
+    // The chosen font wins over the ones a book's style sheet names (most EPUBs name some:
+    // "Times New Roman", Arial, embedded fonts), as on the Kindle's own reader; code stays
+    // monospace.
+    std::string family;
+    for (char ch : layout_.font)
+        if (ch != '"' && ch != '\\') family += ch;
+    view_->setStyleSheet(lString8((baseCss_ + "\nbody, body * { font-family: \"" + family +
+                                   "\" !important; }\npre, pre *, code, code *, tt, kbd, samp { font-family: monospace !important; }\n")
+                                      .c_str()));
     view_->setFontSize(static_cast<int>(layout_.sizePt * kDpi / 72.0 + 0.5));
     view_->setPageMargins(lvRect(layout_.marginPx, layout_.marginPx, layout_.marginPx, layout_.marginPx / 2));
     view_->setPageHeaderInfo(0);
@@ -154,8 +163,8 @@ bool EpubEngine::open(const std::string& path, UserError* err) {
     std::ifstream css(env_.dataDir + "/epub.css");
     std::stringstream cssText;
     cssText << css.rdbuf();
-    view_->setStyleSheet(lString8(cssText.str().c_str()));
-    applyLayout();
+    baseCss_ = cssText.str();
+    applyLayout();  // the style sheet, with the chosen font
     if (!view_->LoadDocument(path.c_str()) || !view_->getDocument())
         return fail("This EPUB is damaged and can't be opened.", "crengine: LoadDocument failed");
     view_->setViewMode(DVM_PAGES, cols());
