@@ -34,3 +34,5 @@ project for error-handling tests.
 `links-patterns.epub` (made by `make_links_epub.py`): the link patterns real EPUBs use —
 Gutenberg notes (an empty anchor paragraph before `<p class="foot">N (return) [ … ]`), Pandoc
 notes with a back-link, a Standard Ebooks endnote, a chapter link and a printed-page anchor.
+
+- `publisher-fonts.epub`: made by `make_styled_epub.py` — a book whose CSS names its own fonts ("Times New Roman", serif; Arial; a monospace code block), as most real EPUBs do, for the font-choice override.
