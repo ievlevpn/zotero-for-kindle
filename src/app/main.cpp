@@ -389,9 +389,10 @@ int main(int argc, char** argv) {
         });
     pluginEvents.onBackgroundDone([&](uint64_t round) { backgroundRound.done(round); });
     // The start counts as good after 60 s of running (not at the first screen: plugins start after
-    // it); a clean exit counts too. Until then a crash leaves the count for the next start.
-    bool startConfirmed = pluginsOff;
-    if (!pluginsOff) {  // ended by the system (SIGTERM, SIGINT, SIGHUP): not a crash either
+    // it); a clean exit counts too. Until then a crash leaves the count for the next start. Only a
+    // start with some plugin on was counted; with none on there is nothing to confirm.
+    bool startConfirmed = !safeMode.counting;
+    if (safeMode.counting) {  // ended by the system (SIGTERM, SIGINT, SIGHUP): not a crash either
         armSafeModeSignalConfirm(paths.pluginsDir);
         for (int sig : {SIGTERM, SIGINT, SIGHUP}) std::signal(sig, safeModeEndingSignal);
     }
@@ -589,7 +590,7 @@ int main(int argc, char** argv) {
             if (auto att = lib.attachment(argv[i + 1]))
                 if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey)) flow.open(*row, app);
     const int rc = app.run();
-    if (!pluginsOff) confirmSafeModeStart(paths.pluginsDir);  // a clean end is a good start, however short
+    if (safeMode.counting) confirmSafeModeStart(paths.pluginsDir);  // a clean end is a good start, however short
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     watchdog.beat("stopping plugins");

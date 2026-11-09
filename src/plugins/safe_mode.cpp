@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <vector>
 
 #include "plugins/manifest.h"
 #include "plugins/state.h"
@@ -43,16 +44,28 @@ void writeStarts(const std::string& dir, int n) {
 
 SafeModeDecision decideSafeMode(const std::string& pluginsDir, bool launcherAskedNoPlugins) {
     std::error_code ec;
-    if (launcherAskedNoPlugins || fs::exists(fs::path(pluginsDir) / "OFF", ec)) return {true, false};
+    if (launcherAskedNoPlugins || fs::exists(fs::path(pluginsDir) / "OFF", ec)) return {true, false, false};
+    // Only starts with some installed plugin on count ("twice in a row while plugins are on"): an
+    // app with no plugin on writes nothing here, and a crash of its own never turns plugins off.
+    std::vector<PluginFolder> on;
+    if (fs::exists(pluginsDir + "/.state.json", ec)) {
+        PluginState state(pluginsDir + "/.state.json");
+        for (auto& f : scanPlugins(pluginsDir, appVersion()))
+            if (state.enabled(f.dir)) on.push_back(std::move(f));
+    }
+    if (on.empty()) {
+        fs::remove(pluginsDir + "/.starts", ec);  // a count from when plugins were on doesn't carry over
+        return {false, false, false};
+    }
     const int n = readStarts(pluginsDir + "/.starts");
     if (n < 2) {
         writeStarts(pluginsDir, n + 1);
-        return {false, false};
+        return {false, false, true};
     }
     PluginState state(pluginsDir + "/.state.json");
-    for (const auto& f : scanPlugins(pluginsDir, appVersion())) state.turnOff(f.dir);
+    for (const auto& f : on) state.turnOff(f.dir);
     writeStarts(pluginsDir, 0);
-    return {true, true};
+    return {true, true, false};
 }
 
 void confirmSafeModeStart(const std::string& pluginsDir) {

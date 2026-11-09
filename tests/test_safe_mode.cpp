@@ -26,6 +26,12 @@ std::string readStarts(FakePlugins& d) {
     return s;
 }
 
+// A plugin "a", turned on: starts count only while some plugin is on.
+void enableOne(FakePlugins& d) {
+    d.add("a", "");
+    PluginState(d.dir() + "/.state.json").setEnabled("a", true);
+}
+
 }  // namespace
 
 TEST_CASE("safe mode: two unconfirmed starts turn plugins off, automatic") {
@@ -64,6 +70,7 @@ TEST_CASE("safe mode: two unconfirmed starts turn plugins off, automatic") {
 
 TEST_CASE("safe mode: a confirmed start resets the count") {
     FakePlugins d;
+    enableOne(d);
     const std::string dir = d.dir();
     CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
     CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
@@ -80,6 +87,7 @@ TEST_CASE("safe mode: a confirmed start resets the count") {
 
 TEST_CASE("safe mode: a garbled count reads as zero") {
     FakePlugins d;
+    enableOne(d);
     d.write(".starts", "not a number");
     CHECK_FALSE(decideSafeMode(d.dir(), false).pluginsOff);
     CHECK(readStarts(d) == "1");
@@ -139,6 +147,7 @@ TEST_CASE("safe mode: Settings -> Plugins lists the plugins without loading them
 
 TEST_CASE("safe mode: the system ending the app counts as a confirmed start") {
     FakePlugins d;
+    enableOne(d);
     const std::string dir = d.dir();
     CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
     CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
@@ -147,4 +156,59 @@ TEST_CASE("safe mode: the system ending the app counts as a confirmed start") {
     CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
     CHECK(readStarts(d) == "1");  // back to counting from zero
     // (The handlers themselves, in main.cpp and wet_ink.cpp, only call this and re-raise: not run here.)
+}
+
+TEST_CASE("safe mode: with no plugin on, starts aren't counted and nothing is written") {
+    SUBCASE("no plugins folder: none is created") {
+        const std::string dir = (std::filesystem::temp_directory_path() / ("zk-no-plugins-" + std::to_string(::getpid()))).string();
+        std::filesystem::remove_all(dir);
+        for (int i = 0; i < 4; ++i) {
+            const auto s = decideSafeMode(dir, false);
+            CHECK_FALSE(s.pluginsOff);
+            CHECK_FALSE(s.automatic);
+            CHECK_FALSE(s.counting);
+        }
+        CHECK_FALSE(std::filesystem::exists(dir));
+    }
+    SUBCASE("plugins installed but all off: never automatic, no count file") {
+        FakePlugins d;
+        d.add("a", "");
+        d.add("b", "");
+        PluginState(d.dir() + "/.state.json").setEnabled("b", false);
+        for (int i = 0; i < 4; ++i) {
+            const auto s = decideSafeMode(d.dir(), false);
+            CHECK_FALSE(s.pluginsOff);
+            CHECK_FALSE(s.automatic);
+            CHECK_FALSE(s.counting);
+        }
+        CHECK_FALSE(std::filesystem::exists(startsFile(d)));
+    }
+    SUBCASE("a count left from when a plugin was on is dropped, so turning one on later starts afresh") {
+        FakePlugins d;
+        d.add("a", "");
+        d.write(".starts", "2\n");
+        const auto s = decideSafeMode(d.dir(), false);
+        CHECK_FALSE(s.pluginsOff);
+        CHECK_FALSE(s.automatic);
+        CHECK_FALSE(std::filesystem::exists(startsFile(d)));
+        PluginState(d.dir() + "/.state.json").setEnabled("a", true);
+        const auto on = decideSafeMode(d.dir(), false);
+        CHECK_FALSE(on.pluginsOff);
+        CHECK(on.counting);
+        CHECK(readStarts(d) == "1");
+    }
+    SUBCASE("a plugin on in the state but no longer installed doesn't count") {
+        FakePlugins d;
+        PluginState(d.dir() + "/.state.json").setEnabled("gone", true);
+        for (int i = 0; i < 3; ++i) CHECK_FALSE(decideSafeMode(d.dir(), false).automatic);
+        CHECK_FALSE(std::filesystem::exists(startsFile(d)));
+    }
+}
+
+TEST_CASE("safe mode: with a plugin on, the start is counted (counting = true)") {
+    FakePlugins d;
+    enableOne(d);
+    const auto s = decideSafeMode(d.dir(), false);
+    CHECK(s.counting);
+    CHECK(readStarts(d) == "1");
 }
