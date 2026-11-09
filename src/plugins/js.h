@@ -20,7 +20,7 @@ namespace zk::js {
 struct JsError {
     std::string message, stack;
     std::string name;  // "TypeError", … ("" when what was thrown isn't an object)
-    bool network = false;  // an error the host marked as a lost connection (zk.fetch: no route, DNS, refused)
+    bool network = false;  // the very error object the host rejected a zk.fetch with for a lost connection (identity, never a property the plugin could set)
     // Wording only: "stopped by a resource limit" rather than "threw". The host counts both kinds
     // of failure alike, so a wrong value here changes the message shown, never what is enforced.
     //  - Reliable (observed events): the deadline interrupt (uncatchable) and a refused allocation

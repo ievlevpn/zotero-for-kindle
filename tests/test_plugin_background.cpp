@@ -243,12 +243,12 @@ TEST_CASE("background: a task that dies of a lost connection is not counted and 
         CHECK(s.lastBackgroundMs("a") == 0);
     }
     CHECK(ofKind(drain(host), PluginHostEvent::Kind::BackgroundDone) == 1);
-    // Many flaky hours never turn it off.
-    for (int i = 0; i < 4; ++i) {
+    // A few flaky hours in a row don't turn it off.
+    for (int i = 0; i < 2; ++i) {
         host.runBackground(2 + i);
         REQUIRE(host.waitIdle(5000));
     }
-    CHECK(count(rig.fp.log("a"), "try") == 5);
+    CHECK(count(rig.fp.log("a"), "try") == 3);
     CHECK(failuresNow(rig.fp, "a") == 0);
 
     // The connection is back: it runs, and now the hour is used.
@@ -256,6 +256,47 @@ TEST_CASE("background: a task that dies of a lost connection is not counted and 
     host.runBackground(10);
     REQUIRE(host.waitIdle(5000));
     CHECK(contains(rig.fp.log("a"), "fetched"));
+    PluginState s(rig.fp.path(".state.json"));
+    CHECK(s.lastBackgroundMs("a") == rig.clk.now.load());
+}
+
+TEST_CASE("background: only the real network error is forgiven; a forged or new one counts") {
+    const char* bodies[] = {
+        R"(await zk.fetch("https://example.org/x");)",                                                  // the real one escapes
+        R"(try { await zk.fetch("https://example.org/x"); } catch (e) { throw e; })",                    // rethrown: the same object
+        R"(throw Object.assign(new Error("x"), { network: true });)",                                    // forged
+        R"(throw { network: true };)",                                                                   // a plain object
+        R"(try { await zk.fetch("https://example.org/x"); } catch (e) { throw new Error("again: " + e.message); })",  // a new one
+        R"(try { await zk.fetch("https://example.org/x"); } catch (e) { throw Object.assign(new Error(e.message), e); })",  // a copy
+    };
+    const bool forgiven[] = {true, true, false, false, false, false};
+    for (int i = 0; i < 6; ++i) {
+        CAPTURE(i);
+        FetchRig rig;
+        PluginHost host(rig.deps(bodies[i]));
+        host.setEnabled("a", true);
+        host.start();
+        host.runBackground(1);
+        REQUIRE(host.waitIdle(5000));
+        PluginState s(rig.fp.path(".state.json"));
+        CHECK(s.failures("a") == (forgiven[i] ? 0 : 1));
+        CHECK(s.lastBackgroundMs("a") == (forgiven[i] ? 0 : rig.clk.now.load()));
+    }
+}
+
+TEST_CASE("background: the 4th uncounted round in a row counts") {
+    FetchRig rig;
+    PluginHost host(rig.deps(R"(await zk.fetch("https://example.org/x");)"));
+    host.setEnabled("a", true);
+    host.start();
+    for (int i = 0; i < 3; ++i) {
+        host.runBackground(1 + i);
+        REQUIRE(host.waitIdle(5000));
+        CHECK(failuresNow(rig.fp, "a") == 0);
+    }
+    host.runBackground(4);
+    REQUIRE(host.waitIdle(5000));
+    CHECK(failuresNow(rig.fp, "a") == 1);
     PluginState s(rig.fp.path(".state.json"));
     CHECK(s.lastBackgroundMs("a") == rig.clk.now.load());
 }

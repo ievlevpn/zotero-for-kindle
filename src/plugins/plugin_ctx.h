@@ -189,6 +189,9 @@ void clearTimer(PluginCtx&, uint64_t id);
 // zk.on / zk.background registrations.
 void addHandler(PluginCtx&, const std::string& event, js::Value handler);
 void setBackgroundTask(PluginCtx&, js::Value task);
+// The error just made for a lost connection: remembered by identity, so a background task that
+// lets exactly it escape isn't held to account (a copy, a new error or a forged flag is).
+void noteNetworkError(PluginCtx&, js::Value error);
 
 // ---- Installers ---------------------------------------------------------------------------
 

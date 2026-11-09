@@ -137,6 +137,9 @@ struct PluginRun {
     std::map<uint64_t, Ask> asks;  // by request id
     std::vector<std::pair<void*, js::Value>> unhandled;  // rejected promises nobody handled yet
     bool loadFailed = false;
+    // The exact error objects the host rejected zk.fetch calls with for a lost connection (the last
+    // few, kept alive so identity means something). Only these are "the connection's fault".
+    std::vector<js::Value> networkErrors;
 };
 
 }  // namespace plugins
@@ -241,6 +244,7 @@ struct PluginHost::Impl {
     std::set<std::string> restarts;    // stopped mid-run: a fresh runtime at the next safe point
     bool backgroundOpen = false;       // a runBackground() whose tasks haven't all ended: BackgroundDone is due
     uint64_t backgroundRound = 0;      // the round that Done reports (the latest asked for)
+    std::map<std::string, int> uncounted;  // consecutive background runs not counted for a lost connection
     std::set<std::string> withTask;    // loaded plugins that registered a background task (under mu)
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
     std::string markerId;  // what the crash marker says now ("" = no marker)
@@ -673,7 +677,9 @@ struct PluginHost::Impl {
     // A background task that returned, failed or went over its budget has had its run for the
     // hour; one cut short (by stop(), sleep, the plugin turned off or reloaded) hasn't.
     void backgroundEnded(PluginCtx& p, CallKind kind) {
-        if (kind == CallKind::Background && !stopping) state.setLastBackgroundMs(p.manifest.id, deps.clock());
+        if (kind != CallKind::Background || stopping) return;
+        uncounted[p.manifest.id] = 0;
+        state.setLastBackgroundMs(p.manifest.id, deps.clock());
     }
 
     // Posts BackgroundDone once the tasks of a runBackground() have all ended.
@@ -696,9 +702,11 @@ struct PluginHost::Impl {
     void failCall(PluginCtx& p, Call& c, const js::JsError& e) {
         const std::string text = capitalised(c.what) + " failed: " + describeError(e);
         const bool quiet = c.kind == CallKind::Cleanup;
-        if (c.kind == CallKind::Background && e.network && !stopping) {
-            // The connection was lost under the task: not the plugin's fault, so not a failure and
-            // not a run for the hour; it is due again at the next round.
+        if (c.kind == CallKind::Background && e.network && !stopping && uncounted[p.manifest.id] < kMaxUncounted) {
+            ++uncounted[p.manifest.id];
+            // The connection was lost under the task and the task let that very error escape: not
+            // the plugin's fault, so not a failure and not a run for the hour; due again at the next
+            // round. Three times in a row at most, then it counts (a plugin can't hide behind it).
             log(p.manifest.id, LogLevel::Warn, text + " (no connection: not counted, tried again next time)");
             p.run->calls.erase(c.id);
             return;
@@ -832,8 +840,8 @@ struct PluginHost::Impl {
         if (JS_IsObject(reason.raw())) {
             js::Value name = reason.get("name"), message = reason.get("message"), stack = reason.get("stack");
             if (JS_IsString(name.raw())) e.name = jsString(c, name.raw());
-            js::Value net = reason.get("network");
-            e.network = JS_IsBool(net.raw()) && JS_ToBool(c, net.raw()) == 1;
+            for (const auto& known : p.run->networkErrors)
+                if (JS_IsObject(reason.raw()) && JS_VALUE_GET_PTR(known.raw()) == JS_VALUE_GET_PTR(reason.raw())) e.network = true;
             e.message = message.isUndefined() ? jsString(c, reason.raw()) : jsString(c, message.raw());
             if (JS_IsString(stack.raw())) e.stack = jsString(c, stack.raw());
         } else {
@@ -911,6 +919,7 @@ struct PluginHost::Impl {
         }
     }
 
+    static constexpr int kMaxUncounted = 3;
     static constexpr int64_t kBackgroundEveryMs = 60 * 60 * 1000;
 
     // Runs each loaded plugin's background task that is due: not run, failed or stopped for time
@@ -1157,6 +1166,12 @@ uint64_t addTimer(PluginCtx& p, js::Value callback, int64_t delayMs) {
 void clearTimer(PluginCtx& p, uint64_t id) { p.run->timers.erase(id); }
 
 void addHandler(PluginCtx& p, const std::string& event, js::Value handler) { p.run->handlers[event].push_back(std::move(handler)); }
+
+void noteNetworkError(PluginCtx& p, js::Value error) {
+    auto& list = p.run->networkErrors;
+    list.push_back(std::move(error));
+    if (list.size() > 8) list.erase(list.begin());
+}
 
 void setBackgroundTask(PluginCtx& p, js::Value task) {
     p.run->background = std::move(task);
