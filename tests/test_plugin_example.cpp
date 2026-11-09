@@ -213,3 +213,51 @@ TEST_CASE("example: with loadEagerly start() loads enabled plugins at once; by d
         host.stop();
     }
 }
+
+TEST_CASE("example: reload(id) in the eager mode loads a folder created after start() that the state enables; not otherwise") {
+    for (bool eager : {true, false}) {
+        FakePlugins fp;
+        fp.write(".state.json", R"({"plugins":{"late":{"enabled":true,"everEnabled":true}}})");
+        PluginHostDeps d = fp.deps();
+        d.loadEagerly = eager;
+        PluginHost host(d);
+        host.start();
+        host.waitIdle(3000);
+        fp.add("late", "console.log('late loaded');");  // the folder appears while the app runs
+        host.reload("late");
+        host.waitIdle(3000);
+        if (eager) {
+            CHECK(logged(fp, "late", "late loaded"));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            CHECK(fp.log("late").empty());
+        }
+        host.stop();
+    }
+}
+
+TEST_CASE("example: reload(id) in the eager mode loads a listed, enabled plugin that wasn't loaded; not a disabled or a broken one") {
+    FakePlugins fp;
+    fp.add("wasoff", "console.log('wasoff loaded');");
+    fp.add("off", "console.log('off loaded');");
+    fp.write("broken/plugin.json", "{ not json");
+    fp.write("broken/main.js", "console.log('broken loaded');");
+    PluginHostDeps d = fp.deps();
+    d.loadEagerly = true;
+    PluginHost host(d);
+    host.start();
+    host.waitIdle(3000);  // nothing is enabled: nothing loaded
+    host.setEnabled("wasoff", true);  // turning on doesn't load by itself
+    host.waitIdle(3000);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(fp.log("wasoff").empty());
+    host.reload("wasoff");
+    host.reload("off");
+    host.reload("broken");
+    host.waitIdle(3000);
+    CHECK(logged(fp, "wasoff", "wasoff loaded"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(fp.log("off").empty());
+    CHECK(fp.log("broken").empty());
+    host.stop();
+}
