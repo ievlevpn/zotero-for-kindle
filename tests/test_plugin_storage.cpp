@@ -4,6 +4,7 @@
 
 #include "fake_plugins.h"
 #include "plugins/host.h"
+#include "plugins/plugin_ctx.h"
 
 using namespace zk;
 using namespace zk::test;
@@ -519,4 +520,84 @@ TEST_CASE("storage: an update waiting in the queue holds the call that asked, an
     CHECK(contains(log, "OUT 1"));
     CHECK(where(log, "queued fn ran") == log.rfind("queued fn ran"));
     CHECK_FALSE(contains(log, "ERR"));
+}
+
+namespace {
+// zk.test.later(ms): host work that settles after ms (startWork, like a real binding).
+JSValue testLater(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+    int32_t ms = 0;
+    if (argc > 0) JS_ToInt32(c, &ms, argv[0]);
+    JSValue promise;
+    auto work = plugins::startWork(plugins::ctxOf(c), &promise);
+    std::thread([work, ms] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        work->resolve(nlohmann::json("done"));
+    }).detach();
+    return promise;
+}
+void installLater(plugins::PluginCtx& p) {
+    JSContext* c = p.cx.raw();
+    JSValue t = JS_NewObject(c);
+    plugins::defineFunction<testLater>(c, t, "later", 1);
+    JS_SetPropertyStr(c, p.zk.raw(), "test", t);
+}
+const PluginEvent evA{"syncFinished", {{"origin", "A"}}, false};
+const PluginEvent evB{"syncFinished", {{"origin", "B"}}, false};
+const PluginEvent evC{"syncFinished", {{"origin", "C"}}, false};
+}  // namespace
+
+TEST_CASE("storage: the update queued after a stopped asker's runs in a call of its own, not the stopped one's") {
+    FakePlugins fp;
+    fp.add("a", "zk.on('syncFinished', async ({ origin }) => { try {\n"
+                "  if (origin === 'A') {\n"
+                "    await zk.storage.update('x', async () => { await new Promise((r) => setTimeout(r, 2000)); return 1; });\n"
+                "  } else {\n"
+                "    const r = await zk.storage.update('y', async () => { const w = await zk.test.later(10); await zk.storage.get('y'); return 'b ' + w; });\n"
+                "    console.log('B result ' + r);\n"
+                "  }\n"
+                "} catch (e) { console.log('FAILED ' + origin + ': ' + e.name + ' ' + e.message); } });\n");
+    auto deps = fp.deps();
+    deps.extraBindings.push_back(installLater);
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(evA);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    host.dispatch(evB);  // queued behind A's update; alive for 300 ms after its own start
+    REQUIRE(host.waitIdle(5000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "FAILED A: LimitError"));
+    CHECK(contains(log, "B result b done"));
+    CHECK_FALSE(contains(log, "FAILED B"));
+}
+
+TEST_CASE("storage: an asker stopped while its update waits in the queue fails it without running fn; the queue moves on") {
+    FakePlugins fp;
+    fp.add("a", "zk.on('syncFinished', async ({ origin }) => { try {\n"
+                "  if (origin === 'A') {\n"
+                "    await zk.storage.update('a', () => { console.log('A fn ran'); return 1; });\n"
+                "  } else {\n"
+                "    await zk.storage.update('c', () => { console.log('C fn ran'); return 1; });\n"
+                "  }\n"
+                "} catch (e) { console.log('FAILED ' + origin + ': ' + e.name + ' ' + e.limit); } });\n"
+                "zk.background(async () => { await zk.storage.update('s', async () => { await new Promise((r) => setTimeout(r, 700)); console.log('S fn done'); return 1; }); });\n",
+           {"background"});
+    auto deps = fp.deps();
+    deps.handlerBudgetMs = 500;
+    deps.backgroundBudgetMs = 1500;
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.runBackground();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    host.dispatch(evA);  // asks at ~100 ms, stopped at ~600 ms while still waiting behind S
+    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+    host.dispatch(evC);  // asks at ~500 ms behind A's update; its own deadline is ~1000 ms
+    REQUIRE(host.waitIdle(8000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "S fn done"));
+    CHECK(contains(log, "FAILED A: LimitError time"));
+    CHECK_FALSE(contains(log, "A fn ran"));
+    CHECK(contains(log, "C fn ran"));
+    CHECK_FALSE(contains(log, "FAILED C"));
 }

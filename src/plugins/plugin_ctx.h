@@ -110,6 +110,7 @@ struct CallInfo {
     uint64_t id = 0;  // 0: no call is running
     bool userCaused = false;
     bool background = false;
+    bool cleanup = false;  // the code of a stopped call, running its last rejections
 };
 CallInfo currentCall(PluginCtx&);
 

@@ -200,16 +200,18 @@ JSValue stDel(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     Db& db = dbOf(p);
     int64_t& total = totalOf(p);
     bool had = false;
+    int64_t size = 0;
     {
         Stmt st = db.prepare("SELECT LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(value AS BLOB)) FROM kv WHERE key = ?");
         st.bind(1, key);
         had = st.step();
-        if (had) total -= st.integer(0);
+        if (had) size = st.integer(0);
     }
     if (had) {
         Stmt d = db.prepare("DELETE FROM kv WHERE key = ?");
         d.bind(1, key);
         d.step();
+        total -= size;  // only once the row is really gone
     }
     return JS_NewBool(c, had);
 }
@@ -217,6 +219,8 @@ JSValue stDel(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 JSValue stGen(JSContext* c, JSValueConst, int, JSValueConst*) {
     return JS_NewInt64(c, static_cast<int64_t>(stateOf(ctxOf(c)).gen));
 }
+
+JSValue stInCleanup(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewBool(c, currentCall(ctxOf(c)).cleanup); }
 
 // A slot is host work owned by the call that asked for an update: if that call is stopped the slot
 // rejects with its LimitError, and the update (waiting or running) fails instead of hanging.
@@ -394,7 +398,7 @@ JSValue flRemove(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 
 // ---- What plugins see ---------------------------------------------------------------------
 
-const char kStorageJs[] = R"JS((function (n) {
+const char kStorageJs[] = R"JS((function (n, setT) {
 "use strict";
 let tail = Promise.resolve();
 let inFn = false;  // true while an update's fn runs its synchronous part
@@ -405,7 +409,10 @@ const reset = () => new Error("zk.storage was reset (Settings → Plugins → Re
 function enqueue(what, task) {
   if (inFn) return Promise.reject(new Error(`zk.storage.${what} can't be called inside another update's function`));
   const gen = n.gen();
-  const run = tail.then(() => {
+  const run = tail.then(async () => {
+    // Never start a task inside a stopped call's cleanup (host work started there is rejected with
+    // that call's LimitError, and this task isn't that call's): a timer set there is a call of its own.
+    if (n.inCleanup()) await new Promise((r) => setT(r, 0));
     if (n.gen() !== gen) throw reset();
     return task(gen);
   });
@@ -471,6 +478,7 @@ void installStorage(PluginCtx& p) {
     defineFunction<stPut>(c, natives.raw(), "put", 2);
     defineFunction<stDel>(c, natives.raw(), "del", 1);
     defineFunction<stGen>(c, natives.raw(), "gen", 0);
+    defineFunction<stInCleanup>(c, natives.raw(), "inCleanup", 0);
     defineFunction<stSlotStart>(c, natives.raw(), "slotStart", 0);
     defineFunction<stSlotCancelled>(c, natives.raw(), "slotCancelled", 1);
     defineFunction<stSlotEnd>(c, natives.raw(), "slotEnd", 1);
@@ -478,6 +486,10 @@ void installStorage(PluginCtx& p) {
     defineFunction<flWrite>(c, natives.raw(), "write", 2);
     defineFunction<flList>(c, natives.raw(), "list", 1);
     defineFunction<flRemove>(c, natives.raw(), "remove", 1);
+
+    JSValue global = JS_GetGlobalObject(c);
+    js::Value setT(c, JS_GetPropertyStr(c, global, "setTimeout"));
+    JS_FreeValue(c, global);
 
     const char* name = "<zk storage>";
     js::Value fn(c, JS_Eval(c, kStorageJs, sizeof kStorageJs - 1, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_STRICT));
@@ -490,7 +502,7 @@ void installStorage(PluginCtx& p) {
         if (s) JS_FreeCString(c, s);
         throw std::runtime_error(std::string(name) + ": " + text);
     }
-    js::Value made = p.cx.call(fn, {natives});
+    js::Value made = p.cx.call(fn, {natives, setT});
     if (auto e = p.cx.takeError()) throw std::runtime_error(std::string(name) + ": " + e->message);
     js::Value storage = made.get("storage"), files = made.get("files");
     JS_SetPropertyStr(c, p.zk.raw(), "storage", JS_DupValue(c, storage.raw()));

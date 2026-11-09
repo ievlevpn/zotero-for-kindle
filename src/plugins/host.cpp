@@ -917,7 +917,7 @@ PluginCtx& ctxOf(JSContext* c) { return *static_cast<PluginCtx*>(JS_GetContextOp
 CallInfo currentCall(PluginCtx& p) {
     auto it = p.run->calls.find(p.run->current);
     if (it == p.run->calls.end()) return {};
-    return {it->first, it->second.userCaused, it->second.kind == CallKind::Background};
+    return {it->first, it->second.userCaused, it->second.kind == CallKind::Background, it->second.kind == CallKind::Cleanup};
 }
 
 Work::Work(std::weak_ptr<Inbox> inbox, uint64_t ctxSerial, uint64_t id) : inbox_(std::move(inbox)), ctxSerial_(ctxSerial), id_(id) {}
