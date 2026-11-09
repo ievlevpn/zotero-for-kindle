@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <system_error>
 
+#include "core/free_space.h"
 #include "plugins/plugin_ctx.h"
 #include "store/db.h"
 
@@ -32,12 +33,15 @@ namespace {
 constexpr size_t kMaxValue = 1u << 20;       // one stored value (JSON text)
 constexpr size_t kMaxStore = 16u << 20;      // all keys and values of one plugin
 constexpr size_t kMaxFile = 16u << 20;       // one file written or read through zk.files
+constexpr int64_t kMaxData = 64 << 20;       // all files in one plugin's data/
+constexpr uint64_t kMinFree = 50u << 20;     // writes stop when the partition has less free
 
 struct StorageState {
     std::unique_ptr<Db> db;
     std::map<uint64_t, std::shared_ptr<Work>> slots;  // by Work id: one per update not yet settled
     uint64_t gen = 0;            // bumped by a reset: queued writes of the old generation fail
     int64_t total = -1;          // bytes of all keys and values; -1: not counted yet (after open)
+    int64_t files = -1;          // bytes of all files in data/; -1: not counted yet
 };
 
 StorageState& stateOf(PluginCtx& p) {
@@ -70,6 +74,32 @@ int64_t& totalOf(PluginCtx& p) {
 }
 
 JSValue fail(JSContext* c, const std::string& message) { return JS_ThrowPlainError(c, "%s", message.c_str()); }
+
+// Bytes of the regular files under `path` (a file: its size; missing: 0). Symlinks aren't followed.
+int64_t bytesUnder(const fs::path& path) {
+    std::error_code ec;
+    if (fs::is_regular_file(fs::symlink_status(path, ec))) return static_cast<int64_t>(fs::file_size(path, ec));
+    int64_t n = 0;
+    if (!fs::is_directory(fs::symlink_status(path, ec))) return 0;
+    for (fs::recursive_directory_iterator it(path, ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code e2;
+        if (it->is_regular_file(e2) && !it->is_symlink(e2)) n += static_cast<int64_t>(it->file_size(e2));
+    }
+    return n;
+}
+
+// The running total of data/: counted once (after a load or a reset), then adjusted.
+int64_t& filesTotalOf(PluginCtx& p) {
+    StorageState& st = stateOf(p);
+    if (st.files < 0) st.files = bytesUnder(p.dataDir);
+    return st.files;
+}
+
+// The partition is nearly full: a plugin's writes must not take the last of it.
+bool lowOnSpace(PluginCtx& p) {
+    const auto& probe = depsOf(p).freeSpace;
+    return (probe ? probe(p.dir) : freeBytesAt(p.dir)) < kMinFree;
+}
 
 std::string sanitised(const char* s, size_t n) { return sanitisedUtf8(s, n); }
 
@@ -187,6 +217,7 @@ JSValue stPut(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         st.bind(1, key);
         if (st.step()) old = st.integer(0);
     }
+    if (lowOnSpace(p)) return fail(c, "zk.storage: \"" + key + "\" wasn't stored: the Kindle has less than 50 MB free");
     const int64_t mine = static_cast<int64_t>(key.size() + text.size());
     if (static_cast<size_t>(total - old + mine) > kMaxStore)
         return fail(c, "zk.storage: storing \"" + key + "\" would take this plugin's storage past 16 MB (it holds " +
@@ -340,9 +371,15 @@ JSValue flWrite(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (text.size() > kMaxFile)
         return fail(c, "zk.files: \"" + rel + "\" would be " + std::to_string(text.size() >> 20) + " MB; one file may be at most 16 MB");
     std::error_code ec;
+    if (fs::is_directory(r.full, ec)) return fail(c, "zk.files: \"" + rel + "\" is a folder");
+    if (lowOnSpace(p)) return fail(c, "zk.files: \"" + rel + "\" wasn't written: the Kindle has less than 50 MB free");
+    int64_t& total = filesTotalOf(p);
+    const int64_t old = bytesUnder(r.full), mine = static_cast<int64_t>(text.size());
+    if (total - old + mine > kMaxData)
+        return fail(c, "zk.files: writing \"" + rel + "\" would take this plugin's data folder past 64 MB (it holds " +
+                           std::to_string((total - old) >> 20) + " MB of other files); remove something first");
     fs::create_directories(r.full.parent_path(), ec);
     if (ec) return fail(c, "zk.files: can't create the folder for \"" + rel + "\": " + ec.message());
-    if (fs::is_directory(r.full, ec)) return fail(c, "zk.files: \"" + rel + "\" is a folder");
     const fs::path tmp = r.full.string() + ".zk-tmp";
     {
         std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -360,6 +397,7 @@ JSValue flWrite(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         fs::remove(tmp, ignore);
         return fail(c, "zk.files: \"" + rel + "\" couldn't be written: " + ec.message());
     }
+    total += mine - old;
     return JS_UNDEFINED;
 }
 
@@ -396,8 +434,14 @@ JSValue flRemove(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!needString(c, argc, argv, 0, "zk.files: the path", rel) || !resolveInData(c, p, rel, false, r)) return JS_EXCEPTION;
     std::error_code ec;
     if (!fs::exists(r.full, ec)) return JS_FALSE;
+    int64_t& total = filesTotalOf(p);
+    const int64_t size = bytesUnder(r.full);
     fs::remove_all(r.full, ec);
-    if (ec) return fail(c, "zk.files: \"" + rel + "\" couldn't be removed: " + ec.message());
+    if (ec) {
+        stateOf(p).files = -1;  // partly removed: count again at the next write
+        return fail(c, "zk.files: \"" + rel + "\" couldn't be removed: " + ec.message());
+    }
+    total = std::max<int64_t>(total - size, 0);
     return JS_TRUE;
 }
 
@@ -519,6 +563,7 @@ void resetPluginData(const std::string& pluginDir, PluginCtx* loaded) {
         StorageState& st = stateOf(*loaded);
         ++st.gen;
         st.db.reset();  // closed; reopened (empty) at the next use
+        st.files = -1;
     }
     std::error_code ec;
     for (const char* suffix : {"", "-wal", "-shm", "-journal"}) fs::remove(pluginDir + "/storage.db" + suffix, ec);

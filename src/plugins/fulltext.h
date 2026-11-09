@@ -14,7 +14,8 @@
 // Cache: <pluginsDir>/.cache/fulltext/<attachmentKey>-<md5>.txt, written atomically (temp file,
 // then rename). A hit doesn't open the engine. No md5 (or an odd key) means no cache; a failed
 // extraction is never cached. Writing a new entry removes the attachment's older
-// entries (same key, another md5).
+// entries (same key, another md5). The cache holds at most kMaxFullTextCacheBytes: a hit marks its
+// entry used (its time), and writing an entry drops the least recently used others until it fits.
 
 #include <functional>
 #include <memory>
@@ -24,6 +25,8 @@
 #include "docs/document.h"
 
 namespace zk {
+
+constexpr uint64_t kMaxFullTextCacheBytes = 64u << 20;
 
 // nullopt with *err set: the file isn't on the Kindle (not downloaded, or its file is gone), it
 // is a linked file or not an EPUB/PDF, the engine can't open it, or its text is over the limit.

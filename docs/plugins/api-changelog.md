@@ -39,7 +39,8 @@ Permissions: `library:read`, `annotations:read`, `fulltext:read`, `notes:read`, 
 
 Limits: event handlers 5 s, the background task 30 s, actions at least 30 s; 32 MB of memory a
 plugin, 96 MB for all together; `zk.fetch` 10 MB a response, 30 s a request, 8 under way;
-`zk.storage` 1 MB a value, 16 MB in all; `zk.files` 16 MB a file. See [Concepts](concepts.md).
+`zk.storage` 1 MB a value, 16 MB in all; `zk.files` 16 MB a file, 64 MB in all; no writes
+while the Kindle has less than 50 MB free; 2 s of quiet run time a minute. See [Concepts](concepts.md).
 
 ### Changed before release
 

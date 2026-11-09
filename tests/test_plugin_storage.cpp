@@ -601,3 +601,57 @@ TEST_CASE("storage: an asker stopped while its update waits in the queue fails i
     CHECK(contains(log, "C fn ran"));
     CHECK_FALSE(contains(log, "FAILED C"));
 }
+
+TEST_CASE("files: a plugin's data/ holds at most 64 MB in all; overwrite and remove free room") {
+    FakePlugins fp;
+    // 60 MB already there (sparse: cheap to make, counted by size).
+    fp.write("a/data/old/big.bin", "");
+    fs::resize_file(fp.path("a/data/old/big.bin"), 60u << 20);
+    fp.add("a", pluginWith(R"(
+        const mb = (n) => "z".repeat(n << 20);
+        await zk.files.write("one.txt", mb(3));
+        out("3 MB fits");
+        try { await zk.files.write("two.txt", mb(2)); out("wrote two"); } catch (e) { out("two: " + e.message); }
+        await zk.files.write("one.txt", mb(1));
+        out("overwrite to 1 MB fits");
+        await zk.files.write("two.txt", mb(2));
+        out("now two fits");
+        out(await zk.files.remove("old"));
+        await zk.files.write("three.txt", mb(15));
+        out("after the removal 15 MB fits");
+    )"));
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(10000));
+    const std::string log = fp.log("a");
+    CHECK(contains(log, "OUT 3 MB fits"));
+    CHECK(contains(log, "OUT two: zk.files: writing \"two.txt\" would take this plugin's data folder past 64 MB"));
+    CHECK_FALSE(contains(log, "wrote two"));
+    CHECK(contains(log, "OUT overwrite to 1 MB fits"));
+    CHECK(contains(log, "OUT now two fits"));
+    CHECK(contains(log, "OUT after the removal 15 MB fits"));
+    CHECK_FALSE(fs::exists(fp.path("a/data/two.txt.zk-tmp")));
+}
+
+TEST_CASE("files and storage: writes are refused when the Kindle has less than 50 MB free") {
+    FakePlugins fp;
+    fp.add("a", pluginWith(R"(
+        try { await zk.files.write("x.txt", "x"); out("file written"); } catch (e) { out("file: " + e.message); }
+        try { await zk.storage.set("k", 1); out("stored"); } catch (e) { out("storage: " + e.message); }
+        out(await zk.storage.get("k") === undefined);
+    )"));
+    auto deps = fp.deps();
+    deps.freeSpace = [](const std::string&) -> uint64_t { return 40u << 20; };
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(5000));
+    const std::string log = fp.log("a");
+    CHECK(contains(log, "OUT file: zk.files: \"x.txt\" wasn't written: the Kindle has less than 50 MB free"));
+    CHECK(contains(log, "OUT storage: zk.storage: \"k\" wasn't stored: the Kindle has less than 50 MB free"));
+    CHECK(contains(log, "OUT true"));
+    CHECK_FALSE(fs::exists(fp.path("a/data/x.txt")));
+}

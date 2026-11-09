@@ -1,9 +1,9 @@
 #include "sync/zotero_storage.h"
 
+#include "core/free_space.h"
 #include "sync/config.h"
 #include "sync/webdav.h"  // localFileName, md5OfFile
 
-#include <sys/statvfs.h>
 #include <utime.h>
 
 #include <filesystem>
@@ -14,12 +14,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-uint64_t statvfsFreeBytes(const std::string& path) {
-    struct statvfs st {};
-    if (::statvfs(path.c_str(), &st) != 0) return UINT64_MAX;  // unknown: don't block on it
-    return static_cast<uint64_t>(st.f_bavail) * st.f_frsize;
-}
-
 bool fail(UserError* err, UserError e) {
     if (err) *err = std::move(e);
     return false;
@@ -28,7 +22,7 @@ bool fail(UserError* err, UserError e) {
 }  // namespace
 
 ZoteroStorage::ZoteroStorage(Http& http, int64_t userId, std::string apiKey)
-    : http_(http), userId_(userId), apiKey_(std::move(apiKey)), freeSpace_(statvfsFreeBytes) {}
+    : http_(http), userId_(userId), apiKey_(std::move(apiKey)), freeSpace_(freeBytesAt) {}
 
 bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destDir, UserError* err) {
     const std::string name = localFileName(a);

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -181,4 +182,36 @@ TEST_CASE("fulltext: an unreadable cache folder doesn't make extraction throw") 
     UserError err;
     auto text = extractFullText(local("NODIR001", "application/pdf", "tests/data/pdf/sample.pdf"), plugins, env(), &err);
     CHECK(text);
+}
+
+TEST_CASE("fulltext: the cache keeps at most 64 MB, dropping the least recently used entries") {
+    const std::string plugins = freshDir("lru");
+    const fs::path dir = fs::path(plugins) / ".cache" / "fulltext";
+    fs::create_directories(dir);
+    const auto now = fs::file_time_type::clock::now();
+    auto entry = [&](const std::string& name, int hoursAgo) {
+        std::ofstream(dir / name) << "";
+        fs::resize_file(dir / name, 30u << 20);  // sparse
+        fs::last_write_time(dir / name, now - std::chrono::hours(hoursAgo));
+    };
+    entry("KEYA-ma.txt", 3);
+    entry("KEYB-mb.txt", 2);
+    entry("KEYC-mc.txt", 1);
+    UserError err;
+    // A hit on the oldest makes it the most recently used.
+    const std::string copyA = plugins + "/a.pdf";
+    fs::copy_file("tests/data/pdf/sample.pdf", copyA);
+    REQUIRE(extractFullText(local("KEYA", "application/pdf", copyA, "ma"), plugins, env(), &err));
+    CHECK(fs::last_write_time(dir / "KEYA-ma.txt") > now - std::chrono::minutes(1));
+    // A new entry takes the cache over 64 MB: the least recently used go until it fits.
+    const std::string copy = plugins + "/copy.pdf";
+    fs::copy_file("tests/data/pdf/sample.pdf", copy);
+    REQUIRE_MESSAGE(extractFullText(local("NEW1", "application/pdf", copy, "mn"), plugins, env(), &err), err.message);
+    CHECK(fs::exists(dir / "NEW1-mn.txt"));
+    CHECK(fs::exists(dir / "KEYA-ma.txt"));
+    CHECK(fs::exists(dir / "KEYC-mc.txt"));
+    CHECK_FALSE(fs::exists(dir / "KEYB-mb.txt"));
+    uint64_t total = 0;
+    for (const auto& e : fs::directory_iterator(dir)) total += fs::file_size(e.path());
+    CHECK(total <= kMaxFullTextCacheBytes);
 }

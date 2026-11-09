@@ -1,8 +1,10 @@
 #include "plugins/fulltext.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <vector>
 
 #include "docs/engine_factory.h"
 
@@ -34,6 +36,33 @@ std::optional<std::string> readAll(const fs::path& p) {
     return ss.str();
 }
 
+// Drops the least recently used entries (by modification time: a hit touches its entry) other than
+// `keep` until the cache holds at most kMaxFullTextCacheBytes.
+void prune(const fs::path& dir, const fs::path& keep) {
+    struct Entry {
+        fs::file_time_type used;
+        uint64_t size;
+        fs::path path;
+    };
+    std::vector<Entry> entries;
+    uint64_t total = 0;
+    std::error_code ec;
+    for (fs::directory_iterator it(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+        std::error_code e2;
+        if (!it->is_regular_file(e2)) continue;
+        const uint64_t size = it->file_size(e2);
+        if (e2) continue;
+        total += size;
+        if (it->path() != keep) entries.push_back({it->last_write_time(e2), size, it->path()});
+    }
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.used < b.used; });
+    for (const Entry& e : entries) {
+        if (total <= kMaxFullTextCacheBytes) break;
+        std::error_code rc;
+        if (fs::remove(e.path, rc)) total -= e.size;
+    }
+}
+
 }  // namespace
 
 namespace {
@@ -57,7 +86,10 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
     const fs::path dir = fs::path(pluginsDir) / ".cache" / "fulltext";
     const fs::path entry = dir / (a.key + "-" + a.md5 + ".txt");
     if (cacheable) {
-        if (auto hit = readAll(entry); hit && hit->size() <= kMaxFullTextBytes) return hit;
+        if (auto hit = readAll(entry); hit && hit->size() <= kMaxFullTextBytes) {
+            fs::last_write_time(entry, fs::file_time_type::clock::now(), ec);  // used now (least recently used go first)
+            return hit;
+        }
     }
 
     UserError e;
@@ -98,6 +130,7 @@ std::optional<std::string> extract(const AttachmentRecord& a, const std::string&
                 if (name != mine && name.rfind(prefix, 0) == 0 && name.size() > 4 && name.substr(name.size() - 4) == ".txt")
                     fs::remove(it->path(), rc);
             }
+            prune(dir, entry);
         }
     }
     return text;

@@ -264,7 +264,10 @@ and online. It never wakes a sleeping Kindle. A run has 30 seconds.
 
 - `zk.storage`: a private key-value store of JSON values. At most 1 MB a value and 16 MB in all.
 - `zk.files`: text files in the plugin's own `data/` folder, for exports the user copies off over
-  USB. Paths are relative to `data/`; a path that leaves it is refused. At most 16 MB a file.
+  USB. Paths are relative to `data/`; a path that leaves it is refused. At most 16 MB a file and
+  64 MB for the whole folder.
+- Writes to either are refused while the Kindle has less than 50 MB free: a plugin never takes the
+  space books and syncing need. Over a limit, the write rejects with an `Error` that says which.
 
 Both survive restarts and app updates. *Reset its data* in Settings → Plugins empties both.
 
@@ -279,7 +282,9 @@ Both survive restarts and app updates. *Reset its data* in Settings → Plugins 
 | Stack | deep recursion is stopped |
 | `zk.fetch` | 10 MB a response, 30 s a request, 8 at once, 20 MB of request bodies |
 | `zk.storage` | 1 MB a value, 16 MB in all |
-| `zk.files` | 16 MB a file |
+| `zk.files` | 16 MB a file, 64 MB in all |
+| Writes (`zk.storage`, `zk.files`) | refused while the Kindle has less than 50 MB free |
+| Quiet run time (outside what the user does and the background task) | 2 s a minute |
 
 A call's time counts from when it starts running. Time queued behind other plugins' calls doesn't
 count, nor does time waiting for the user to answer a confirmation. Awaited work (fetches, library

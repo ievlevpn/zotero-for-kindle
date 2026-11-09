@@ -4,7 +4,9 @@
 
 Text files in the plugin's own `data/` folder, for exports the user copies off over USB.
 Paths are relative to `data/` and use `/`; a path that leaves the folder (`..`, absolute
-paths) is refused. No permission.
+paths) is refused. At most 16 MB a file and 64 MB for all of `data/`; a write that would go
+over, or one made while the Kindle has less than 50 MB free, rejects with an `Error` that says
+so (remove something first). No permission.
 
 ## Example
 
