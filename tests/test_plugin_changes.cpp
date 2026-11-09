@@ -460,10 +460,10 @@ TEST_CASE("changes: what Zotero deletes stays deleted, its pending removals ende
     rig.server.remove("NOTE0001");
     rig.server.remove("BOOK0002");
     rig.pull();
-    // Done by the pull (what they asked for happened in Zotero), and nothing comes back.
+    // Ended by the pull (the trash happened in Zotero), and nothing comes back.
     CHECK_FALSE(rig.lib.cancelPluginChange("p", delNote));
     CHECK_FALSE(rig.lib.cancelPluginChange("p", trash));
-    CHECK(rig.stateOf(delNote) == State::Sent);
+    CHECK(rig.stateOf(delNote) == State::Refused);  // a desktop note: never p's to delete
     CHECK(rig.stateOf(trash) == State::Sent);
     CHECK_FALSE(rig.lib.note("NOTE0001"));
     CHECK_FALSE(rig.lib.zoteroNote("NOTE0001"));
@@ -572,9 +572,10 @@ TEST_CASE("changes: what Zotero deletes ends the changes pending on it, as Refus
         CHECK(rig.stateOf(id) == State::Refused);
         CHECK(rig.lib.pluginChange(id)->message == "It was deleted in Zotero.");
     }
-    // A trash or note deletion of what went: done.
+    // A trash of what went: done. A deletion of a desktop note: never the plugin's to make.
     CHECK(rig.stateOf(trash) == State::Sent);
-    CHECK(rig.stateOf(del) == State::Sent);
+    CHECK(rig.stateOf(del) == State::Refused);
+    CHECK(rig.lib.pluginChange(del)->message == "Only a note the plugin added can be deleted.");
     CHECK(rig.lib.pendingPluginChanges().empty());
     CHECK_FALSE(rig.lib.note(rig.keyOf(note)));
     CHECK(rig.lib.pluginChangeLog("q", 10).at(0).state == State::Sent);
@@ -625,7 +626,7 @@ TEST_CASE("changes: a pull that removes what a pending trash or note deletion ta
     rig.server.remove("BOOK0002");
     rig.server.remove("BOOK0001");
     rig.pull();
-    CHECK(rig.stateOf(delNote) == State::Sent);
+    CHECK(rig.stateOf(delNote) == State::Sent);  // p's own note
     CHECK(rig.stateOf(trash) == State::Sent);
     CHECK(rig.stateOf(tag) == State::Refused);
     CHECK(rig.lib.pluginChange(tag)->message == "It was deleted in Zotero.");

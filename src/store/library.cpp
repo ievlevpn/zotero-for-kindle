@@ -615,6 +615,16 @@ void Library::removeObject(const std::string& type, const std::string& key) {
                 // Its own removal (a trash, a note deletion) has happened: that one is done.
                 const bool removal = c.itemKey == key && ((type == "item" && c.kind == PluginChange::Kind::Trash) ||
                                                           (type == "note" && c.kind == PluginChange::Kind::DeleteNote));
+                bool allowed = true;  // a note deletion: only of a note the same plugin added
+                if (removal && c.kind == PluginChange::Kind::DeleteNote) {
+                    Stmt by = db_.prepare("SELECT createdBy FROM notes WHERE key = ?");
+                    by.bind(1, key);
+                    allowed = by.step() && !by.text(0).empty() && by.text(0) == c.pluginId;
+                }
+                if (removal && !allowed) {
+                    withdrawPluginChange(c, PluginChange::State::Refused, "Only a note the plugin added can be deleted.");
+                    continue;
+                }
                 if (removal) {
                     const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                            std::chrono::system_clock::now().time_since_epoch())

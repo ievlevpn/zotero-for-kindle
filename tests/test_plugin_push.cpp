@@ -24,13 +24,19 @@ struct Rig {
     FakeZotero server;
     Db db{Db::open(":memory:")};
     Library lib{db};
+    // Changes what the guard is told of a key (to make it refuse a request).
+    std::function<void(const std::string&, PluginChangeShape&)> tamper;
     WriteGuard guard{server, [this](const std::string& k) { return lib.annotation(k).has_value(); },
                      [this](const std::string& k) { return lib.attachment(k).has_value(); },
                      [this](const std::string& k) -> std::optional<std::vector<std::string>> {
                          if (auto i = lib.zoteroItem(k)) return i->tags;
                          return std::nullopt;
                      },
-                     pluginChangeShapes(lib)};
+                     [this, shapes = pluginChangeShapes(lib)](const std::string& k) {
+                         auto shape = shapes(k);
+                         if (shape && tamper) tamper(k, *shape);
+                         return shape;
+                     }};
     ZoteroApi api{guard, 1, "k3y"};
     SyncEngine engine{api, lib};
 
@@ -306,7 +312,8 @@ TEST_CASE("push: a plugin's own note is deleted against its version; a note it d
     CHECK(rig.stateOf(theirs) == State::Refused);
     CHECK(rig.server.items.count("NOTE0009"));
     CHECK(rig.lib.note("NOTE0009"));
-    CHECK(rig.stateOf(others) == State::Sent);  // the note it asked to delete is gone (never sent by it)
+    CHECK(rig.stateOf(others) == State::Refused);  // q never had the right to delete p's note
+    CHECK(rig.messageOf(others) == "Only a note the plugin added can be deleted.");
 }
 
 TEST_CASE("push: a create whose answer was lost isn't made twice") {
@@ -380,4 +387,44 @@ TEST_CASE("push: a create answered unchanged, or without its copy, is looked up 
     CHECK(rig.server.fetchedItemKeys().size() >= 2);
     REQUIRE_FALSE(rig.engine.push().error);
     CHECK(rig.requests("POST", "/items").size() == 1);
+}
+
+TEST_CASE("push: a read mark on a plugin's new item waits for the item, then goes") {
+    Rig rig;
+    const std::string create = rig.create("p", "Fresh");
+    const std::string key = rig.keyOf(create);
+    rig.lib.markRead(key, true);
+    SyncReport rep = rig.engine.push();
+    REQUIRE_FALSE(rep.error);
+    CHECK(rig.stateOf(create) == State::Sent);
+    CHECK(rig.serverTags(key) == std::vector<std::string>{"read"});  // after the create, in the same push
+    CHECK(rig.lib.readMarks().empty());
+    CHECK(rig.lib.isRead(key));
+    REQUIRE_FALSE(rig.engine.push().error);
+}
+
+TEST_CASE("push: a blocked read mark or plugin change is its own failure; positions and other changes still go") {
+    Rig rig;
+    rig.server.put(FakeZotero::attachment("FILE0001", "BOOK0002"));
+    rig.pull();
+    rig.lib.markRead("BOOK0001", true);
+    const std::string blockedTag = rig.queue("p", Kind::AddTag, "BOOK0001", "x");
+    const std::string other = rig.queue("p", Kind::AddTag, "BOOK0002", "y");
+    rig.lib.setLocalPosition("FILE0001", "3");
+    rig.tamper = [](const std::string& k, PluginChangeShape& s) {
+        if (k == "BOOK0001") s.version += 100;  // the guard thinks it's at another version: refuses
+    };
+    SyncReport rep = rig.engine.push();
+    CHECK_FALSE(rep.error);
+    CHECK(rig.lib.readMarks().size() == 1);  // kept for next time
+    CHECK(rig.stateOf(blockedTag) == State::Refused);
+    CHECK(rig.messageOf(blockedTag) == "The app doesn't allow this change.");
+    CHECK(rig.stateOf(other) == State::Sent);
+    CHECK(rig.serverTags("BOOK0002") == std::vector<std::string>{"y"});
+    CHECK(rig.server.settings.count("lastPageIndex_u_FILE0001"));
+    CHECK(rig.serverTags("BOOK0001") == std::vector<std::string>{"birds"});
+    rig.tamper = nullptr;
+    REQUIRE_FALSE(rig.engine.push().error);
+    CHECK(rig.lib.readMarks().empty());
+    CHECK(rig.serverTags("BOOK0001") == std::vector<std::string>{"birds", "read"});
 }

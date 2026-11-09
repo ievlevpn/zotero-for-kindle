@@ -470,6 +470,8 @@ SyncReport SyncEngine::push() {
         if (!rep.error) pushReadMarks(rep);
         // Plugin changes, after the Kindle's own: each refused one on its own.
         if (!rep.error) pushPluginChanges(rep);
+        // Read marks of items a plugin has just created in Zotero.
+        if (!rep.error && rep.pluginSent > 0 && !lib_.readMarks().empty()) pushReadMarks(rep);
         // Reading positions, on their own: a refused one never holds annotations back.
         if (!rep.error && !pushPositions(rep, precondition) && precondition && !rep.error) {
             SyncReport pulled = pull(nullptr);  // the computer moved: the reader will ask
@@ -503,6 +505,7 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
                 lib_.clearReadMark(mark);
                 break;
             }
+            if (item->version <= 0) break;  // a plugin's new item, not in Zotero yet: next time
             json data = json::parse(item->json, nullptr, false);
             if (!data.is_object()) data = json::object();
             json tags = data.contains("tags") && data["tags"].is_array() ? data["tags"] : json::array();
@@ -520,6 +523,10 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
             if (mark.read) next.push_back({{"tag", mark.tag}});
             UserError err;
             auto res = api_.patchItem(mark.itemKey, {{"tags", next}}, item->version, &err);
+            if (!res && err.kind == ErrorKind::Blocked) {  // this mark's own failure: the others still go
+                log(LogLevel::Warn, "sync: read tag of %s blocked by the write guard; next time", mark.itemKey.c_str());
+                break;
+            }
             if (!res || !res->failed.empty()) {
                 rep.error = err;
                 return false;

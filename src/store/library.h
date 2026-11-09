@@ -147,7 +147,8 @@ public:
     // type: "item", "attachment", "annotation", "note" or "collection". Removing an item or note
     // ends the plugin changes still pending on it (or adding a note to it), and what depends on
     // them, as Refused: "It was deleted in Zotero." — except a pending Trash of the item or
-    // DeleteNote of the note, which has happened: Sent.
+    // DeleteNote of the note by the plugin that added it, which has happened: Sent (another
+    // plugin's DeleteNote of it: Refused, "Only a note the plugin added can be deleted.").
     void removeObject(const std::string& type, const std::string& key);
 
     int64_t libraryVersion();
