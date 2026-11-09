@@ -244,6 +244,24 @@ std::string ftsQuery(const std::string& input) {
     return out;
 }
 
+const char* kChangeColumns = "id, pluginId, kind, itemKey, value, parentKey, dependsOn, state, message, createdMs, sentMs";
+
+PluginChange readChange(const Stmt& st) {
+    PluginChange c;
+    c.id = st.text(0);
+    c.pluginId = st.text(1);
+    kindFromName(st.text(2), c.kind);
+    c.itemKey = st.text(3);
+    c.value = st.text(4);
+    c.parentKey = st.text(5);
+    c.dependsOn = st.text(6);
+    stateFromName(st.text(7), c.state);
+    c.message = st.text(8);
+    c.createdMs = st.integer(9);
+    c.sentMs = st.integer(10);
+    return c;
+}
+
 // Zotero's data JSON with its "tags" and "collections" filled from these if it has none (a record
 // made without Zotero's data): then the JSON always holds the base the pending changes apply to.
 std::string withBaseLists(const std::string& data, const std::vector<std::string>& tags,
@@ -583,6 +601,19 @@ void Library::upsertCollection(const CollectionRecord& r) {
 
 void Library::removeObject(const std::string& type, const std::string& key) {
     guarded([&] {
+        if (type == "item" || type == "note") {
+            // Plugin changes still to be sent to it (or adding a note to it) can't be any more.
+            std::vector<PluginChange> stale;
+            Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns +
+                                  " FROM plugin_changes WHERE state = 'pending' AND (itemKey = ?1 OR "
+                                  "(kind = 'addNote' AND parentKey = ?1)) ORDER BY seq DESC");
+            st.bind(1, key);
+            while (st.step()) stale.push_back(readChange(st));
+            for (const auto& c : stale)
+                if (auto now = pluginChange(c.id); now && now->state == PluginChange::State::Pending)
+                    withdrawPluginChange(c, PluginChange::State::Refused, "It was deleted in Zotero.",
+                                         "It was deleted in Zotero.");
+        }
         Stmt ver = db_.prepare("DELETE FROM object_versions WHERE key = ?");
         ver.bind(1, key).step();
         if (type == "item") {
@@ -1586,24 +1617,6 @@ std::string Library::reapplyConflict(const std::string& key) {
 
 namespace {
 
-const char* kChangeColumns = "id, pluginId, kind, itemKey, value, parentKey, dependsOn, state, message, createdMs, sentMs";
-
-PluginChange readChange(const Stmt& st) {
-    PluginChange c;
-    c.id = st.text(0);
-    c.pluginId = st.text(1);
-    kindFromName(st.text(2), c.kind);
-    c.itemKey = st.text(3);
-    c.value = st.text(4);
-    c.parentKey = st.text(5);
-    c.dependsOn = st.text(6);
-    stateFromName(st.text(7), c.state);
-    c.message = st.text(8);
-    c.createdMs = st.integer(9);
-    c.sentMs = st.integer(10);
-    return c;
-}
-
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
         .count();
@@ -1790,19 +1803,6 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                 const std::string target = c.kind == K::AddNote ? c.parentKey : c.itemKey;
                 if (c.kind != K::CreateItem && c.kind != K::DeleteNote && trashPending(target))
                     return refuse("item " + target + " is being moved to the trash");
-                // The same change asked again while the first is unsent: that one is the answer.
-                {
-                    Stmt dup = db_.prepare(
-                        "SELECT id FROM plugin_changes WHERE pluginId = ?1 AND kind = ?2 AND state = 'pending' AND value = ?3 "
-                        "AND (?2 = 'createItem' OR (?2 = 'addNote' AND parentKey = ?5) OR (?2 NOT IN ('createItem', 'addNote') "
-                        "AND itemKey = ?4)) ORDER BY seq LIMIT 1");
-                    dup.bind(1, c.pluginId).bind(2, std::string(kindName(c.kind))).bind(3, c.value);
-                    dup.bind(4, c.itemKey).bind(5, c.parentKey);
-                    if (dup.step()) {
-                        id = dup.text(0);
-                        return;
-                    }
-                }
                 switch (c.kind) {
                     case K::CreateItem: {
                         json v = json::parse(c.value, nullptr, false);
@@ -1915,7 +1915,8 @@ std::optional<PluginChange> Library::pluginChange(const std::string& id) {
 }
 
 // Ends a pending change (and first what depends on it) and puts the local copy back.
-void Library::withdrawPluginChange(const PluginChange& c, PluginChange::State state, const std::string& message) {
+void Library::withdrawPluginChange(const PluginChange& c, PluginChange::State state, const std::string& message,
+                                   const std::string& dependentsMessage) {
     using K = PluginChange::Kind;
     std::vector<PluginChange> dependents;
     {
@@ -1927,7 +1928,10 @@ void Library::withdrawPluginChange(const PluginChange& c, PluginChange::State st
     const bool refused = state == PluginChange::State::Refused;
     for (const auto& d : dependents)
         withdrawPluginChange(d, refused ? PluginChange::State::Refused : PluginChange::State::Cancelled,
-                             refused ? "Refused with what it was for." : "Withdrawn with what it was for.");
+                             !dependentsMessage.empty() ? dependentsMessage
+                             : refused                  ? "Refused with what it was for."
+                                                        : "Withdrawn with what it was for.",
+                             dependentsMessage);
     Stmt set = db_.prepare("UPDATE plugin_changes SET state = ?, message = ? WHERE id = ?");
     set.bind(1, std::string(stateName(state))).bind(2, message).bind(3, c.id).step();
     switch (c.kind) {

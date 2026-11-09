@@ -144,7 +144,9 @@ public:
     std::optional<NoteRecord> note(const std::string& key);
     std::optional<NoteRecord> zoteroNote(const std::string& key);
     std::vector<NoteRecord> notes(const std::string& itemKey);
-    // type: "item", "attachment", "annotation", "note" or "collection".
+    // type: "item", "attachment", "annotation", "note" or "collection". Removing an item or note
+    // ends the plugin changes still pending on it (or adding a note to it), and what depends on
+    // them, as Refused: "It was deleted in Zotero."
     void removeObject(const std::string& type, const std::string& key);
 
     int64_t libraryVersion();
@@ -286,8 +288,8 @@ public:
     // item's tags or collections. Items' json stays Zotero's data (the base); their tags and
     // collections are the base with pending changes applied, again after every upsertItem (a pull).
     // Queues one (a state other than Pending only records it in the log, e.g. a Declined removal);
-    // returns its id. The same pending change asked again by the same plugin (same kind, target and
-    // value) returns the first one's id, nothing new kept. Returns "" and keeps nothing, with the
+    // returns its id — every change its own, an identical one too (applied as a set, it changes
+    // nothing more; sent, it is a no-op). Returns "" and keeps nothing, with the
     // reason in *why, if its item, note, collection or fields aren't there, if its item is being
     // trashed by a pending change (a second trash too), or if a note would go on an attachment.
     std::string queuePluginChange(PluginChange, std::string* why = nullptr);
@@ -323,7 +325,9 @@ private:
     template <class F> void atomically(F&& f);  // in this transaction, or a new one
     std::string freshKey();
     void overlayPluginChanges(const std::string& itemKey);
-    void withdrawPluginChange(const PluginChange&, PluginChange::State, const std::string& message);
+    // dependentsMessage: what its pending dependents are told ("" a default per state).
+    void withdrawPluginChange(const PluginChange&, PluginChange::State, const std::string& message,
+                              const std::string& dependentsMessage = "");
     void prunePluginLog(const std::string& pluginId);
     void setMeta(const std::string& key, const std::string& value);
 
