@@ -12,6 +12,9 @@ namespace zk::plugins {
 
 enum class LogLevel { Info, Warn, Error };
 
+// The app's own log (not a plugin's): the host's internal errors.
+void hostLog(const std::string& text);
+
 class PluginLog {
 public:
     static constexpr size_t kMaxBytes = 256 * 1024;

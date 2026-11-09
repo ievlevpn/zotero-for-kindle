@@ -12,10 +12,18 @@
 // (the event budget). Waiting for the user (askUser) pauses the call's clock.
 //
 // Stopping. When a call's deadline passes — while its code runs (the interrupt) or while it waits
-// (checked by the loop) — or it runs out of memory or stack, it is stopped: its timers are dropped,
-// its questions withdrawn, and its pending host work cancelled with every promise of that work
-// rejected with zk.LimitError, so whatever awaited it moves on. A stop and an uncaught error count
-// alike: three in a row turn the plugin off; a successful call resets the count.
+// (checked by the loop) — or it runs out of memory (its own 32 MB, or the 96 MB pool all plugins
+// share) or stack, it is stopped: its timers are dropped, its questions withdrawn, and its pending
+// host work cancelled. That work's promises are rejected with zk.LimitError in a Cleanup call of
+// their own, posted to the inbox (never nested, so the loop runs in between), so whatever awaited
+// them moves on; code running in a Cleanup can't start host work or timers (rejected at once). A
+// stop and an uncaught error count alike, a stopped Cleanup too: three in a row turn the plugin
+// off; a successful call resets the count. A stop that cut into running code restarts the plugin
+// (fresh runtime, main.js again): quickjs-ng leaves an interrupted async function's promise
+// pending forever, which would hang anything chained on it.
+//
+// Every task, timer pass and budget check runs behind an exception barrier; a C++ exception inside
+// an entry ends that call without counting it (the app's fault) and is logged.
 //
 // Crash marker. While a plugin's code runs, <crashMarker> holds its id (written and synced before
 // its entry, rewritten only when another plugin's code runs next, removed before the thread
@@ -82,6 +90,8 @@ struct Call {
     int64_t startMs = 0, pausedMs = 0, pausedSince = 0;
     int pauses = 0;
     bool userCaused = false;
+    bool resets = true;     // success clears the failure count (not a restart's reload)
+    std::string stopLimit, stopText;  // a cleanup: why its call was stopped
     bool returned = false;  // its function has returned; `promise` holds what it returned, if a promise
     js::Value promise;
     int64_t deadline(int64_t now) const { return startMs + budgetMs + pausedMs + (pauses ? now - pausedSince : 0); }
@@ -101,6 +111,11 @@ struct PendingWork {
     std::shared_ptr<std::atomic<bool>> cancel;
 };
 
+struct Doomed {  // work of a stopped call, rejected with LimitError in a cleanup of its own
+    PendingWork work;
+    std::string limit, text;
+};
+
 struct Ask {
     uint64_t owner = 0;
     std::function<void(bool)> answered;
@@ -114,6 +129,7 @@ struct PluginRun {
     js::Value background;
     std::map<uint64_t, Timer> timers;
     std::map<uint64_t, PendingWork> work;
+    std::vector<Doomed> doomed;
     std::map<uint64_t, Ask> asks;  // by request id
     std::vector<std::pair<void*, js::Value>> unhandled;  // rejected promises nobody handled yet
     bool loadFailed = false;
@@ -193,7 +209,7 @@ void trackRejection(JSContext*, JSValueConst promise, JSValueConst reason, bool 
 // ---- The host -------------------------------------------------------------------------------
 
 struct PluginHost::Impl {
-    enum class Limit { Time, Memory, Stack };
+    enum class Limit { Time, Memory, Pool, Stack };
 
     PluginHostDeps deps;
     PluginState state;
@@ -212,15 +228,18 @@ struct PluginHost::Impl {
     js::Runtime* running = nullptr;  // whose code is running (stop() interrupts it)
 
     // The plugin thread's own (and the constructor's, before the thread starts).
+    js::MemoryPool pool;  // all plugins' JavaScript memory (before `loaded`: outlives the runtimes)
     std::map<std::string, std::unique_ptr<PluginCtx>> loaded;
     std::map<std::string, std::unique_ptr<PluginLog>> logs;
     std::set<std::string> failedLoad;  // tried since the last reload and failed
     std::set<std::string> turnOffs;    // three failures in a row: off at the next safe point
+    std::set<std::string> restarts;    // stopped mid-run: a fresh runtime at the next safe point
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
     std::string markerId;  // what the crash marker says now ("" = no marker)
 
     explicit Impl(PluginHostDeps d) : deps(std::move(d)), state(deps.pluginsDir + "/.state.json") {
         if (!deps.clock) deps.clock = systemMs;
+        pool.limit = deps.memoryTotal;
         folders = scanPlugins(deps.pluginsDir, deps.appVersion);
         checkCrashMarker();
     }
@@ -327,14 +346,14 @@ struct PluginHost::Impl {
             }
             for (auto& task : batch) {
                 if (stopping) break;
-                task(*this);
-                applyTurnOffs();
+                guarded("a command", [&] { task(*this); });
+                guarded("a turn-off", [&] { applyTurnOffs(); });
             }
             if (stopping) break;
-            fireTimers();
-            applyTurnOffs();
-            checkDeadlines();
-            applyTurnOffs();
+            guarded("the timers", [&] { fireTimers(); });
+            guarded("a turn-off", [&] { applyTurnOffs(); });
+            guarded("the budgets", [&] { checkDeadlines(); });
+            guarded("a turn-off", [&] { applyTurnOffs(); });
         }
         while (!loaded.empty()) unload(loaded.begin()->first);
         clearMarker();
@@ -343,6 +362,17 @@ struct PluginHost::Impl {
         inbox->busy = false;
         inbox->tasks.clear();
         inbox->idle.notify_all();
+    }
+
+    // An exception barrier: a C++ exception on the plugin thread is logged, never fatal.
+    void guarded(const char* what, const std::function<void()>& f) {
+        try {
+            f();
+        } catch (const std::exception& e) {
+            hostLog(std::string("plugins: an internal error in ") + what + ": " + e.what());
+        } catch (...) {
+            hostLog(std::string("plugins: an unknown internal error in ") + what);
+        }
     }
 
     bool anyInFlight() const {
@@ -381,13 +411,9 @@ struct PluginHost::Impl {
         }
     }
 
-    void load(const PluginFolder& f) {
+    // `afresh`: a restart after a stop, whose success doesn't clear the failure that caused it.
+    void load(const PluginFolder& f, bool afresh = false) {
         const std::string& id = f.dir;
-        if ((loaded.size() + 1) * deps.memoryPerPlugin > PluginHost::kTotalMemory) {
-            setProblem(id, "Not started: plugins together may use at most " + std::to_string(PluginHost::kTotalMemory >> 20) +
-                               " MB, and the others that are on take it all. Turn one off to start this one.");
-            return;
-        }
         setProblem(id, "");
         const fs::path dir = fs::path(deps.pluginsDir) / id;
         std::string source;
@@ -430,7 +456,8 @@ struct PluginHost::Impl {
                   [&] {
                       p.cx.evalModule(source, f.manifest->main);
                       return js::Value();
-                  });
+                  },
+                  !afresh);
         if (p.run->loadFailed) {
             failedLoad.insert(id);
             unload(id);
@@ -445,10 +472,25 @@ struct PluginHost::Impl {
         setLoaded(id, false);
     }
 
+    // The safe point (no plugin code running): turn off, then restart, whoever asked for it.
     void applyTurnOffs() {
-        while (!turnOffs.empty()) {
+        while (!turnOffs.empty() || !restarts.empty()) {
+            if (turnOffs.empty()) {
+                const std::string id = *restarts.begin();
+                restarts.erase(restarts.begin());
+                if (!loaded.count(id) || stopping) continue;
+                unload(id);
+                for (const auto& f : foldersCopy())
+                    if (f.dir == id && f.manifest && f.problem.empty() && state.enabled(id)) {
+                        log(id, LogLevel::Warn, nameOf(id) + " restarted: its code was stopped mid-run, so main.js runs afresh "
+                                                "(module variables start over; zk.storage keeps what it stored)");
+                        load(f, true);
+                    }
+                continue;
+            }
             const std::string id = *turnOffs.begin();
             turnOffs.erase(turnOffs.begin());
+            restarts.erase(id);
             unload(id);
             state.setEnabled(id, false);
             const std::string name = nameOf(id);
@@ -472,9 +514,10 @@ struct PluginHost::Impl {
 
     // Starts a call: `body` runs its function and returns what it returned.
     void startCall(PluginCtx& p, CallKind kind, std::string what, int budgetMs, bool userCaused,
-                   const std::function<js::Value()>& body) {
+                   const std::function<js::Value()>& body, bool resets = true) {
         if (stopping) return;
         Call c;
+        c.resets = resets;
         c.id = ++nextCall;
         c.kind = kind;
         c.what = std::move(what);
@@ -505,12 +548,24 @@ struct PluginHost::Impl {
         const uint64_t outer = p.run->current;
         p.run->current = callId;
         p.rt.setDeadline(c->deadline(steadyMs()));
-        body();
-        bool timeUp = p.rt.deadlineHit(), oom = p.rt.memoryLimitHit();
-        if (!timeUp) {
-            p.cx.runJobs();
+        bool timeUp = false, oom = false, poolHit = false;
+        auto observe = [&] {
             timeUp = timeUp || p.rt.deadlineHit();
             oom = oom || p.rt.memoryLimitHit();
+            poolHit = poolHit || p.rt.poolLimitHit();
+        };
+        std::string internal;  // a C++ exception from the host's side of the entry
+        try {
+            body();
+            observe();
+            if (!timeUp) {
+                p.cx.runJobs();
+                observe();
+            }
+        } catch (const std::exception& e) {
+            internal = e.what();
+        } catch (...) {
+            internal = "unknown";
         }
         p.rt.setDeadline(0);
         p.run->current = outer;
@@ -520,13 +575,21 @@ struct PluginHost::Impl {
         }
         auto err = p.cx.takeError();
         if (stopping) return;
+        if (!internal.empty()) {  // the app's fault, not the plugin's: end the call uncounted
+            if ((c = findCall(p, callId))) {
+                log(p.manifest.id, LogLevel::Error, "The app hit an internal error while running " + c->what + ": " + internal);
+                p.run->calls.erase(callId);
+            }
+            err.reset();
+        }
         c = findCall(p, callId);
         // Quiet: a cleanup's rejections are the stop already reported; a failed load's module
         // promise rejects with the error just reported.
         const bool quiet = c && (c->kind == CallKind::Cleanup || (c->kind == CallKind::Load && err));
         if (err) {
             if (Call* call = findCall(p, callId)) {
-                if (err->limit) stopCall(p, callId, timeUp ? Limit::Time : oom ? Limit::Memory : Limit::Stack);
+                if (err->limit)
+                    stopCall(p, callId, timeUp ? Limit::Time : poolHit ? Limit::Pool : oom ? Limit::Memory : Limit::Stack, true);
                 else failCall(p, *call, *err);
             } else {
                 log(p.manifest.id, LogLevel::Error, describeError(*err));
@@ -565,7 +628,7 @@ struct PluginHost::Impl {
     }
 
     void succeed(PluginCtx& p, Call& c) {
-        const bool counts = c.kind == CallKind::Load || c.kind == CallKind::Event || c.kind == CallKind::Background;
+        const bool counts = c.resets && (c.kind == CallKind::Load || c.kind == CallKind::Event || c.kind == CallKind::Background);
         p.run->calls.erase(c.id);
         if (counts && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
     }
@@ -579,51 +642,70 @@ struct PluginHost::Impl {
         else recordFailure(p.manifest.id, text);
     }
 
-    void stopCall(PluginCtx& p, uint64_t callId, Limit limit) {
+    // `interrupted`: the limit cut into running code (not a call that only waited). quickjs-ng
+    // leaves an interrupted async function's promise pending forever, so whatever the plugin chained
+    // on it would hang: the plugin restarts at the next safe point.
+    void stopCall(PluginCtx& p, uint64_t callId, Limit limit, bool interrupted) {
         Call* c = findCall(p, callId);
         if (!c) return;
         const std::string what = c->what;
         const CallKind kind = c->kind;
-        const char* limitName = limit == Limit::Time ? "time" : limit == Limit::Memory ? "memory" : "stack";
+        const char* limitName = limit == Limit::Time ? "time" : limit == Limit::Stack ? "stack" : "memory";
         std::string text = "Stopped: " + what;
         if (limit == Limit::Time) text += " took longer than " + seconds(c->budgetMs);
         else if (limit == Limit::Memory) text += " used more than " + std::to_string(deps.memoryPerPlugin >> 20) + " MB of memory";
+        else if (limit == Limit::Pool) text += " — plugins together used more than " + std::to_string(deps.memoryTotal >> 20) + " MB of memory";
         else text += " ran out of stack (too much recursion)";
         if (kind == CallKind::Load) p.run->loadFailed = true;
         p.run->calls.erase(callId);
-        if (kind == CallKind::Cleanup) log(p.manifest.id, LogLevel::Error, text);
-        else recordFailure(p.manifest.id, text);
+        recordFailure(p.manifest.id, text);  // a stopped cleanup counts too
 
         auto& run = *p.run;
         for (auto it = run.timers.begin(); it != run.timers.end();) it = it->second.owner == callId ? run.timers.erase(it) : std::next(it);
         for (auto it = run.asks.begin(); it != run.asks.end();) it = it->second.owner == callId ? run.asks.erase(it) : std::next(it);
-        std::vector<PendingWork> doomed;
+        bool doomed = false;
         for (auto it = run.work.begin(); it != run.work.end();) {
             if (it->second.owner != callId) {
                 ++it;
                 continue;
             }
             it->second.cancel->store(true);
-            doomed.push_back(std::move(it->second));
+            run.doomed.push_back({std::move(it->second), limitName, text});
             it = run.work.erase(it);
+            doomed = true;
         }
-        if (doomed.empty() || stopping) return;
-        // Reject what the stopped call was waiting for, so whatever awaited it moves on.
+        if (stopping) return;
+        // Rejected in an entry of its own, posted: never nested in this one, and the loop (other
+        // plugins, turning this one off) runs in between.
+        if (doomed) inbox->post([serial = run.serial](Impl& h) { h.rejectDoomed(serial); });
+        if (interrupted && kind != CallKind::Load) restarts.insert(p.manifest.id);
+    }
+
+    // Rejects the stopped calls' work with LimitError, so whatever awaited it moves on. The code
+    // that runs is a Cleanup call: stopped calls can't start more host work or timers.
+    void rejectDoomed(uint64_t serial) {
+        PluginCtx* pp = bySerial(serial);
+        if (!pp || pp->run->doomed.empty() || restarts.count(pp->manifest.id) || turnOffs.count(pp->manifest.id)) return;
+        PluginCtx& p = *pp;
+        std::vector<Doomed> doomed = std::move(p.run->doomed);
+        p.run->doomed.clear();
         Call cleanup;
         cleanup.id = ++nextCall;
         cleanup.kind = CallKind::Cleanup;
-        cleanup.what = what + " (after it was stopped)";
+        cleanup.what = doomed.front().work.ownerWhat + " (after it was stopped)";
+        cleanup.stopLimit = doomed.front().limit;
+        cleanup.stopText = doomed.front().text;
         cleanup.budgetMs = deps.handlerBudgetMs;
         cleanup.startMs = steadyMs();
         cleanup.returned = true;
         const uint64_t cid = cleanup.id;
-        run.calls.emplace(cid, std::move(cleanup));
+        p.run->calls.emplace(cid, std::move(cleanup));
         runEntry(p, cid, [&] {
             JSContext* c = p.cx.raw();
-            for (auto& w : doomed) {
-                JSValue e = newLimitError(p, limitName, text);
+            for (auto& d : doomed) {
+                JSValue e = newLimitError(p, d.limit, d.text);
                 if (JS_IsException(e)) e = JS_GetException(c);
-                p.cx.call(w.reject, {js::Value(c, e)});
+                p.cx.call(d.work.reject, {js::Value(c, e)});
             }
             doomed.clear();
         });
@@ -670,7 +752,7 @@ struct PluginHost::Impl {
                 if (!c.pauses && c.deadline(now) <= now) late.push_back(cid);
             for (uint64_t cid : late) {
                 if (stopping) return;
-                stopCall(p, cid, Limit::Time);
+                stopCall(p, cid, Limit::Time, false);
             }
         }
     }
@@ -789,7 +871,7 @@ struct PluginHost::Impl {
 namespace plugins {
 
 PluginCtx::PluginCtx(PluginHost::Impl& h, PluginManifest m, std::string d, size_t memoryLimit)
-    : host(h), manifest(std::move(m)), dir(std::move(d)), dataDir(dir + "/data"), rt(memoryLimit), cx(rt),
+    : host(h), manifest(std::move(m)), dir(std::move(d)), dataDir(dir + "/data"), rt(memoryLimit, &h.pool), cx(rt),
       run(std::make_unique<PluginRun>()) {}
 
 PluginCtx::~PluginCtx() {
@@ -819,7 +901,12 @@ void Work::finish(Settle settle) {
         p->run->work.erase(it);
         auto body = [&] {
             JSContext* c = p->cx.raw();
-            JSValue v = settle(c);
+            JSValue v;
+            try {
+                v = settle(c);
+            } catch (const std::exception& e) {  // the host's work failed: the plugin sees an Error
+                v = JS_ThrowPlainError(c, "The app failed doing this: %s", e.what());
+            }
             if (JS_IsException(v)) p->cx.call(w.reject, {js::Value(c, JS_GetException(c))});
             else p->cx.call(w.resolve, {js::Value(c, v)});
         };
@@ -861,9 +948,21 @@ std::shared_ptr<Work> startWork(PluginCtx& p, JSValue* promise) {
         work->cancelFlag()->store(true);
         return work;
     }
+    auto it = p.run->calls.find(p.run->current);
+    if (it != p.run->calls.end() && it->second.kind == CallKind::Cleanup) {
+        // Code of a stopped call: no new host work; reject at once with the stop's LimitError.
+        work->cancelFlag()->store(true);
+        JSValue e = newLimitError(p, it->second.stopLimit, it->second.stopText);
+        if (JS_IsException(e)) e = JS_GetException(c);
+        JSValue r = JS_Call(c, funcs[1], JS_UNDEFINED, 1, &e);
+        JS_FreeValue(c, r);
+        JS_FreeValue(c, e);
+        JS_FreeValue(c, funcs[0]);
+        JS_FreeValue(c, funcs[1]);
+        return work;
+    }
     PendingWork w;
     w.owner = p.run->current;
-    auto it = p.run->calls.find(w.owner);
     w.ownerWhat = it == p.run->calls.end() ? "the plugin" : it->second.what;
     w.resolve = js::Value(c, funcs[0]);
     w.reject = js::Value(c, funcs[1]);
@@ -894,6 +993,8 @@ void log(PluginCtx& p, LogLevel level, const std::string& text) { p.host.log(p.m
 
 uint64_t addTimer(PluginCtx& p, js::Value callback, int64_t delayMs) {
     auto& h = p.host;
+    auto owner = p.run->calls.find(p.run->current);
+    if (owner != p.run->calls.end() && owner->second.kind == CallKind::Cleanup) return ++h.nextTimer;  // a stopped call's: never fires
     Timer t;
     t.dueMs = steadyMs() + delayMs;
     t.owner = p.run->current;

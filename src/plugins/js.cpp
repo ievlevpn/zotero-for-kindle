@@ -49,14 +49,24 @@ bool Runtime::admit(size_t grow) {
         oom_ = true;
         return false;
     }
+    if (pool_ && pool_->limit != 0 && pool_->used + grow > pool_->limit) {
+        oom_ = true;
+        poolHit_ = true;
+        return false;
+    }
     return true;
+}
+
+void Runtime::account(size_t add, size_t remove) {
+    used_ = used_ + add - remove;
+    if (pool_) pool_->used = pool_->used + add - remove;
 }
 
 void* Runtime::allocate(void* self, size_t size) {
     auto* r = static_cast<Runtime*>(self);
     if (!r->admit(size)) return nullptr;
     void* p = std::malloc(size ? size : 1);
-    if (p) r->used_ += usableSize(p);
+    if (p) r->account(usableSize(p), 0);
     return p;
 }
 
@@ -65,13 +75,13 @@ void* Runtime::allocateZeroed(void* self, size_t count, size_t size) {
     if (size != 0 && count > SIZE_MAX / size) return nullptr;
     if (!r->admit(count * size)) return nullptr;
     void* p = std::calloc(count ? count : 1, size ? size : 1);
-    if (p) r->used_ += usableSize(p);
+    if (p) r->account(usableSize(p), 0);
     return p;
 }
 
 void Runtime::release(void* self, void* ptr) {
     if (!ptr) return;
-    static_cast<Runtime*>(self)->used_ -= usableSize(ptr);
+    static_cast<Runtime*>(self)->account(0, usableSize(ptr));
     std::free(ptr);
 }
 
@@ -86,11 +96,11 @@ void* Runtime::reallocate(void* self, void* ptr, size_t size) {
     if (size > old && !r->admit(size - old)) return nullptr;
     void* p = std::realloc(ptr, size);
     if (!p) return nullptr;
-    r->used_ = r->used_ - old + usableSize(p);
+    r->account(usableSize(p), old);
     return p;
 }
 
-Runtime::Runtime(size_t memoryLimit) : limit_(memoryLimit) {
+Runtime::Runtime(size_t memoryLimit, MemoryPool* pool) : limit_(memoryLimit), pool_(pool) {
     static const JSMallocFunctions mf = {&Runtime::allocateZeroed, &Runtime::allocate, &Runtime::release,
                                          &Runtime::reallocate, &usableSize};
     rt_ = JS_NewRuntime2(&mf, this);
@@ -136,7 +146,8 @@ Value::~Value() {
 }
 
 Value Value::fromJson(Context& cx, const nlohmann::json& j) {
-    const std::string text = j.dump();
+    // Invalid UTF-8 in strings becomes U+FFFD (strict dump() would throw).
+    const std::string text = j.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace);
     return Value(cx.raw(), JS_ParseJSON(cx.raw(), text.data(), text.size(), "<json>"));
 }
 

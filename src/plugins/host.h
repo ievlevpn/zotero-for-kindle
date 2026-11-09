@@ -34,6 +34,9 @@ struct PluginHostDeps {
     std::string webdavHost;
     std::function<int64_t()> clock;  // wall clock, ms since the epoch (log times); default: system
     size_t memoryPerPlugin = 32 << 20;
+    // What all plugins together may use (actual use, shared): an allocation that would pass it
+    // fails, stopping the call that made it.
+    size_t memoryTotal = 96u << 20;
     int handlerBudgetMs = 5000, backgroundBudgetMs = 30000;
     // Each line written to a plugin's log is also handed here (on the plugin thread): the desktop
     // build mirrors it to stderr when asked to.
@@ -65,9 +68,6 @@ struct PluginStatus {
 
 class PluginHost {
 public:
-    // All plugins together may reserve at most this much JavaScript memory.
-    static constexpr size_t kTotalMemory = 96u << 20;
-
     // Scans the plugins folder (nothing runs yet). If the crash marker names a plugin, the app
     // stopped while it was running: it is turned off, with a note, and the marker removed.
     explicit PluginHost(PluginHostDeps);

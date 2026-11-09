@@ -58,10 +58,11 @@ declare var console: {
 // Only the members declared here are provided.
 
 /**
- * Runs `callback` after `ms` milliseconds, on the plugin thread. The callback still counts
- * against the time budget of the call that set it (an event handler, the background task, an
- * action): a timer can't outlive that budget. Pending timers are dropped when the plugin is
- * turned off. Returns an id for {@link clearTimeout}. No permission.
+ * Runs `callback` after `ms` milliseconds, on the plugin thread. While the call that set it (an
+ * event handler, the background task, an action) is still running, the callback counts against
+ * that call's time budget; a timer firing after that call has finished runs as a call of its own,
+ * with 5 seconds. Pending timers are dropped when the call that set them is stopped by a limit,
+ * and when the plugin is turned off. Returns an id for {@link clearTimeout}. No permission.
  *
  * @example
  * const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -1185,14 +1186,22 @@ declare namespace zk {
    *
    * `time` is the call's budget: event handlers 5 s, the background task 30 s, actions at least
    * 30 s. It counts from when the call starts running; time queued behind other plugins' calls
-   * and time waiting for the user to answer a confirmation never count.
+   * and time waiting for the user to answer a confirmation never count. `memory` is 32 MB for a
+   * plugin, and 96 MB for all plugins together: a call whose allocation would pass either is
+   * stopped.
    *
    * When a call is stopped, the work it started in the app (fetches, library reads, storage and
    * file operations, timers) is cancelled, and every promise of that work still pending rejects
    * with a `LimitError` — none is left pending forever. So {@link Storage.update}'s queue, or any
    * queue a plugin keeps itself, moves on to the next job instead of hanging. Changes to Zotero
    * already asked for stay asked for (each resolved at once); a removal still waiting for the
-   * user's answer is withdrawn.
+   * user's answer is withdrawn. Code that catches the `LimitError` can't start new work for the
+   * stopped call: such calls reject at once with the same `LimitError`.
+   *
+   * After a limit stop that cut into running code (not just a call left waiting too long), the
+   * plugin is restarted: `main.js` runs afresh in a new runtime, so module-level variables start
+   * over. Keep anything that must survive in {@link zk.storage}. Every stop counts as a failure;
+   * three failures in a row turn the plugin off.
    *
    * @example
    * try {

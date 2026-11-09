@@ -4,9 +4,13 @@
 #include <filesystem>
 #include <system_error>
 
+#include "core/log.h"
+
 namespace zk::plugins {
 
 namespace fs = std::filesystem;
+
+void hostLog(const std::string& text) { zk::log(zk::LogLevel::Error, "%s", text.c_str()); }
 
 PluginLog::PluginLog(std::string path, size_t maxBytes, std::function<int64_t()> clock)
     : path_(std::move(path)), max_(maxBytes), clock_(std::move(clock)) {}

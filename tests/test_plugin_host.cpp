@@ -65,12 +65,20 @@ JSValue testAsk(JSContext* c, JSValueConst, int, JSValueConst*) {
     return promise;
 }
 
+JSValue testThrowing(JSContext* c, JSValueConst, int, JSValueConst*) {
+    JSValue promise;
+    auto work = plugins::startWork(plugins::ctxOf(c), &promise);
+    work->finish([](JSContext*) -> JSValue { throw std::runtime_error("boom from the host"); });
+    return promise;
+}
+
 void installTestBindings(plugins::PluginCtx& p) {
     JSContext* c = p.cx.raw();
     JSValue t = JS_NewObject(c);
     plugins::defineFunction(c, t, "hang", testHang, 0);
     plugins::defineFunction(c, t, "later", testLater, 1);
     plugins::defineFunction(c, t, "ask", testAsk, 0);
+    plugins::defineFunction(c, t, "throwing", testThrowing, 0);
     JS_SetPropertyStr(c, p.zk.raw(), "test", t);
 }
 
@@ -232,14 +240,13 @@ TEST_CASE("host: a handler over budget is stopped, counted, and the next event r
 TEST_CASE("host: a handler in an infinite loop is stopped at its budget") {
     FakePlugins fp;
     fp.add("a", R"(
-        let n = 0;
-        zk.on("syncFinished", () => { if (++n === 1) for (;;) {} console.log("next", n); });
+        zk.on("syncFinished", ({ spin, n }) => { if (spin) for (;;) {} console.log("next", n); });
     )");
     PluginHost host(fp.deps());
     host.setEnabled("a", true);
     host.start();
-    host.dispatch(kSync);
-    host.dispatch(kSync);
+    host.dispatch({"syncFinished", {{"spin", true}}, false});
+    host.dispatch({"syncFinished", {{"n", 2}}, false});
     REQUIRE(host.waitIdle(3000));
     CHECK(contains(fp.log("a"), "next 2"));
     auto st = host.status();
@@ -251,9 +258,7 @@ TEST_CASE("host: a handler in an infinite loop is stopped at its budget") {
 TEST_CASE("host: a memory bomb and runaway recursion are stopped, named, and the plugin runs on") {
     FakePlugins fp;
     fp.add("a", R"(
-        let n = 0;
-        zk.on("syncFinished", () => {
-          n++;
+        zk.on("syncFinished", ({ n }) => {
           if (n === 1) { const hoard = []; for (;;) hoard.push(new Array(100000).fill(n)); }
           if (n === 2) { const deep = (k) => deep(k + 1) + 1; deep(0); }
           console.log("still here", n);
@@ -267,7 +272,7 @@ TEST_CASE("host: a memory bomb and runaway recursion are stopped, named, and the
     PluginHost host(deps);
     host.setEnabled("a", true);
     host.start();
-    for (int i = 0; i < 3; ++i) host.dispatch(kSync);
+    for (int i = 1; i <= 3; ++i) host.dispatch({"syncFinished", {{"n", i}}, false});
     REQUIRE(host.waitIdle(10000));
     std::string log = fp.log("a");
     CHECK(contains(log, "Stopped: the syncFinished handler used more than 8 MB of memory"));
@@ -330,9 +335,7 @@ TEST_CASE("host: three failures in a row turn it off and post Disabled with \"<n
     // An uncaught error and a limit stop count alike.
     FakePlugins fp;
     fp.add("a", R"(
-        let n = 0;
-        zk.on("syncFinished", () => {
-          n++;
+        zk.on("syncFinished", ({ n }) => {
           if (n === 2) for (;;) {}
           throw new Error("bad " + n);
         });
@@ -340,7 +343,7 @@ TEST_CASE("host: three failures in a row turn it off and post Disabled with \"<n
     PluginHost host(fp.deps());
     host.setEnabled("a", true);
     host.start();
-    for (int i = 0; i < 3; ++i) host.dispatch(kSync);
+    for (int i = 1; i <= 3; ++i) host.dispatch({"syncFinished", {{"n", i}}, false});
     REQUIRE(host.waitIdle(3000));
     PluginHostEvent ev;
     bool disabled = false;
@@ -361,16 +364,15 @@ TEST_CASE("host: three failures in a row turn it off and post Disabled with \"<n
     CHECK(contains(log, "bad 3"));
     CHECK(contains(log, "Feed Riffle stopped working — turned off after 3 failures in a row"));
 
-    host.dispatch(kSync);  // off: nothing runs
+    host.dispatch({"syncFinished", {{"n", 4}}, false});  // off: nothing runs
     REQUIRE(host.waitIdle(3000));
     CHECK_FALSE(contains(fp.log("a"), "bad 4"));
 
     host.setEnabled("a", true);  // back on: failures cleared, loads at the next event
     CHECK(failuresOf(fp, "a") == 0);
-    host.dispatch(kSync);
+    host.dispatch({"syncFinished", {{"n", 5}}, false});
     REQUIRE(host.waitIdle(3000));
-    std::string again = fp.log("a");
-    CHECK(again.find("bad 1") != again.rfind("bad 1"));  // a fresh load: its count starts over
+    CHECK(contains(fp.log("a"), "bad 5"));
     CHECK(statusOf(host.status(), "a")->loaded);
 }
 
@@ -475,28 +477,150 @@ TEST_CASE("host: nothing loads before start(); a plugin with only events or a ba
     }
 }
 
-TEST_CASE("host: total memory over 96 MB refuses to load one more plugin, with a problem on its row") {
+TEST_CASE("host: plugins share a 96 MB memory pool; one pushing it over is stopped, the others run on") {
+    SUBCASE("many small plugins load fine") {
+        FakePlugins fp;
+        std::vector<std::string> ids = {"a", "b", "c", "d", "e", "f"};
+        for (const auto& id : ids) fp.add(id, R"(zk.on("syncFinished", () => console.log("ran"));)");
+        PluginHost host(fp.deps());  // 32 MB each, 96 MB together: usage counts, not reservations
+        for (const auto& id : ids) host.setEnabled(id, true);
+        host.start();
+        host.dispatch(kSync);
+        REQUIRE(host.waitIdle(3000));
+        auto st = host.status();
+        for (const auto& id : ids) {
+            CAPTURE(id);
+            CHECK(statusOf(st, id)->loaded);
+            CHECK(statusOf(st, id)->errors.empty());
+            CHECK(contains(fp.log(id), "ran"));
+        }
+    }
+    SUBCASE("the pool, not the plugin's own limit, stops a hog") {
+        FakePlugins fp;
+        for (auto id : {"a", "b", "c"}) fp.add(id, R"(zk.on("syncFinished", () => console.log("ran")); )");
+        fp.add("hog", R"(
+            zk.on("syncFinished", ({ hoard }) => {
+              if (hoard) { const all = []; for (;;) all.push(new Array(100000).fill(1)); }
+              console.log("hog ran");
+            });
+        )");
+        auto deps = fp.deps();
+        deps.memoryPerPlugin = 32 << 20;
+        deps.memoryTotal = 12 << 20;
+        deps.handlerBudgetMs = 5000;
+        PluginHost host(deps);
+        for (auto id : {"a", "b", "c", "hog"}) host.setEnabled(id, true);
+        host.start();
+        host.dispatch({"syncFinished", {{"hoard", true}}, false});
+        REQUIRE(host.waitIdle(10000));
+        CHECK(contains(fp.log("hog"), "Stopped: the syncFinished handler — plugins together used more than 12 MB of memory"));
+        host.dispatch(kSync);
+        REQUIRE(host.waitIdle(10000));
+        auto st = host.status();
+        for (auto id : {"a", "b", "c"}) {
+            CAPTURE(id);
+            CHECK(statusOf(st, id)->errors.empty());
+            std::string log = fp.log(id);
+            CHECK(log.find("ran") != log.rfind("ran"));  // both events
+        }
+        CHECK(contains(fp.log("hog"), "restarted"));
+        CHECK(contains(fp.log("hog"), "hog ran"));  // the restarted hog runs on too
+    }
+}
+
+TEST_CASE("host: a stopped call's cleanup that loops is counted, never nests, and others keep running") {
+    // [C1] catch the LimitError, start new host work and spin, on every rejection. The cleanup is
+    // stopped too and counted; new work from a stopped call's code is rejected at once; the loop
+    // keeps serving another plugin; the plugin ends up turned off.
     FakePlugins fp;
-    for (auto id : {"a", "b", "c", "d"}) fp.add(id, R"(zk.on("syncFinished", () => {});)");
-    PluginHost host(fp.deps());  // 32 MB each
-    for (auto id : {"a", "b", "c", "d"}) host.setEnabled(id, true);
+    fp.add("a", R"(
+        const spin = async () => {
+          try { await zk.test.hang(); }
+          catch (e) {
+            let again = "pending";
+            zk.test.hang().catch((e2) => { again = e2 instanceof zk.LimitError && e2.limit; });
+            spin();
+            await null;
+            console.log("new work after the stop:", again);
+            for (;;) {}
+          }
+        };
+        zk.on("syncFinished", spin);
+    )");
+    fp.add("b", R"(let n = 0; zk.on("itemMarkedRead", () => console.log("b event", ++n));)", {"library:read"});
+    PluginHost host(withTestBindings(fp.deps()));
+    host.setEnabled("a", true);
+    host.setEnabled("b", true);
     host.start();
     host.dispatch(kSync);
+    host.dispatch(kSync);  // two calls in flight: both stopped (2), then their cleanup spins (3)
+    bool off = false;
+    auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < 40 && !off; ++i) {
+        host.dispatch({"itemMarkedRead", nlohmann::json::object(), false});
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        off = !statusOf(host.status(), "a")->enabled;
+    }
+    auto took = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(off);
+    CHECK(took < 1500);  // ~3 budgets of 300 ms
+    CHECK(contains(fp.log("a"), "new work after the stop: time"));
+    CHECK(contains(fp.log("a"), "(after it was stopped) took longer than 0.3 s"));  // the cleanup's stop, counted
     REQUIRE(host.waitIdle(3000));
-    auto st = host.status();
-    for (auto id : {"a", "b", "c"}) CHECK(statusOf(st, id)->loaded);
-    const PluginStatus* d = statusOf(st, "d");
-    CHECK_FALSE(d->loaded);
-    CHECK(d->enabled);
-    REQUIRE_FALSE(d->errors.empty());
-    CHECK(contains(d->errors.back(), "96 MB"));
+    CHECK(contains(fp.log("b"), "b event 4"));  // served meanwhile
+}
 
-    host.setEnabled("a", false);  // room again
+TEST_CASE("host: after a stop that interrupted running code the plugin restarts, so its queues work again") {
+    // quickjs-ng leaves an interrupted async function's promise pending forever: a module-level
+    // queue chained on it would hang; a fresh runtime doesn't.
+    FakePlugins fp;
+    fp.add("a", R"(
+        console.log("main.js evaluated");
+        let chain = Promise.resolve();
+        const serially = (fn) => (chain = chain.then(fn, fn));
+        zk.on("syncFinished", ({ spin }) => serially(async () => {
+          if (spin) for (;;) {}
+          console.log("queue ran");
+        }));
+    )");
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch({"syncFinished", {{"spin", true}}, false});
+    REQUIRE(host.waitIdle(3000));
+    host.dispatch({"syncFinished", {{"spin", false}}, false});
+    REQUIRE(host.waitIdle(3000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "took longer than 0.3 s"));
+    CHECK(contains(log, "restarted"));
+    CHECK(contains(log, "queue ran"));
+    CHECK(log.find("main.js evaluated") != log.rfind("main.js evaluated"));
+    CHECK(failuresOf(fp, "a") == 0);  // the stop counted once; the next call's success reset it
+}
+
+TEST_CASE("host: bad UTF-8 in a payload and a C++ exception in host work don't stop the thread") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        let n = 0;
+        zk.on("syncFinished", async ({ text }) => {
+          n++;
+          if (n === 1) console.log("text", text === "a\uFFFDb");
+          if (n === 2) { try { await zk.test.throwing(); } catch (e) { console.log("caught", e.message); } }
+          if (n === 3) console.log("third event ran");
+        });
+    )");
+    PluginHost host(withTestBindings(fp.deps()));
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch({"syncFinished", {{"text", std::string("a\xff" "b")}}, false});
     host.dispatch(kSync);
     REQUIRE(host.waitIdle(3000));
-    st = host.status();
-    CHECK(statusOf(st, "d")->loaded);
-    CHECK(statusOf(st, "d")->errors.empty());
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(3000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "text true"));
+    CHECK(contains(log, "boom from the host"));
+    CHECK(contains(log, "third event ran"));
 }
 
 TEST_CASE("host: the background task runs with its own budget and needs its permission") {

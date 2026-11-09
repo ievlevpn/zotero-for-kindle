@@ -38,9 +38,17 @@ enum class PromiseState { NotAPromise, Pending, Fulfilled, Rejected };
 
 class Context;
 
+// Memory shared by several runtimes on one thread (not thread-safe): an allocation that would take
+// `used` past `limit` is refused, whichever runtime asks.
+struct MemoryPool {
+    size_t limit = 0;  // 0 = none
+    size_t used = 0;
+};
+
 class Runtime {
 public:
-    explicit Runtime(size_t memoryLimit);
+    // `pool`, if given, must outlive the runtime and be used from the runtime's thread only.
+    explicit Runtime(size_t memoryLimit, MemoryPool* pool = nullptr);
     ~Runtime();
     Runtime(const Runtime&) = delete;
     Runtime& operator=(const Runtime&) = delete;
@@ -53,8 +61,9 @@ public:
     static int64_t nowMs();  // the clock the deadline is compared with
     bool deadlineHit() const { return hit_; }
     bool memoryLimitHit() const { return oom_; }
+    bool poolLimitHit() const { return poolHit_; }  // the refusal was the pool's (memoryLimitHit too)
     // Forget the limit events seen so far (the Context does this at the start of each operation).
-    void clearLimitEvents() { hit_ = false; oom_ = false; }
+    void clearLimitEvents() { hit_ = false; oom_ = false; poolHit_ = false; }
 
     // Re-anchors the stack-overflow check at the calling thread's stack. The host thread may
     // differ from the one that created the runtime; the Context does this before each operation.
@@ -70,10 +79,13 @@ private:
     static void* allocateZeroed(void* self, size_t count, size_t size);
     static void* reallocate(void* self, void* ptr, size_t size);
     static void release(void* self, void* ptr);
-    bool admit(size_t grow);  // false (and records the event) if `grow` bytes would pass the limit
+    bool admit(size_t grow);
+    void account(size_t add, size_t remove);  // this runtime's use and the pool's  // false (and records the event) if `grow` bytes would pass the limit
     JSRuntime* rt_ = nullptr;
     size_t limit_;
     size_t used_ = 0;
+    MemoryPool* pool_;
+    bool poolHit_ = false;
     int64_t deadline_ = 0;
     bool hit_ = false;  // the deadline interrupted a script
     std::atomic<bool> abort_{false};
