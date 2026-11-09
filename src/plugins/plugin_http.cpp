@@ -1,5 +1,7 @@
 #include "plugins/plugin_http.h"
 
+#include "plugins/host.h"
+
 #include <algorithm>
 #include <cctype>
 #include <arpa/inet.h>
@@ -410,6 +412,7 @@ bool PluginNet::pickable() const {
 }
 
 void PluginNet::work() {
+    lowerThreadPriority();
     std::unique_ptr<Http> http;
     std::unique_ptr<PluginHttp> guard;
     std::unique_lock<std::mutex> lock(mu_);

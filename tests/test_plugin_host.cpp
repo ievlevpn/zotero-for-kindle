@@ -1,5 +1,13 @@
 #include <doctest/doctest.h>
 
+#include <sys/resource.h>
+#include <unistd.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#else
+#include <sys/syscall.h>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -1111,4 +1119,166 @@ TEST_CASE("host: a plugin that can't get memory for its runtime fails to load; t
     CHECK_FALSE(statusOf(st, "a")->loaded);
     CHECK(contains(statusOf(st, "a")->problem, "not enough plugin memory"));
     CHECK_FALSE(contains(fp.log("a"), "ran"));
+}
+
+namespace {
+int count(const std::string& hay, const std::string& needle) {
+    int n = 0;
+    for (size_t at = hay.find(needle); at != std::string::npos; at = hay.find(needle, at + needle.size())) ++n;
+    return n;
+}
+
+// A timer chain nobody waits for: each tick runs 50 ms of JavaScript and sets the next.
+const char* kBusyChain = R"(
+    const busy = (ms) => { const end = Date.now() + ms; while (Date.now() < end) {} };
+    const tick = () => { busy(50); console.log("tick"); setTimeout(tick, 0); };
+    zk.on("syncFinished", () => { setTimeout(tick, 0); });
+    zk.on("bookOpened", async () => {
+      const t0 = Date.now();
+      for (let i = 0; i < 3; i++) { busy(40); await new Promise((r) => setTimeout(r, 0)); }
+      console.log("user call done in", Date.now() - t0);
+    });
+)";
+}  // namespace
+
+TEST_CASE("host: by default a plugin's quiet run time is 2 s per rolling minute") {
+    PluginHostDeps d;
+    CHECK(d.quietRunMs == 2000);
+    CHECK(d.quietWindowMs == 60000);
+}
+
+TEST_CASE("host: an orphan timer chain gets at most its quiet run time per window, deferred, not failed") {
+    FakePlugins fp;
+    fp.add("a", kBusyChain, {"library:read"});
+    auto deps = fp.deps();
+    deps.quietRunMs = 200;  // 200 ms of JavaScript per 1 s window (the app: 2 s per minute)
+    deps.quietWindowMs = 1000;
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+    const int ticks = count(fp.log("a"), "tick");
+    // Unthrottled: ~50 ticks. Throttled: 200 ms (+ one 50 ms tick over) in each of 2.5 windows.
+    CHECK(ticks >= 3);
+    CHECK(ticks <= 16);
+    auto st = host.status();
+    CHECK(statusOf(st, "a")->errors.empty());  // deferred, not failed
+    CHECK(failuresOf(fp, "a") == 0);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    CHECK(count(fp.log("a"), "tick") > ticks);  // and it goes on when the window allows
+}
+
+TEST_CASE("host: a user-caused call isn't throttled by the quiet run time") {
+    FakePlugins fp;
+    fp.add("a", kBusyChain, {"library:read"});
+    auto deps = fp.deps();
+    deps.quietRunMs = 100;
+    deps.quietWindowMs = 60000;  // the chain is out of quiet time for the rest of the test
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(eventually([&] { return count(fp.log("a"), "tick") >= 2; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const int ticks = count(fp.log("a"), "tick");
+    CHECK(ticks <= 3);  // throttled
+    host.dispatch({"bookOpened", nlohmann::json::object(), true});
+    REQUIRE(eventually([&] { return contains(fp.log("a"), "user call done"); }, 2000));
+    CHECK(statusOf(host.status(), "a")->errors.empty());
+}
+
+TEST_CASE("host: a paused call's timer entries share its budget; only waiting is free") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        const busy = (ms) => { const end = Date.now() + ms; while (Date.now() < end) {} };
+        zk.on("syncFinished", async () => {
+          zk.test.ask();  // paused until answered, which never comes
+          for (;;) { busy(50); console.log("paused tick"); await new Promise((r) => setTimeout(r, 0)); }
+        });
+    )");
+    PluginHost host(withTestBindings(fp.deps()));  // a 300 ms budget
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(eventually([&] { return contains(fp.log("a"), "took longer than"); }, 3000));
+    CHECK(count(fp.log("a"), "paused tick") <= 8);
+}
+
+TEST_CASE("host: a user-caused call may ask at most 3 questions; more are not asked") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        zk.on("bookOpened", () => {
+          for (let i = 1; i <= 5; i++) {
+            const r = zk.test.ask();
+            console.log("question", i, typeof r === "string" ? r : "asked");
+          }
+        });
+    )", {"library:read"});
+    PluginHost host(withTestBindings(fp.deps()));
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch({"bookOpened", nlohmann::json::object(), true});
+    REQUIRE(eventually([&] { return contains(fp.log("a"), "question 5"); }));
+    int confirms = 0;
+    PluginHostEvent ev;
+    REQUIRE(eventually([&] {
+        while (host.poll(ev)) confirms += ev.kind == PluginHostEvent::Kind::Confirm;
+        return confirms >= 3;
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    while (host.poll(ev)) confirms += ev.kind == PluginHostEvent::Kind::Confirm;
+    CHECK(confirms == 3);
+    const std::string log = fp.log("a");
+    CHECK(contains(log, "question 3 asked"));
+    CHECK(contains(log, "question 4 not asked"));
+    CHECK(contains(log, "question 5 not asked"));
+    CHECK(contains(log, "3 questions"));
+}
+
+namespace {
+// The calling thread's scheduling level: its nice value (Linux) or QoS class (macOS).
+int threadLevel() {
+#if defined(__APPLE__)
+    return static_cast<int>(qos_class_self());
+#else
+    return getpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)));
+#endif
+}
+#if defined(__APPLE__)
+const int kLowered = static_cast<int>(QOS_CLASS_UTILITY);
+#else
+const int kLowered = 10;
+#endif
+std::atomic<int> gPluginThreadLevel{-1000};
+JSValue testLevel(JSContext*, JSValueConst, int, JSValueConst*) {
+    gPluginThreadLevel = threadLevel();
+    return JS_UNDEFINED;
+}
+}  // namespace
+
+TEST_CASE("host: the plugin thread and its workers run at a lower priority than the app") {
+    int worker = -1000;
+    std::thread([&] {
+        plugins::lowerThreadPriority();
+        worker = threadLevel();
+    }).join();
+    CHECK(worker == kLowered);
+    CHECK(threadLevel() != kLowered);  // the calling thread is untouched
+
+    FakePlugins fp;
+    fp.add("a", R"(zk.on("syncFinished", () => zk.test.level());)");
+    auto deps = fp.deps();
+    deps.extraBindings.push_back([](plugins::PluginCtx& p) {
+        JSContext* c = p.cx.raw();
+        JSValue t = JS_NewObject(c);
+        plugins::defineFunction<testLevel>(c, t, "level", 0);
+        JS_SetPropertyStr(c, p.zk.raw(), "test", t);
+    });
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(3000));
+    CHECK(gPluginThreadLevel.load() == kLowered);
 }

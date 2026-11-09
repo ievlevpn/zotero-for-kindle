@@ -180,9 +180,12 @@ changed, and an id to withdraw it while it is unsent.
 More about removals:
 
 - They are only asked in answer to something the user just did on the Kindle: an event with
-  `origin: "kindle"` (later, a plugin's own action or screen). Asked from the background task, from
-  an event that came in with a sync, from a timer or while loading, they resolve `null` without
-  asking (the log says so).
+  `origin: "kindle"` (later, a plugin's own action or screen), including a timer that call set
+  while the call is still running. Asked from the background task, from an event that came in with
+  a sync, from a timer that fires after the call that set it has ended, or while loading, they
+  resolve `null` without asking (the log says so).
+- One call asks at most 3 questions (removals asked together are one question). Further removals
+  in that call resolve `null` without asking (the log says so).
 - Removals asked together (before awaiting any of them, e.g. with `Promise.all`) are confirmed
   together, in one list, with one answer for all.
 - A removal that would change nothing (a tag the item doesn't have) resolves `null` without asking.
@@ -280,8 +283,17 @@ Both survive restarts and app updates. *Reset its data* in Settings → Plugins 
 
 A call's time counts from when it starts running. Time queued behind other plugins' calls doesn't
 count, nor does time waiting for the user to answer a confirmation. Awaited work (fetches, library
-reads) does count. A timer that fires while the call that set it is still running counts against
-that call; one that fires later runs as a call of its own, with 5 seconds.
+reads) does count, and so does code that runs while the call waits for an answer (a timer firing
+meanwhile): only the waiting is free. A timer that fires while the call that set it is still
+running counts against that call; one that fires later runs as a call of its own, with 5 seconds.
+
+**Quiet run time.** Outside what the user does (an event they caused on the Kindle) and the
+background task, a plugin's code may run at most 2 s in any minute: event handlers for a sync,
+loading, and the timers and continuations of calls that have ended all count. Once a plugin has
+used its 2 s, a timer (or a piece of finished work) whose call has ended waits until the minute
+allows it — it isn't failed or counted, only late. Polling with `setTimeout` works, but cheaply:
+a timer chain can't keep the Kindle busy or awake. The plugin's thread also runs below the app's,
+so reading never waits for a plugin.
 
 **A call that goes over** (time, memory or stack) is stopped:
 

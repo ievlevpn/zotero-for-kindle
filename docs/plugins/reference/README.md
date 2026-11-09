@@ -25,8 +25,8 @@ which runs a plugin's updates strictly one after another.
 
 Each call has a time budget (event handlers 5 s, the background task 30 s, actions at least
 30 s). It counts from when the call starts running: time queued behind other plugins' calls
-doesn't count, and neither does time waiting for the user to answer a confirmation. A call
-that goes over is stopped (see [zk.LimitError](zk/LimitError.md)).
+doesn't count, and neither does time waiting for the user to answer a confirmation (code that
+runs meanwhile does). A call that goes over is stopped (see [zk.LimitError](zk/LimitError.md)).
 
 What a plugin may do is declared in `plugin.json` under `"permissions"`. Calling something not
 declared rejects (or throws) with a [zk.PermissionError](zk/PermissionError.md) that names what to add. Each

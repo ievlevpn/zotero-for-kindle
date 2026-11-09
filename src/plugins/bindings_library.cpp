@@ -336,6 +336,7 @@ public:
 private:
     FullTextWorker() { std::thread([this] { run(); }).detach(); }
     void run() {
+        lowerThreadPriority();
         for (;;) {
             FullTextJob job;
             {

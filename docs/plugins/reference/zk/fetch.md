@@ -13,9 +13,10 @@ each (less with [RequestInit.timeout](RequestInit.md#timeout)); going over rejec
 with at most 20 MB of request bodies between them; one more rejects at once with a
 [zk.LimitError](LimitError.md) `"fetches"` (await some first).
 `zotero.org`, every `*.zotero.org` host and the user's WebDAV host are always refused, even
-with `net:*`. With `net:*`, hosts on the local network (loopback, private and link-local
-addresses, checked on the address actually connected to) are refused too; declare such a host
-by name (`net:<host>`) to reach it.
+with `net:*`. Hosts on the local network (loopback, private and link-local addresses, checked
+on the address actually connected to) are refused too unless the host is declared by its exact
+name (`net:<host>`); `net:*` and `net:*.<domain>` reach only the internet. An address can't be
+declared (`net:192.168.1.5` makes plugin.json invalid).
 
 **Permission**: `net:<host>` for the URL's host (e.g. `"net:export.arxiv.org"`; `"net:*.example.org"`
 covers subdomains), or `net:*` for any host. Redirects are checked the same way.

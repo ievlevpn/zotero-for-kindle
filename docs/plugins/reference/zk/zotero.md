@@ -18,7 +18,8 @@ Every call changes one thing and resolves with a [Change](Change.md): the key of
   did (an action, a screen, an event they caused on the Kindle); from a background task or an
   event that came in with a sync they resolve `null` without asking. Removals asked together
   (before awaiting any of them, e.g. with `Promise.all`) are confirmed together, in one list,
-  with one answer for all. Nothing is ever deleted for good except a note this plugin created:
+  with one answer for all. One call asks at most 3 questions; further removals in that call
+  resolve `null` without asking (the log says so). Nothing is ever deleted for good except a note this plugin created:
   items go to Zotero's trash.
 - **Editing** existing data (a title, a note, an annotation) is not possible in API v0.
 

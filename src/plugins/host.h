@@ -24,6 +24,10 @@ class Http;
 
 namespace plugins {
 struct PluginCtx;
+// The plugin thread and its workers (fetch, full text) call this first: they run below the screen
+// and sync threads (nice 10 on Linux; the utility QoS class on macOS), so reading never stutters
+// for a plugin.
+void lowerThreadPriority();
 }
 
 struct PluginHostDeps {
@@ -48,6 +52,10 @@ struct PluginHostDeps {
     // fails, stopping the call that made it.
     size_t memoryTotal = 96u << 20;
     int handlerBudgetMs = 5000, backgroundBudgetMs = 30000;
+    // Quiet run time: outside user-caused calls and the background run, a plugin's JavaScript may
+    // run at most quietRunMs in any quietWindowMs; a timer or continuation whose call has ended
+    // waits (not failed) until the window allows it.
+    int quietRunMs = 2000, quietWindowMs = 60000;
     // Each line written to a plugin's log is also handed here (on the plugin thread): the desktop
     // build mirrors it to stderr when asked to.
     std::function<void(const std::string& pluginId, const std::string& line)> logSink;

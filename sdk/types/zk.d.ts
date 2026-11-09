@@ -24,8 +24,8 @@
  *
  * Each call has a time budget (event handlers 5 s, the background task 30 s, actions at least
  * 30 s). It counts from when the call starts running: time queued behind other plugins' calls
- * doesn't count, and neither does time waiting for the user to answer a confirmation. A call
- * that goes over is stopped (see {@link zk.LimitError}).
+ * doesn't count, and neither does time waiting for the user to answer a confirmation (code that
+ * runs meanwhile does). A call that goes over is stopped (see {@link zk.LimitError}).
  *
  * What a plugin may do is declared in `plugin.json` under `"permissions"`. Calling something not
  * declared rejects (or throws) with a {@link zk.PermissionError} that names what to add. Each
@@ -65,6 +65,11 @@ declare var console: {
  * that call's time budget; a timer firing after that call has finished runs as a call of its own,
  * with 5 seconds. Pending timers are dropped when the call that set them is stopped by a limit,
  * and when the plugin is turned off. Returns an id for {@link clearTimeout}. No permission.
+ *
+ * Quiet run time: outside calls the user caused and the background task, a plugin's code may run
+ * at most 2 s in any minute (sync events, loading, and timers and continuations of calls that have
+ * ended all count). Once that is used, a timer whose call has ended runs late, when the minute
+ * allows — not failed, not counted. Polling with `setTimeout` works, but cheaply.
  *
  * @example
  * const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -620,7 +625,8 @@ declare namespace zk {
    *   did (an action, a screen, an event they caused on the Kindle); from a background task or an
    *   event that came in with a sync they resolve `null` without asking. Removals asked together
    *   (before awaiting any of them, e.g. with `Promise.all`) are confirmed together, in one list,
-   *   with one answer for all. Nothing is ever deleted for good except a note this plugin created:
+   *   with one answer for all. One call asks at most 3 questions; further removals in that call
+   *   resolve `null` without asking (the log says so). Nothing is ever deleted for good except a note this plugin created:
    *   items go to Zotero's trash.
    * - **Editing** existing data (a title, a note, an annotation) is not possible in API v0.
    */

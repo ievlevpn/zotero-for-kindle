@@ -9,7 +9,15 @@
 // it started, or a timer it set — each entry under the call's deadline (Runtime::setDeadline),
 // followed by the promise jobs it queued. An entry is attributed to the call that started the
 // work or the timer; continuations of a call that already settled run as a short call of their own
-// (the event budget). Waiting for the user (askUser) pauses the call's clock.
+// (the event budget). Waiting for the user (askUser) pauses the call's clock; code of the call that
+// runs meanwhile (a timer, a continuation) still counts — only waiting is free. A call asks at most
+// kMaxQuestions times.
+//
+// Quiet run time. Outside user-caused calls and the background run, a plugin's code may run at
+// most deps.quietRunMs in any deps.quietWindowMs (2 s a minute). Past that, a timer or continuation
+// whose call has ended waits until the window allows it (not failed, not counted): a timer chain
+// can't keep the CPU busy or poll the network all day. The plugin thread and its workers also run
+// at a lower priority (lowerThreadPriority).
 //
 // Stopping. When a call's deadline passes — while its code runs (the interrupt) or while it waits
 // (checked by the loop) — or it runs out of memory (its own 32 MB, or the 96 MB pool all plugins
@@ -36,7 +44,13 @@
 
 #include <fcntl.h>
 #include <pthread.h>
+#include <sys/resource.h>
 #include <unistd.h>
+#if defined(__APPLE__)
+#include <pthread/qos.h>
+#else
+#include <sys/syscall.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -93,12 +107,16 @@ struct Call {
     int budgetMs = 0;
     int64_t startMs = 0, pausedMs = 0, pausedSince = 0;
     int pauses = 0;
+    int64_t ranWhilePausedMs = 0;  // only waiting is free: its entries' run time during a pause still counts
+    int questions = 0;             // asked so far (at most kMaxQuestions)
     bool userCaused = false;
     bool resets = true;     // success clears the failure count (not a restart's reload)
     std::string stopLimit, stopText;  // a cleanup: why its call was stopped
     bool returned = false;  // its function has returned; `promise` holds what it returned, if a promise
     js::Value promise;
-    int64_t deadline(int64_t now) const { return startMs + budgetMs + pausedMs + (pauses ? now - pausedSince : 0); }
+    int64_t deadline(int64_t now) const {
+        return startMs + budgetMs + pausedMs + (pauses ? now - pausedSince : 0) - ranWhilePausedMs;
+    }
 };
 
 struct Timer {
@@ -145,6 +163,16 @@ struct PluginRun {
     // The exact error objects the host rejected zk.fetch calls with for a lost connection (the last
     // few, kept alive so identity means something). Only these are "the connection's fault".
     std::vector<js::Value> networkErrors;
+    // Quiet run time (PluginHostDeps::quietRunMs): (end, ms) of each entry outside user-caused calls
+    // and the background run in the last window, and continuations of ended calls that wait for it.
+    std::deque<std::pair<int64_t, int64_t>> quietRuns;
+    struct Waiting {
+        int64_t dueMs = 0;
+        std::string what;
+        std::function<void()> body;
+    };
+    std::deque<Waiting> waiting;
+    bool throttled = false;  // logged once until an ended call's code runs again
 };
 
 }  // namespace plugins
@@ -154,6 +182,8 @@ using namespace plugins;
 namespace {
 
 int64_t steadyMs() { return js::Runtime::nowMs(); }
+
+[[maybe_unused]] constexpr int kPluginNice = 10;
 
 int64_t systemMs() {
     using namespace std::chrono;
@@ -429,6 +459,7 @@ struct PluginHost::Impl {
         const int64_t now = steadyMs();
         for (const auto& [id, p] : loaded) {
             for (const auto& [tid, t] : p->run->timers) earliest(t.dueMs);
+            for (const auto& w : p->run->waiting) earliest(w.dueMs);
             for (const auto& [cid, c] : p->run->calls)
                 if (!c.pauses) earliest(c.deadline(now) + 1);
         }
@@ -614,7 +645,9 @@ struct PluginHost::Impl {
         }
         const uint64_t outer = p.run->current;
         p.run->current = callId;
-        p.rt.setDeadline(c->deadline(steadyMs()));
+        const int64_t began = steadyMs();
+        const bool quietRun = c->kind != CallKind::Background && !c->userCaused;
+        p.rt.setDeadline(c->deadline(began));
         bool timeUp = false, oom = false, poolHit = false;
         auto observe = [&] {
             timeUp = timeUp || p.rt.deadlineHit();
@@ -640,6 +673,10 @@ struct PluginHost::Impl {
             std::lock_guard<std::mutex> lock(runningMu);
             running = nullptr;
         }
+        const int64_t ended = steadyMs();
+        if (quietRun) noteQuietRun(p, ended, ended - began);
+        if (Call* call = findCall(p, callId); call && call->pauses > 0)
+            call->ranWhilePausedMs += ended - std::max(began, call->pausedSince);
         auto err = p.cx.takeError();
         if (stopping) return;
         if (!internal.empty()) {
@@ -904,12 +941,76 @@ struct PluginHost::Impl {
                 p.run->timers.erase(t);
                 if (findCall(p, timer.owner)) {
                     runEntry(p, timer.owner, [&] { p.cx.call(timer.callback, {}); });
+                } else if (const int64_t at = quietAllowedAt(p, steadyMs()); at != 0) {
+                    timer.dueMs = at;  // waits, under the same id (clearTimeout still works)
+                    p.run->timers.emplace(tid, std::move(timer));
                 } else {
                     startCall(p, CallKind::Timer, "a timer callback set by " + timer.ownerWhat, deps.handlerBudgetMs, false,
                               [&] { return p.cx.call(timer.callback, {}); });
                 }
             }
+            // Continuations of ended calls that waited for quiet run time, in order.
+            while (!p.run->waiting.empty() && p.run->waiting.front().dueMs <= steadyMs()) {
+                if (stopping || turnOffs.count(id)) break;
+                if (const int64_t at = quietAllowedAt(p, steadyMs()); at != 0) {
+                    p.run->waiting.front().dueMs = at;
+                    break;
+                }
+                auto w = std::move(p.run->waiting.front());
+                p.run->waiting.pop_front();
+                startCall(p, CallKind::Continued, std::move(w.what), deps.handlerBudgetMs, false, [&] {
+                    w.body();
+                    return js::Value();
+                });
+            }
         }
+    }
+
+    // ---- Quiet run time -----------------------------------------------------------------------
+
+    void noteQuietRun(PluginCtx& p, int64_t endMs, int64_t ms) {
+        auto& runs = p.run->quietRuns;
+        runs.emplace_back(endMs, std::max<int64_t>(ms, 0));
+        while (!runs.empty() && runs.front().first <= endMs - deps.quietWindowMs) runs.pop_front();
+    }
+
+    // 0 if code of an ended call (an orphan timer or continuation) may run now; otherwise when it
+    // may: once enough of the window's run time has aged out of it.
+    int64_t quietAllowedAt(PluginCtx& p, int64_t now) {
+        auto& runs = p.run->quietRuns;
+        while (!runs.empty() && runs.front().first <= now - deps.quietWindowMs) runs.pop_front();
+        int64_t used = 0;
+        for (const auto& r : runs) used += r.second;
+        if (used < deps.quietRunMs) {
+            p.run->throttled = false;
+            return 0;
+        }
+        int64_t at = now + 1;
+        for (const auto& [end, ms] : runs) {
+            used -= ms;
+            at = end + deps.quietWindowMs;
+            if (used < deps.quietRunMs) break;
+        }
+        if (!p.run->throttled) {
+            p.run->throttled = true;
+            log(p.manifest.id, LogLevel::Info,
+                "Timers wait: outside what the user does, a plugin may run " + seconds(deps.quietRunMs) + " of code every " +
+                    seconds(deps.quietWindowMs) + "; this one used it, so its timers run later");
+        }
+        return std::max(at, now + 1);
+    }
+
+    // Code of a call that already ended (a completed piece of its host work): a call of its own,
+    // now or when the quiet run time allows.
+    void continueEnded(PluginCtx& p, std::string what, std::function<void()> body) {
+        if (const int64_t at = quietAllowedAt(p, steadyMs()); at != 0) {
+            p.run->waiting.push_back({at, std::move(what), std::move(body)});
+            return;
+        }
+        startCall(p, CallKind::Continued, std::move(what), deps.handlerBudgetMs, false, [&] {
+            body();
+            return js::Value();
+        });
     }
 
     // ---- Commands ----------------------------------------------------------------------------
@@ -1067,14 +1168,16 @@ void Work::finish(Settle settle) {
     if (finished_.exchange(true) || cancelled()) return;
     auto inbox = inbox_.lock();
     if (!inbox) return;
-    inbox->post([serial = ctxSerial_, id = id_, settle = std::move(settle)](PluginHost::Impl& h) {
+    inbox->post([serial = ctxSerial_, id = id_, settle = std::move(settle)](PluginHost::Impl& h) mutable {
         PluginCtx* p = h.bySerial(serial);
         if (!p) return;
         auto it = p->run->work.find(id);
         if (it == p->run->work.end()) return;  // cancelled meanwhile
         PendingWork w = std::move(it->second);
         p->run->work.erase(it);
-        auto body = [&] {
+        const uint64_t owner = w.owner;
+        std::string what = w.ownerWhat + ", continuing after it ended";
+        auto body = [p, w = std::move(w), settle = std::move(settle)] {
             JSContext* c = p->cx.raw();
             JSValue v;
             try {
@@ -1085,15 +1188,8 @@ void Work::finish(Settle settle) {
             if (JS_IsException(v)) p->cx.call(w.reject, {js::Value(c, JS_GetException(c))});
             else p->cx.call(w.resolve, {js::Value(c, v)});
         };
-        if (h.findCall(*p, w.owner)) {
-            h.runEntry(*p, w.owner, body);
-        } else {
-            h.startCall(*p, CallKind::Continued, w.ownerWhat + ", continuing after it ended", h.deps.handlerBudgetMs, false,
-                        [&] {
-                            body();
-                            return js::Value();
-                        });
-        }
+        if (h.findCall(*p, owner)) h.runEntry(*p, owner, body);
+        else h.continueEnded(*p, std::move(what), std::move(body));
     });
 }
 
@@ -1149,6 +1245,14 @@ std::shared_ptr<Work> startWork(PluginCtx& p, JSValue* promise) {
 uint64_t askUser(PluginCtx& p, PluginHostEvent confirm, std::function<void(bool)> answered) {
     auto& h = p.host;
     if (Call* c = h.findCall(p, p.run->current); c && c->kind == CallKind::Cleanup) return 0;  // a stopped call can't ask
+    if (Call* c = h.findCall(p, p.run->current); c && c->questions >= kMaxQuestions) {
+        h.log(p.manifest.id, LogLevel::Warn,
+              "Not asked: " + c->what + " already asked " + std::to_string(kMaxQuestions) +
+                  " questions, the most one action may ask (resolved null)");
+        return 0;
+    } else if (c) {
+        ++c->questions;
+    }
     const uint64_t id = ++h.nextRequest;
     confirm.kind = PluginHostEvent::Kind::Confirm;
     confirm.requestId = id;
@@ -1213,6 +1317,15 @@ void setBackgroundTask(PluginCtx& p, js::Value task) {
 
 }  // namespace plugins
 
+void plugins::lowerThreadPriority() {
+#if defined(__APPLE__)
+    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#else
+    // Linux: nice is per thread (the tid), raised from what it inherited; no privilege needed.
+    setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), kPluginNice);
+#endif
+}
+
 // ---- PluginHost ---------------------------------------------------------------------------------
 
 PluginHost::PluginHost(PluginHostDeps deps) : impl_(std::make_unique<Impl>(std::move(deps))) {}
@@ -1221,6 +1334,7 @@ PluginHost::~PluginHost() { stop(); }
 
 namespace {
 void* threadMain(void* impl) {
+    plugins::lowerThreadPriority();
     static_cast<PluginHost::Impl*>(impl)->loop();
     return nullptr;
 }

@@ -12,6 +12,11 @@ that call's time budget; a timer firing after that call has finished runs as a c
 with 5 seconds. Pending timers are dropped when the call that set them is stopped by a limit,
 and when the plugin is turned off. Returns an id for [clearTimeout](clearTimeout.md). No permission.
 
+Quiet run time: outside calls the user caused and the background task, a plugin's code may run
+at most 2 s in any minute (sync events, loading, and timers and continuations of calls that have
+ended all count). Once that is used, a timer whose call has ended runs late, when the minute
+allows — not failed, not counted. Polling with `setTimeout` works, but cheaply.
+
 ## Parameters
 
 | Parameter | Type |

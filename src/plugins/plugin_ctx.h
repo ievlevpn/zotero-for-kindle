@@ -167,9 +167,12 @@ Library* sharedLibrary(PluginCtx&, std::string* why);
 // ---- The user -----------------------------------------------------------------------------
 
 // Posts `confirm` (kind Confirm; plugin id, name and request id are filled in) and pauses the
-// running call's budget until the answer. `answered` runs on the plugin thread, outside any JS:
-// settle a Work from it. Dropped (never called) if the call is stopped or the plugin unloaded.
-// Returns 0 (nothing posted, `answered` never called) when asked from a stopped call's code.
+// running call's budget until the answer (waiting is free; code that runs meanwhile still counts).
+// `answered` runs on the plugin thread, outside any JS: settle a Work from it. Dropped (never
+// called) if the call is stopped or the plugin unloaded. Returns 0 (nothing posted, `answered`
+// never called) when asked from a stopped call's code, or by a call that already asked
+// kMaxQuestions times (logged).
+constexpr int kMaxQuestions = 3;
 uint64_t askUser(PluginCtx&, PluginHostEvent confirm, std::function<void(bool yes)> answered);
 // Any other event for the screen (plugin id and name filled in).
 void post(PluginCtx&, PluginHostEvent);
