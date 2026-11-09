@@ -23,9 +23,9 @@ void PluginWatcher::poll(int64_t nowMs) {
         if (e2) continue;
         const int64_t mtime = t.time_since_epoch().count();
         auto [pos, isNew] = seen_.emplace(id, mtime);
-        if (!isNew && pos->second != mtime) {
+        if (isNew ? !first : pos->second != mtime) {  // a folder that appears later is reloaded: loads if enabled
             pos->second = mtime;
-            if (!first) reload_(id);
+            reload_(id);
         }
     }
 }

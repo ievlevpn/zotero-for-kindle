@@ -151,10 +151,65 @@ TEST_CASE("example: the watcher reloads a plugin whose main.js changed, once a s
     CHECK(reloaded == std::vector<std::string>{"a"});
     w.poll(2000);  // unchanged since: nothing more
     CHECK(reloaded.size() == 1);
-    fp.add("c", "console.log('c');");  // a new plugin folder appears: noted, not reloaded
+    fp.add("c", "console.log('c');");  // a new plugin folder appears: reloaded (it loads, if enabled)
     w.poll(3000);
-    CHECK(reloaded.size() == 1);
-    fs::last_write_time(fp.path("c/main.js"), fs::last_write_time(fp.path("c/main.js")) + std::chrono::seconds(9));
-    w.poll(4000);
     CHECK(reloaded == std::vector<std::string>{"a", "c"});
+    w.poll(4000);
+    CHECK(reloaded.size() == 2);
+}
+
+TEST_CASE("example: the watcher survives a deleted main.js: no reload, no crash; recreating it reloads") {
+    FakePlugins fp;
+    fp.add("a", "console.log('a');");
+    std::vector<std::string> reloaded;
+    PluginWatcher w(fp.dir(), [&](const std::string& id) { reloaded.push_back(id); });
+    w.poll(0);
+    fs::remove(fp.path("a/main.js"));
+    w.poll(1000);
+    CHECK(reloaded.empty());
+    fp.write("a/main.js", "console.log('a again');");
+    fs::last_write_time(fp.path("a/main.js"), fs::last_write_time(fp.path("a/main.js")) + std::chrono::seconds(7));
+    w.poll(2000);
+    CHECK(reloaded == std::vector<std::string>{"a"});
+}
+
+namespace {
+bool logged(FakePlugins& fp, const std::string& id, const std::string& text) {
+    for (int i = 0; i < 80; ++i) {
+        if (fp.log(id).find(text) != std::string::npos) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+}
+}  // namespace
+
+TEST_CASE("example: with loadEagerly start() loads enabled plugins at once; by default they wait for an event") {
+    for (bool eager : {true, false}) {
+        FakePlugins fp;
+        fp.add("a", "console.log('a loaded');");
+        fp.add("off", "console.log('off loaded');");
+        PluginHostDeps d = fp.deps();
+        d.loadEagerly = eager;
+        PluginHost host(d);
+        host.setEnabled("a", true);
+        host.start();
+        host.waitIdle(3000);
+        if (eager) {
+            CHECK(logged(fp, "a", "a loaded"));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            CHECK(fp.log("a").empty());
+        }
+        CHECK(fp.log("off").empty());  // never enabled: never loaded
+        // An edit: reload(id) loads an enabled plugin that wasn't loaded, in the eager mode only.
+        fp.write("a/main.js", "console.log('a v2 loaded');");
+        host.reload("a");
+        host.waitIdle(3000);
+        if (eager) CHECK(logged(fp, "a", "a v2 loaded"));
+        else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            CHECK(fp.log("a").find("v2") == std::string::npos);
+        }
+        host.stop();
+    }
 }

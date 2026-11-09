@@ -39,6 +39,10 @@ struct PluginHostDeps {
     std::function<std::unique_ptr<Http>()> makeHttp;
     std::string webdavHost;  // the configured WebDAV server (host or URL); later: setWebdavHost
     std::function<int64_t()> clock;  // wall clock, ms since the epoch (log times); default: system
+    // The desktop developer loop (--plugins-dir): start() loads every enabled plugin at once, and
+    // reload(id) loads an enabled plugin that wasn't loaded yet. Off: plugins load lazily, at their
+    // first event (the Kindle).
+    bool loadEagerly = false;
     size_t memoryPerPlugin = 32 << 20;
     // What all plugins together may use (actual use, shared): an allocation that would pass it
     // fails, stopping the call that made it.
@@ -94,7 +98,7 @@ public:
     PluginHost(const PluginHost&) = delete;
     PluginHost& operator=(const PluginHost&) = delete;
 
-    // Starts the plugin thread. Plugins load lazily: each enabled plugin when the first event or
+    // Starts the plugin thread (with deps.loadEagerly, loading every enabled plugin). Plugins load lazily: each enabled plugin when the first event or
     // background run is due. Commands queued before start() wait for it.
     void start();
     // Interrupts whatever plugin code is running and joins the thread; returns within 2 s. Calls

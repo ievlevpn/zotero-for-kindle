@@ -100,6 +100,7 @@ PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& c
     d.appVersion = appVersion();
     d.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
     d.webdavHost = config ? config->webdavUrl : "";  // zk.fetch never reaches it (setWebdavHost on changes)
+    d.loadEagerly = gPluginDevLoop;
     if (gPluginDevLoop)
         d.logSink = [](const std::string& id, const std::string& line) {
             std::string text = line;

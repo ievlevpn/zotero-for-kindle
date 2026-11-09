@@ -993,12 +993,13 @@ struct PluginHost::Impl {
         std::vector<std::string> reloadNow;
         for (const auto& f : foldersCopy()) {
             if (only && f.dir != *only) continue;
-            if (loaded.count(f.dir)) reloadNow.push_back(f.dir);
+            if (loaded.count(f.dir) || deps.loadEagerly) reloadNow.push_back(f.dir);
             unload(f.dir);
             failedLoad.erase(f.dir);
             setProblem(f.dir, "");
         }
         if (only) failedLoad.erase(*only);
+        if (only && deps.loadEagerly && !std::count(reloadNow.begin(), reloadNow.end(), *only)) reloadNow.push_back(*only);  // maybe a new folder
         auto fresh = scanPlugins(deps.pluginsDir, deps.appVersion);
         {
             std::lock_guard<std::mutex> lock(mu);
@@ -1223,6 +1224,7 @@ void PluginHost::start() {
     pthread_attr_setstacksize(&attr, 4u << 20);
     impl_->started = pthread_create(&impl_->thread, &attr, threadMain, impl_.get()) == 0;
     pthread_attr_destroy(&attr);
+    if (impl_->started && impl_->deps.loadEagerly) impl_->post([](Impl& h) { h.reload(nullptr); });
 }
 
 void PluginHost::stop() {
