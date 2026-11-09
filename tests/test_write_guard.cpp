@@ -247,7 +247,8 @@ struct PluginRig {
         book.collections = {"NATURE01"};
         book.data = R"({"itemType":"book","title":"Owls","collections":["NATURE01"],"tags":[{"tag":"birds"}]})";
         book.pending = {pending(Kind::AddToCollection, "BOOK0001", "MATHS001"),
-                        pending(Kind::RemoveFromCollection, "BOOK0001", "NATURE01")};
+                        pending(Kind::RemoveFromCollection, "BOOK0001", "NATURE01"),
+                        pending(Kind::AddTag, "BOOK0001", "plugin"), pending(Kind::RemoveTag, "BOOK0001", "birds")};
         shapes["BOOK0001"] = book;
         PluginChangeShape trash;
         trash.item = true;
@@ -282,12 +283,13 @@ struct PluginRig {
         shapes["NOTE0004"] = others;
     }
     HttpResponse send(const std::string& method, const std::string& path, const std::string& body,
-                      bool versioned = true) {
+                      bool versioned = true, const std::string& version = "7") {
+        for (auto& [k, shape] : shapes) shape.version = 7;  // every object at version 7 here
         HttpRequest r;
         r.method = method;
         r.url = "https://api.zotero.org/users/1/" + path;
         r.body = body;
-        if (versioned) r.headers = {{"If-Unmodified-Since-Version", "7"}};
+        if (versioned) r.headers = {{"If-Unmodified-Since-Version", version}};
         inner.expect(method, r.url, FakeHttp::status(method == "POST" ? 200 : 204));
         HttpResponse out = guard.send(r);
         if (blocked(out)) inner.queue.clear();
@@ -402,4 +404,32 @@ TEST_CASE("guard: without a plugin lookup no plugin write goes out") {
     CHECK(blocked(rig.send("POST", "https://api.zotero.org/users/1/items", nlohmann::json::array({note}).dump())));
     CHECK(blocked(rig.send("PATCH", "https://api.zotero.org/users/1/items/BOOK0001", R"({"deleted":1})")));
     CHECK(rig.inner.sent.empty());
+}
+
+TEST_CASE("guard: a one-tag PATCH goes out only for a pending read mark or plugin tag change of that tag and way") {
+    PluginRig rig;
+    // BOOK0001: AddTag "plugin" and RemoveTag "birds" pending. BOOK0002: only a trash.
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"plugin"}]})")));
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[]})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0002", R"({"tags":[{"tag":"plugin"}]})")));  // nothing pending asks
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"other"}]})")));  // wrong tag
+    rig.shapes["BOOK0001"].pending = {pending(Kind::RemoveTag, "BOOK0001", "plugin"), pending(Kind::AddTag, "BOOK0001", "birds")};
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"plugin"}]})")));  // wrong way
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[]})")));
+    // A read mark: its tag, the way it was marked.
+    rig.shapes["BOOK0001"].readMarks = {{"read", true}};
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"read"}]})")));
+    rig.shapes["BOOK0001"].readMarks = {{"read", false}};
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"read"}]})")));
+    CHECK(rig.inner.sent.size() == 3);
+}
+
+TEST_CASE("guard: a plugin PATCH or DELETE against another version than the library's is refused") {
+    PluginRig rig;
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","MATHS001"]})", true, "6")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":1})", true, "8")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"plugin"}]})", true, "0")));
+    CHECK(blocked(rig.send("DELETE", "items/NOTE0002", "", true, "70")));
+    CHECK(rig.inner.sent.empty());
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":1})", true, "7")));
 }

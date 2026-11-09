@@ -609,10 +609,23 @@ void Library::removeObject(const std::string& type, const std::string& key) {
                                   "(kind = 'addNote' AND parentKey = ?1)) ORDER BY seq DESC");
             st.bind(1, key);
             while (st.step()) stale.push_back(readChange(st));
-            for (const auto& c : stale)
-                if (auto now = pluginChange(c.id); now && now->state == PluginChange::State::Pending)
-                    withdrawPluginChange(c, PluginChange::State::Refused, "It was deleted in Zotero.",
-                                         "It was deleted in Zotero.");
+            for (const auto& c : stale) {
+                auto now = pluginChange(c.id);
+                if (!now || now->state != PluginChange::State::Pending) continue;
+                // Its own removal (a trash, a note deletion) has happened: that one is done.
+                const bool removal = c.itemKey == key && ((type == "item" && c.kind == PluginChange::Kind::Trash) ||
+                                                          (type == "note" && c.kind == PluginChange::Kind::DeleteNote));
+                if (removal) {
+                    const int64_t ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch())
+                                           .count();
+                    Stmt done = db_.prepare("UPDATE plugin_changes SET state = 'sent', message = '', sentMs = ? WHERE id = ?");
+                    done.bind(1, ms).bind(2, c.id).step();
+                    continue;
+                }
+                withdrawPluginChange(c, PluginChange::State::Refused, "It was deleted in Zotero.",
+                                     "It was deleted in Zotero.");
+            }
         }
         Stmt ver = db_.prepare("DELETE FROM object_versions WHERE key = ?");
         ver.bind(1, key).step();

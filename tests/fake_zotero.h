@@ -9,6 +9,7 @@
 
 #include <functional>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,8 @@ public:
     int created = 0;
     std::map<std::string, int> failObjects;  // POST: these keys fail with this code; PATCH, DELETE of one: answered so
     std::map<std::string, json> settings;    // key -> {value, version}
+    std::set<std::string> answerUnchanged;   // POST: written, but answered as "unchanged"
+    bool omitSuccessful = false;             // POST: "success" without the "successful" copies
 
     // A setting changed elsewhere (the desktop's reader): bumps the library version.
     void putSetting(const std::string& key, json value) {
@@ -170,7 +173,7 @@ public:
                 if (k == "If-Unmodified-Since-Version") ius = std::stoll(v);
             if (ius != libraryVersion) return status(r, 412);
             json body = json::parse(req.body);
-            json success = json::object(), successful = json::object(), failed = json::object();
+            json success = json::object(), successful = json::object(), failed = json::object(), unchanged = json::object();
             ++libraryVersion;
             for (size_t i = 0; i < body.size(); ++i) {
                 json data = body[i];
@@ -187,8 +190,12 @@ public:
                 data["key"] = key;
                 data["version"] = libraryVersion;
                 items[key] = json{{"key", key}, {"version", libraryVersion}, {"data", data}};
+                if (answerUnchanged.count(key)) {
+                    unchanged[std::to_string(i)] = key;
+                    continue;
+                }
                 success[std::to_string(i)] = key;
-                successful[std::to_string(i)] = items[key];
+                if (!omitSuccessful) successful[std::to_string(i)] = items[key];
             }
             r.headers["last-modified-version"] = std::to_string(libraryVersion);
             if (loseNextWriteResponse) {
@@ -198,7 +205,7 @@ public:
                 lost.curlError = "Operation timed out";
                 return lost;
             }
-            return ok(r, json{{"success", success}, {"successful", successful}, {"unchanged", json::object()},
+            return ok(r, json{{"success", success}, {"successful", successful}, {"unchanged", unchanged},
                               {"failed", failed}});
         }
         // PATCH /items/<key>: the given fields, against the item's own version

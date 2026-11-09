@@ -38,9 +38,10 @@ struct Rig {
     WriteGuard guard{server, [this](const std::string& k) { return lib.annotation(k).has_value(); },
                      [this](const std::string& k) { return lib.attachment(k).has_value(); },
                      [this](const std::string& k) -> std::optional<std::vector<std::string>> {
-                         if (auto i = lib.item(k)) return i->tags;
+                         if (auto i = lib.zoteroItem(k)) return i->tags;
                          return std::nullopt;
-                     }};
+                     },
+                     pluginChangeShapes(lib)};
     ZoteroApi api{guard, 1, "k3y"};
     SyncEngine engine{api, lib};
 
@@ -162,6 +163,14 @@ TEST_CASE("write guard: an item's tags may change by one tag, against its versio
         [&](const std::string& k) -> std::optional<std::vector<std::string>> {
             if (items.count(k)) return items[k];
             return std::nullopt;
+        },
+        [&](const std::string& k) -> std::optional<PluginChangeShape> {  // BOOK0001 marked read, at version 7
+            if (k != "BOOK0001") return std::nullopt;
+            PluginChangeShape s;
+            s.item = true;
+            s.version = 7;
+            s.readMarks = {{"read", true}};
+            return s;
         });
     auto patch = [&](const std::string& key, const std::string& body, bool versioned = true) {
         HttpRequest r;

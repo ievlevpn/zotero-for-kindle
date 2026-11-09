@@ -84,15 +84,43 @@ std::string settingsRefusal(const HttpRequest& req, const IsAnnotation& isAttach
     return {};
 }
 
+bool isKey(const nlohmann::json& v) {
+    static const std::regex key(R"(^[A-Z0-9]{8}$)");
+    return v.is_string() && std::regex_match(v.get<std::string>(), key);
+}
+
+// The pending change of that kind on the key that `match` accepts, or null.
+const PluginChange* pendingOf(const PluginChangeShape& shape, PluginChange::Kind kind,
+                              const std::function<bool(const PluginChange&)>& match = nullptr) {
+    for (const auto& c : shape.pending)
+        if (c.kind == kind && c.state == PluginChange::State::Pending && (!match || match(c))) return &c;
+    return nullptr;
+}
+
+// Sent against the version the library knows the object at (Zotero's copy), and no other.
+std::string againstVersion(const HttpRequest& req, const std::string& key, const PluginChangeShape& shape) {
+    for (const auto& [name, value] : req.headers)
+        if (name == "If-Unmodified-Since-Version")
+            return shape.version > 0 && value == std::to_string(shape.version)
+                       ? std::string{}
+                       : "item " + key + " sent against version " + value + ", not " + std::to_string(shape.version);
+    return "item " + key + " without If-Unmodified-Since-Version";
+}
+
 // PATCH /users/<id>/items/<key> of a regular item: only {"tags": [{"tag": …, "type": n}, …]}, against
-// the item's version, adding or removing one tag name and keeping the others.
-std::string tagsRefusal(const HttpRequest& req, const std::string& key, const WriteGuard::ItemTags& itemTags) {
+// the item's version, adding or removing one tag name and keeping the others: the tag of a pending
+// read mark (added if read), or of a pending plugin AddTag (added) / RemoveTag (taken off).
+std::string tagsRefusal(const HttpRequest& req, const std::string& key, const WriteGuard::ItemTags& itemTags,
+                        const WriteGuard::PluginChanges& pluginChanges) {
     if (!itemTags) return "item " + key + " is not an annotation";
     const auto have = itemTags(key);
     if (!have) return "item " + key + " is not an item of this library";
     if (req.method != "PATCH") return "item " + key + ": only PATCH of its tags";
     if (!queryOf(req.url).empty()) return "PATCH item with a query";
     if (!versioned(req)) return "PATCH item " + key + " without If-Unmodified-Since-Version";
+    const auto shape = pluginChanges ? pluginChanges(key) : std::nullopt;
+    if (!shape) return "item " + key + ": no read mark or plugin change pending";
+    if (std::string why = againstVersion(req, key, *shape); !why.empty()) return why;
     auto body = nlohmann::json::parse(req.body, nullptr, false);
     if (!body.is_object() || body.size() != 1 || !body.contains("tags") || !body["tags"].is_array())
         return "PATCH item " + key + " changes more than its tags";
@@ -109,20 +137,14 @@ std::string tagsRefusal(const HttpRequest& req, const std::string& key, const Wr
     std::vector<std::string> changed;
     std::set_symmetric_difference(before.begin(), before.end(), after.begin(), after.end(), std::back_inserter(changed));
     if (changed.size() != 1) return "PATCH item " + key + " changes " + std::to_string(changed.size()) + " tags, not one";
-    return {};
-}
-
-bool isKey(const nlohmann::json& v) {
-    static const std::regex key(R"(^[A-Z0-9]{8}$)");
-    return v.is_string() && std::regex_match(v.get<std::string>(), key);
-}
-
-// The pending change of that kind on the key that `match` accepts, or null.
-const PluginChange* pendingOf(const PluginChangeShape& shape, PluginChange::Kind kind,
-                              const std::function<bool(const PluginChange&)>& match = nullptr) {
-    for (const auto& c : shape.pending)
-        if (c.kind == kind && c.state == PluginChange::State::Pending && (!match || match(c))) return &c;
-    return nullptr;
+    const std::string& tag = changed[0];
+    const bool added = after.count(tag) > 0;
+    for (const auto& [markTag, read] : shape->readMarks)
+        if (markTag == tag && read == added) return {};
+    if (pendingOf(*shape, added ? PluginChange::Kind::AddTag : PluginChange::Kind::RemoveTag,
+                  [&](const PluginChange& c) { return c.value == tag; }))
+        return {};
+    return "PATCH item " + key + ": nothing pending " + (added ? "adds" : "takes off") + " the tag " + tag;
 }
 
 // The fields a plugin's new item may carry: what Library makes of zk.zotero.createItem's fields.
@@ -203,6 +225,7 @@ std::string pluginPatchRefusal(const HttpRequest& req, const std::string& key, c
     if (req.method != "PATCH") return "item " + key + ": only PATCH";
     if (!queryOf(req.url).empty()) return "PATCH item with a query";
     if (!versioned(req)) return "PATCH item " + key + " without If-Unmodified-Since-Version";
+    if (std::string why = againstVersion(req, key, *shape); !why.empty()) return why;
     if (body.contains("deleted")) {
         if (body["deleted"] != 1) return "PATCH item " + key + ": deleted is not 1";
         if (!pendingOf(*shape, K::Trash)) return "item " + key + " is not being moved to the trash";
@@ -239,7 +262,7 @@ std::string pluginDeleteRefusal(const HttpRequest& req, const std::string& key,
                    [&](const PluginChange& c) { return c.pluginId == shape->createdBy; }))
         return "note " + key + " is not being deleted by the plugin that added it";
     if (!versioned(req)) return "DELETE note " + key + " without If-Unmodified-Since-Version";
-    return {};
+    return againstVersion(req, key, *shape);
 }
 
 // Why the request must not go out, or empty if it may.
@@ -268,7 +291,7 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, co
         auto body = nlohmann::json::parse(req.body, nullptr, false);
         if (body.is_object() && body.size() == 1 && (body.contains("collections") || body.contains("deleted")))
             return pluginPatchRefusal(req, key, body, pluginChanges);
-        return tagsRefusal(req, key, itemTags);
+        return tagsRefusal(req, key, itemTags, pluginChanges);
     }
     static const std::regex settingsPath(R"(^/users/\d+/settings/?$)");
     if (m == "POST" && std::regex_match(path, settingsPath)) return settingsRefusal(req, isAttachment);

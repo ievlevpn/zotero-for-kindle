@@ -133,7 +133,7 @@ TEST_CASE("push: a created item reaches Zotero with its collection and tags, and
     REQUIRE(posts.size() == 2);
     CHECK(json::parse(posts[0].body).size() == 1);
     CHECK(json::parse(posts[0].body)[0]["key"] == key);
-    CHECK_FALSE(json::parse(posts[0].body)[0].contains("version"));
+    CHECK(json::parse(posts[0].body)[0]["version"] == 0);  // new: must not exist in Zotero
     CHECK(json::parse(posts[1].body)[0]["key"] == noteKey);
     // Every change Sent; the local copies are Zotero's now, at Zotero's versions.
     for (const auto& id : {create, tag, file, note}) CHECK(rig.stateOf(id) == State::Sent);
@@ -306,7 +306,7 @@ TEST_CASE("push: a plugin's own note is deleted against its version; a note it d
     CHECK(rig.stateOf(theirs) == State::Refused);
     CHECK(rig.server.items.count("NOTE0009"));
     CHECK(rig.lib.note("NOTE0009"));
-    CHECK(rig.stateOf(others) == State::Refused);
+    CHECK(rig.stateOf(others) == State::Sent);  // the note it asked to delete is gone (never sent by it)
 }
 
 TEST_CASE("push: a create whose answer was lost isn't made twice") {
@@ -322,4 +322,62 @@ TEST_CASE("push: a create whose answer was lost isn't made twice") {
     CHECK(rig.stateOf(create) == State::Sent);
     CHECK(rig.server.items[key]["version"] == version);  // not written again
     CHECK(rig.lib.item(key)->version == version);
+}
+
+TEST_CASE("push: a DeleteNote of a note Zotero deleted meanwhile is Sent") {
+    Rig rig;
+    const std::string add = rig.queue("p", Kind::AddNote, "", "<p>mine</p>", "BOOK0001");
+    const std::string key = rig.keyOf(add);
+    REQUIRE_FALSE(rig.engine.push().error);
+    const std::string del = rig.queue("p", Kind::DeleteNote, key);
+    rig.server.remove(key);  // deleted on the desktop, not pulled: the DELETE answers 404
+    REQUIRE_FALSE(rig.engine.push().error);
+    CHECK(rig.requests("DELETE").size() == 1);
+    CHECK(rig.stateOf(del) == State::Sent);
+    CHECK_FALSE(rig.lib.zoteroNote(key));
+
+    // Deleted there and pulled before the push: done, nothing sent.
+    const std::string add2 = rig.queue("p", Kind::AddNote, "", "<p>two</p>", "BOOK0001");
+    const std::string key2 = rig.keyOf(add2);
+    REQUIRE_FALSE(rig.engine.push().error);
+    const std::string del2 = rig.queue("p", Kind::DeleteNote, key2);
+    rig.server.remove(key2);
+    rig.pull();
+    CHECK(rig.stateOf(del2) == State::Sent);
+    REQUIRE_FALSE(rig.engine.push().error);
+    CHECK(rig.requests("DELETE").size() == 1);
+}
+
+TEST_CASE("push: a create is sent at version 0, so a key Zotero already has is never overwritten") {
+    Rig rig;
+    const std::string create = rig.create("p", "Mine");
+    const std::string key = rig.keyOf(create);
+    // Zotero has something else under that key (without the library version moving).
+    json other = FakeZotero::item(key, "Desktop's");
+    other["version"] = rig.server.libraryVersion;
+    rig.server.items[key] = json{{"key", key}, {"version", rig.server.libraryVersion}, {"data", other}};
+    REQUIRE_FALSE(rig.engine.push().error);
+    auto posts = rig.requests("POST", "/items");
+    REQUIRE(posts.size() == 1);
+    CHECK(json::parse(posts[0].body)[0]["version"] == 0);
+    CHECK(rig.server.items[key]["data"]["title"] == "Desktop's");  // refused (412), not overwritten
+    CHECK(rig.stateOf(create) == State::Sent);                     // resolved by looking it up (and logged)
+    CHECK(rig.lib.item(key)->title == "Desktop's");                // Zotero's copy here now
+}
+
+TEST_CASE("push: a create answered unchanged, or without its copy, is looked up and never sent again") {
+    Rig rig;
+    const std::string a = rig.create("p", "Unchanged");
+    const std::string b = rig.create("p", "No copy");
+    rig.server.answerUnchanged.insert(rig.keyOf(a));
+    rig.server.omitSuccessful = true;
+    SyncReport rep = rig.engine.push();
+    REQUIRE_FALSE(rep.error);
+    CHECK(rig.stateOf(a) == State::Sent);
+    CHECK(rig.stateOf(b) == State::Sent);
+    CHECK(rig.lib.item(rig.keyOf(a))->version == rig.server.items[rig.keyOf(a)]["version"]);
+    CHECK(rig.lib.item(rig.keyOf(b))->version == rig.server.items[rig.keyOf(b)]["version"]);
+    CHECK(rig.server.fetchedItemKeys().size() >= 2);
+    REQUIRE_FALSE(rig.engine.push().error);
+    CHECK(rig.requests("POST", "/items").size() == 1);
 }

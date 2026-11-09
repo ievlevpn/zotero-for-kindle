@@ -460,11 +460,11 @@ TEST_CASE("changes: what Zotero deletes stays deleted, its pending removals ende
     rig.server.remove("NOTE0001");
     rig.server.remove("BOOK0002");
     rig.pull();
-    // Refused by the pull (nothing left to withdraw), and nothing comes back.
+    // Done by the pull (what they asked for happened in Zotero), and nothing comes back.
     CHECK_FALSE(rig.lib.cancelPluginChange("p", delNote));
     CHECK_FALSE(rig.lib.cancelPluginChange("p", trash));
-    CHECK(rig.stateOf(delNote) == State::Refused);
-    CHECK(rig.stateOf(trash) == State::Refused);
+    CHECK(rig.stateOf(delNote) == State::Sent);
+    CHECK(rig.stateOf(trash) == State::Sent);
     CHECK_FALSE(rig.lib.note("NOTE0001"));
     CHECK_FALSE(rig.lib.zoteroNote("NOTE0001"));
     CHECK(rig.lib.notes("BOOK0001").empty());
@@ -553,7 +553,7 @@ TEST_CASE("changes: the same change asked twice is two changes") {
     CHECK(rig.lib.notes("BOOK0001").size() == 2);
 }
 
-TEST_CASE("changes: what Zotero deletes ends the changes pending on it, as Refused") {
+TEST_CASE("changes: what Zotero deletes ends the changes pending on it, as Refused (its own removal: Sent)") {
     Rig rig;
     rig.server.put(FakeZotero::note("NOTE0001", "BOOK0002", "<p>old</p>"));
     rig.pull();
@@ -568,13 +568,16 @@ TEST_CASE("changes: what Zotero deletes ends the changes pending on it, as Refus
     rig.server.remove("NOTE0001");
     rig.server.remove("BOOK0002");
     rig.pull();
-    for (const auto& id : {tag, trash, note, onNote, del, kept}) {
+    for (const auto& id : {tag, note, onNote, kept}) {
         CHECK(rig.stateOf(id) == State::Refused);
         CHECK(rig.lib.pluginChange(id)->message == "It was deleted in Zotero.");
     }
+    // A trash or note deletion of what went: done.
+    CHECK(rig.stateOf(trash) == State::Sent);
+    CHECK(rig.stateOf(del) == State::Sent);
     CHECK(rig.lib.pendingPluginChanges().empty());
     CHECK_FALSE(rig.lib.note(rig.keyOf(note)));
-    CHECK(rig.lib.pluginChangeLog("q", 10).at(0).state == State::Refused);
+    CHECK(rig.lib.pluginChangeLog("q", 10).at(0).state == State::Sent);
 }
 
 TEST_CASE("changes: a schema 7 database gains the change table and keeps its library") {
@@ -605,4 +608,25 @@ TEST_CASE("changes: a schema 7 database gains the change table and keeps its lib
         CHECK(lib.item("BOOK0001")->tags == std::vector<std::string>{"x"});
     }
     std::filesystem::remove(path);
+}
+
+TEST_CASE("changes: a pull that removes what a pending trash or note deletion targets ends it Sent; the rest Refused") {
+    Rig rig;
+    rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>old</p>"));
+    rig.pull();
+    const std::string add = rig.queue("p", Kind::AddNote, "", "<p>mine</p>", "BOOK0001");
+    rig.lib.markPluginChange(add, State::Sent, "", 1);
+    rig.server.put(FakeZotero::note(rig.keyOf(add), "BOOK0001", "<p>mine</p>"));
+    rig.pull();
+    const std::string delNote = rig.queue("p", Kind::DeleteNote, rig.keyOf(add));
+    const std::string trash = rig.queue("p", Kind::Trash, "BOOK0002");
+    const std::string tag = rig.queue("p", Kind::AddTag, "BOOK0001", "x");
+    rig.server.remove(rig.keyOf(add));
+    rig.server.remove("BOOK0002");
+    rig.server.remove("BOOK0001");
+    rig.pull();
+    CHECK(rig.stateOf(delNote) == State::Sent);
+    CHECK(rig.stateOf(trash) == State::Sent);
+    CHECK(rig.stateOf(tag) == State::Refused);
+    CHECK(rig.lib.pluginChange(tag)->message == "It was deleted in Zotero.");
 }

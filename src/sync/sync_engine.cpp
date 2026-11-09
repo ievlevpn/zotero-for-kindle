@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <random>
+#include <set>
 
 namespace zk {
 
@@ -63,13 +64,18 @@ WriteGuard::PluginChanges pluginChangeShapes(Library& lib) {
         PluginChangeShape shape;
         for (auto& c : lib.pendingPluginChanges())
             if (c.itemKey == key) shape.pending.push_back(std::move(c));
-        if (shape.pending.empty()) return std::nullopt;
+        for (const auto& m : lib.readMarks())
+            if (m.itemKey == key) shape.readMarks.emplace_back(m.tag, m.read);
+        if (shape.pending.empty() && shape.readMarks.empty()) return std::nullopt;
+        shape.version = lib.objectVersion(key);
         if (auto item = lib.zoteroItem(key)) {  // as Zotero has it, without pending changes
             shape.item = true;
+            if (item->version > 0) shape.version = item->version;
             shape.data = item->json;
             shape.collections = item->collections;
         } else if (auto note = lib.zoteroNote(key)) {  // one being deleted too
             shape.note = true;
+            if (note->version > 0) shape.version = note->version;
             shape.data = note->json;
             shape.createdBy = note->createdBy;
         }
@@ -642,7 +648,7 @@ bool SyncEngine::pushPluginCreates(SyncReport& rep, std::vector<PluginChange> ch
                 continue;
             }
             obj["key"] = c.itemKey;
-            obj.erase("version");  // new
+            obj["version"] = 0;  // new: Zotero refuses it (412) if the key exists, never overwrites
             toSend.push_back(c);
             objects.push_back(std::move(obj));
         }
@@ -672,35 +678,45 @@ bool SyncEngine::pushPluginCreates(SyncReport& rep, std::vector<PluginChange> ch
             preconditionFailed = true;
             return true;
         }
-        std::vector<std::string> lookUp;  // refused as already there: Zotero may have it from an earlier send
+        // Resolved by asking Zotero what it has under the key: an object refused as already there
+        // (412: an earlier send landed), answered "unchanged", or a success without its copy.
+        std::vector<size_t> lookUp;
         {
             auto tx = lib_.begin();
+            std::set<size_t> answered;
             for (const auto& [index, key] : res->successKeys) {
                 if (index < 0 || static_cast<size_t>(index) >= to - from) continue;
+                answered.insert(index);
                 const PluginChange& c = toSend[from + index];
-                if (auto it = res->successful.find(index); it != res->successful.end() && it->second.value("key", "") == c.itemKey) {
-                    apply(it->second, rep);  // Zotero's copy, at its version
-                } else {
-                    lib_.setObjectVersion(c.itemKey, res->libraryVersion);
+                auto it = res->successful.find(index);
+                if (it == res->successful.end() || it->second.value("key", "") != c.itemKey) {
+                    lookUp.push_back(from + index);
+                    continue;
                 }
+                apply(it->second, rep);  // Zotero's copy, at its version
                 lib_.markPluginChange(c.id, PluginChange::State::Sent, "", nowMs());
             }
             lib_.setLibraryVersion(res->libraryVersion);  // our write was the only change since (else 412)
             for (const auto& [index, message] : res->failed) {
                 if (index < 0 || static_cast<size_t>(index) >= to - from) continue;
+                answered.insert(index);
                 const PluginChange& c = toSend[from + index];
                 auto code = res->failedCodes.find(index);
                 if (code != res->failedCodes.end() && (code->second == 412 || code->second == 428)) {
-                    lookUp.push_back(c.itemKey);
+                    lookUp.push_back(from + index);
                     continue;
                 }
                 lib_.markPluginChange(c.id, PluginChange::State::Refused, message);
             }
+            for (size_t j = 0; j < to - from; ++j)
+                if (!answered.count(j)) lookUp.push_back(from + j);  // "unchanged"
             tx.commit();
         }
         if (!lookUp.empty()) {
+            std::vector<std::string> keys;
+            for (size_t j : lookUp) keys.push_back(toSend[j].itemKey);
             UserError err2;
-            auto there = api_.fetch("items", lookUp, &err2);
+            auto there = api_.fetch("items", keys, &err2);
             if (!there) {
                 rep.error = err2;
                 return false;
@@ -708,11 +724,18 @@ bool SyncEngine::pushPluginCreates(SyncReport& rep, std::vector<PluginChange> ch
             auto tx = lib_.begin();
             for (const auto& obj : *there) {
                 const std::string key = obj.value("key", "");
-                for (size_t j = from; j < to; ++j)
-                    if (toSend[j].itemKey == key) {
-                        apply(obj, rep);
-                        lib_.markPluginChange(toSend[j].id, PluginChange::State::Sent, "", nowMs());
-                    }
+                for (size_t j : lookUp) {
+                    if (toSend[j].itemKey != key) continue;
+                    // Ours (sent before, its answer lost) unless it looks like something else.
+                    const json& d = obj.contains("data") && obj["data"].is_object() ? obj["data"] : json::object();
+                    const json& mine = objects[j];
+                    const char* field = mine.value("itemType", "") == "note" ? "note" : "title";
+                    if (d.value("itemType", "") != mine.value("itemType", "") || d.value(field, "") != mine.value(field, ""))
+                        log(LogLevel::Warn, "sync: plugin change %s: what Zotero has under %s (%s) is not what was sent",
+                            toSend[j].id.c_str(), key.c_str(), d.value("itemType", "").c_str());
+                    apply(obj, rep);
+                    lib_.markPluginChange(toSend[j].id, PluginChange::State::Sent, "", nowMs());
+                }
             }
             tx.commit();  // one not there: left pending, tried again next time
         }
@@ -739,7 +762,7 @@ bool SyncEngine::pushPluginEdit(SyncReport& rep, const PluginChange& c) {
         UserError err;
         if (c.kind == K::DeleteNote) {
             auto note = lib_.zoteroNote(c.itemKey);
-            if (!note) return end(S::Refused, kDeletedInZotero);
+            if (!note) return end(S::Sent, "");  // gone already: what was asked
             // Only a note the same plugin added (the guard checks it too).
             if (note->createdBy.empty() || note->createdBy != c.pluginId)
                 return end(S::Refused, "Only a note the plugin added can be deleted.");
@@ -804,7 +827,9 @@ bool SyncEngine::pushPluginEdit(SyncReport& rep, const PluginChange& c) {
             rep.error = err;
             return false;
         }
-        if (res->gone) return end(S::Refused, kDeletedInZotero);
+        // Gone from Zotero: a deletion asked for has happened; anything else can't be made.
+        const bool removal = c.kind == K::DeleteNote || c.kind == K::Trash;
+        if (res->gone) return removal ? end(S::Sent, "") : end(S::Refused, kDeletedInZotero);
         if (!res->failed.empty()) return end(S::Refused, res->failed.begin()->second);
         if (res->preconditionFailed) {
             if (attempt > 0) {
@@ -819,7 +844,7 @@ bool SyncEngine::pushPluginEdit(SyncReport& rep, const PluginChange& c) {
                 rep.error = err2;
                 return false;
             }
-            if (objects->empty()) return end(S::Refused, kDeletedInZotero);
+            if (objects->empty()) return removal ? end(S::Sent, "") : end(S::Refused, kDeletedInZotero);
             auto tx = lib_.begin();
             for (const auto& obj : *objects) {
                 // Trashed in Zotero already: what the change asked for.
