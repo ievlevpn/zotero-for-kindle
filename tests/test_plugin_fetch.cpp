@@ -580,8 +580,7 @@ TEST_CASE("fetch: a connection refused for its address is the local-network erro
     Outcome o = send(ph, manifest({Permission::NetAny}), get("https://intranet.example.com/x"));
     REQUIRE(o.threw);
     CHECK(o.kind == FetchError::Kind::Refused);
-    CHECK(contains(o.message, "intranet.example.com is on your local network; plugins with net:* can't reach it"));
-    CHECK(contains(o.message, "declare it by name"));
+    CHECK(contains(o.message, "intranet.example.com is on your local network; plugins can reach it only if it is declared by its exact name"));
 }
 
 namespace {
@@ -724,4 +723,36 @@ TEST_CASE("fetch: through the real client, net:* can't open a connection to loca
         CHECK(o.kind == FetchError::Kind::Refused);
         CHECK(contains(o.message, "is on your local network"));
     }
+}
+
+TEST_CASE("fetch: a host matched by a wildcard keeps the address check; only an exact name turns it off") {
+    FakeHttp fake;
+    fake.expect("GET", "https://intranet.example.org/", FakeHttp::ok("1"));
+    fake.expect("GET", "https://exact.example.com/", FakeHttp::ok("2"));
+    PluginHttp ph(fake, "");
+    const auto m = manifest({}, {"*.example.org", "exact.example.com"});
+    REQUIRE_FALSE(send(ph, m, get("https://intranet.example.org/")).threw);
+    REQUIRE_FALSE(send(ph, m, get("https://exact.example.com/")).threw);
+    REQUIRE(fake.sent.size() == 2);
+    REQUIRE(fake.sent[0].allowAddress);
+    CHECK_FALSE(fake.sent[1].allowAddress);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    inet_aton("192.168.1.10", &a.sin_addr);
+    CHECK_FALSE(fake.sent[0].allowAddress(reinterpret_cast<const sockaddr*>(&a), sizeof a));
+}
+
+TEST_CASE("fetch: a wildcard-declared host resolving to a private address is refused at connect") {
+    FakeHttp fake;
+    HttpResponse refused;  // what CurlHttp returns when the open-socket hook says no
+    refused.curlCode = 7;
+    refused.curlError = "Couldn't connect to server";
+    refused.addressRefused = true;
+    fake.expect("GET", "https://intranet.example.org/", refused);
+    PluginHttp ph(fake, "");
+    Outcome o = send(ph, manifest({}, {"*.example.org"}), get("https://intranet.example.org/x"));
+    REQUIRE(o.threw);
+    CHECK(o.kind == FetchError::Kind::Refused);
+    CHECK(contains(o.message, "intranet.example.org is on your local network"));
+    CHECK(contains(o.message, "\"net:intranet.example.org\""));
 }

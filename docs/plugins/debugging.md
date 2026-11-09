@@ -99,7 +99,7 @@ and try them in the desktop build against your own library.
 | `zk.fetch: only https:// URLs are allowed (…)` | Plain `http://` isn't allowed. | Use `https://`. |
 | `zk.fetch("…") needs "net:api.example.org" in plugin.json` | The host isn't declared. | Add `net:<host>`; `net:*.example.org` covers its subdomains. |
 | `zk.fetch: plugins can't connect to api.zotero.org (zotero.org and the WebDAV server are the app's own)` | Zotero and the user's WebDAV server are never reachable from a plugin. | Read the library with `zk.library`; change it with `zk.zotero`. |
-| `… is on your local network; plugins with net:* can't reach it — declare it by name ("net:nas.local") in plugin.json` | `net:*` reaches only the internet. | Declare the host by name. |
+| `… is on your local network; plugins can reach it only if it is declared by its exact name ("net:nas.local") in plugin.json` | `net:*` and `net:*.<domain>` reach only the internet. | Declare the host by its exact name. |
 | `LimitError` with `limit` `responseSize`, `responseTime` or `fetches` | A response over 10 MB, a request over 30 s (or its `timeout`), or more than 8 fetches under way. Only that fetch fails. | Ask for less, or await some fetches before starting more. |
 | `zk.storage.update can't be called inside another update's function` | A storage write inside an update's function would wait for itself. | Return the new value instead; do other writes after the update. |
 | `zk.files: "…" is outside the plugin's data folder` | Paths are relative to `data/`, without `..`. | Use a relative path. |

@@ -57,9 +57,9 @@
             ]
           },
           {
-            "description": "net:<host>, or net:*.<domain> for its subdomains.",
+            "description": "net:<host>, or net:*.<domain> for its subdomains. Not an address (a last label of digits or 0x…) and not zotero.org.",
             "type": "string",
-            "pattern": "^net:(\\*\\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
+            "pattern": "^net:(?!(.*\\.)?zotero\\.org$)(?!.*\\.([0-9]+|0x[0-9a-f]*)$)(\\*\\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$"
           }
         ]
       }

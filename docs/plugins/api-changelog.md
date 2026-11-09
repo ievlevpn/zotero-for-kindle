@@ -77,4 +77,4 @@ for anyone who read an early draft:
 - **Timers**: a timer that fires after the call that set it has ended runs as a call of its own,
   with 5 seconds.
 - **Memory** is 32 MB a plugin and 96 MB for all plugins together, counted on what they use.
-- **`zk.fetch` with `net:*`** doesn't reach hosts on the local network; declare them by name.
+- **`zk.fetch` with `net:*` or `net:*.<domain>`** doesn't reach hosts on the local network; declare them by their exact name. Addresses (`net:127.0.0.1`, `net:0x7f.1`) and `net:zotero.org` can't be declared.

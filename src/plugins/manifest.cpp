@@ -38,6 +38,20 @@ const std::regex& hostRe() {
     return r;
 }
 
+// WHATWG's "ends in a number": a name whose last label is all digits or 0x… is an IPv4 address
+// in disguise (curl turns 0x7f.1 into 127.0.0.1), so it can't be declared by name.
+bool endsInNumber(const std::string& host) {
+    const std::string last = host.substr(host.rfind('.') + 1);
+    if (!last.empty() && std::all_of(last.begin(), last.end(), [](unsigned char c) { return std::isdigit(c); })) return true;
+    return last.size() >= 2 && last[0] == '0' && last[1] == 'x' &&
+           std::all_of(last.begin() + 2, last.end(), [](unsigned char c) { return std::isxdigit(c); });
+}
+
+bool zoteroName(const std::string& host) {
+    return host == "zotero.org" || host == "*.zotero.org" ||
+           (host.size() > 11 && host.compare(host.size() - 11, 11, ".zotero.org") == 0);
+}
+
 std::string str(const json& j, const char* key, bool required) {
     auto it = j.find(key);
     if (it == j.end()) {
@@ -118,6 +132,10 @@ PluginManifest parseObject(const json& j) {
         if (f != fixed.end()) {
             m.permissions.insert(f->second);
         } else if (s.rfind("net:", 0) == 0 && std::regex_match(s.substr(4), hostRe())) {
+            const std::string host = s.substr(4);
+            if (endsInNumber(host))
+                bad("\"" + s + "\": an address can't be declared, only a host name (use net:* to reach public addresses)");
+            if (zoteroName(host)) bad("\"" + s + "\": plugins can't connect to zotero.org (it is the app's own)");
             m.permissions.insert(Permission::Net);
             m.hosts.push_back(s.substr(4));
         } else {

@@ -128,9 +128,10 @@ from loading, with the message above. Storage, files, logging, `zk.setBadge`, `s
   `Authorization` header is dropped when a redirect leaves the origin.
 - `zotero.org`, every `*.zotero.org` and the user's WebDAV host are always refused, even with
   `net:*`.
-- With `net:*`, hosts on the local network (loopback, private and link-local addresses, checked on
-  the address actually connected to) are refused. Declare such a host by name, e.g.
-  `net:nas.local`, to reach it.
+- Hosts on the local network (loopback, private and link-local addresses, checked on the address
+  actually connected to) are refused unless the host is declared by its exact name, e.g.
+  `net:nas.local`; `net:*` and `net:*.<domain>` reach only the internet. An address can't be
+  declared (`net:192.168.1.5` is refused), and neither can `net:zotero.org`.
 - No cookies, and none of the app's credentials. A user name or password in the URL is refused.
 - A response may be at most 10 MB, and a request may take at most 30 s (less with
   `{ timeout }`). A plugin may have 8 fetches under way at once, with 20 MB of request bodies

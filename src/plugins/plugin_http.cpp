@@ -197,16 +197,18 @@ std::string duration(int ms) {
     return std::to_string(ms) + " ms";
 }
 
-// Declared by name (net:<host> or net:*.<domain>), not just covered by net:*.
+// Declared by its exact name (net:<host>): only such a host may be on the local network. A host
+// matched by a wildcard (net:*.<domain>) or only by net:* keeps the address check, since anyone
+// can point a subdomain at 127.0.0.1.
 bool declared(const PluginManifest& m, const std::string& host) {
-    PluginManifest named;
-    named.hosts = m.hosts;
-    named.permissions.insert(Permission::Net);
-    return hostAllowed(named, host);
+    const std::string h = lower(host);
+    return !isIpLiteral(h) && std::any_of(m.hosts.begin(), m.hosts.end(), [&](const std::string& d) {
+               return d.rfind("*.", 0) != 0 && lower(d) == h;
+           });
 }
 
 // The rules for one URL, the first (`from` null) or a redirect's target. anyOnly: allowed only by
-// net:* (its addresses must then be public).
+// net:* or a wildcard (its addresses must then be public).
 Url check(const PluginManifest& m, const std::optional<Url>& u, const std::string& raw, const Url* from,
           const std::string& webdav, bool& anyOnly) {
     const std::string at = from ? "zk.fetch(\"" + from->shown() + "\"): the redirect to " : "zk.fetch: ";
@@ -298,7 +300,7 @@ HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeo
         if (in.cancel && *in.cancel) throw FetchError(K::Network, "zk.fetch(\"" + first + "\") was cancelled");
         if (resp.addressRefused && resp.curlCode != 0)
             throw FetchError(K::Refused, "zk.fetch(\"" + u.shown() + "\"): " + u.host +
-                                             " is on your local network; plugins with net:* can't reach it — declare it by name (\"net:" +
+                                             " is on your local network; plugins can reach it only if it is declared by its exact name (\"net:" +
                                              u.host + "\") in plugin.json");
         if (resp.tooLarge || resp.body.size() > kFetchMaxBytes)
             throw FetchError(K::Limit, "zk.fetch(\"" + first + "\"): the response is over 10 MB", "responseSize");

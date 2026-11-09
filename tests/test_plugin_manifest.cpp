@@ -282,3 +282,38 @@ TEST_CASE("scan: a dangling symlink doesn't hide a later good plugin") {
     REQUIRE(g);
     CHECK(g->problem.empty());
 }
+
+TEST_CASE("manifest: a numeric host (an address in disguise) is refused") {
+    for (const char* h : {"net:127.0.0.1", "net:*.0.1", "net:0x7f.1", "net:10.0.0.1", "net:a.0x7f", "net:*.example.0x1",
+                          "net:192.168.1.1"}) {
+        CAPTURE(h);
+        UserError why;
+        auto m = parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\","
+                               "\"permissions\":[\"" + std::string(h) + "\"]}", &why);
+        CHECK_FALSE(m);
+        CHECK(why.message.find("address") != std::string::npos);
+    }
+    for (const char* h : {"net:a1.example.org", "net:1password.com", "net:x.0xff.example.com", "net:*.123.example"}) {
+        CAPTURE(h);
+        UserError why;
+        CHECK(parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\","
+                            "\"permissions\":[\"" + std::string(h) + "\"]}", &why));
+    }
+}
+
+TEST_CASE("manifest: net:zotero.org and its subdomains are refused with a clear message") {
+    for (const char* h : {"net:zotero.org", "net:*.zotero.org", "net:api.zotero.org", "net:API.Zotero.org"}) {
+        CAPTURE(h);
+        UserError why;
+        auto m = parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\","
+                               "\"permissions\":[\"" + std::string(h) + "\"]}", &why);
+        CHECK_FALSE(m);
+    }
+    UserError why;
+    parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\","
+                  "\"permissions\":[\"net:zotero.org\"]}", &why);
+    CHECK(why.message.find("zotero.org") != std::string::npos);
+    CHECK(why.message.find("app's own") != std::string::npos);
+    CHECK(parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\","
+                        "\"permissions\":[\"net:notzotero.org\"]}", &why));
+}
