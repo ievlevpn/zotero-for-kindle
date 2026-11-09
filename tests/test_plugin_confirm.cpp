@@ -392,6 +392,23 @@ TEST_CASE("confirm: a stroke still open when the wait runs out ends there; the n
     }
 }
 
+TEST_CASE("confirm: a stroke cut off by a system dialog gets no lift later when a question shows") {
+    Rig rig(true);
+    rig.pen(PenEvent::Type::Near, {300, 900});
+    rig.pen(PenEvent::Type::Down, {300, 900});
+    rig.pen(PenEvent::Type::Move, {340, 900});
+    rig.display.lifecycle(InputEvent::Kind::Background);  // the screensaver; the pen's lift is lost
+    rig.step();
+    rig.display.lifecycle(InputEvent::Kind::Foreground);
+    rig.step();
+    const int pens = rig.ink->pens;
+    const size_t strokes = rig.ink->strokes.size();
+    rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});
+    REQUIRE(rig.until([&] { return rig.app.confirmShown() != nullptr; }));
+    CHECK(rig.ink->pens == pens);  // no lift delivered for the stroke the screen already dropped
+    CHECK(rig.ink->strokes.size() == strokes);
+}
+
 TEST_CASE("confirm: a tap that went down before the guard ran out doesn't answer, however late it is handled") {
     Rig rig;
     rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});

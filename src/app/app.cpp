@@ -309,6 +309,7 @@ void App::presentInk(bool force) {
 void App::penReset(std::vector<Gesture>& gestures) {
     penNear_ = false;
     penDown_ = false;
+    penOwned_ = false;  // the screen had onBackground; no lift for it later
     if (penAsTouch_) {
         penAsTouch_ = false;
         auto g = gestures_.feed(TouchEvent{TouchEvent::Type::Up, kPenFinger, penTouchAt_, clock_()});
@@ -472,7 +473,7 @@ void App::step(int timeout_ms) {
                 break;
             case InputEvent::Kind::Pen:
                 if (!background_) handlePen(e.pen, gestures);
-                else if (e.pen.type == PenEvent::Type::Leave) penNear_ = penDown_ = false;
+                else if (e.pen.type == PenEvent::Type::Leave) penNear_ = penDown_ = penOwned_ = false;
                 break;
             case InputEvent::Kind::Foreground:
                 log(LogLevel::Info, "foreground");

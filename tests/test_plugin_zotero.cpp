@@ -348,6 +348,22 @@ TEST_CASE("zotero: trash from a user-caused event posts Confirm with \"Feed Riff
         for (const auto& ev : rig.drain()) CHECK(ev.kind != PluginHostEvent::Kind::Confirm);
         CHECK(rig.lib.pluginChangeLog("riffle", 10).size() == 1);  // only the first trash: nothing declined
     }
+    SUBCASE("deleting a note already being deleted resolves null without asking") {
+        PluginChange del;
+        del.pluginId = "riffle";
+        del.kind = PluginChange::Kind::DeleteNote;
+        del.itemKey = "NOTEMINE";
+        REQUIRE_FALSE(rig.lib.queuePluginChange(del).empty());
+        rig.drain();
+        rig.userEvent({{"kind", "unnote"}, {"key", "NOTEMINE"}});
+        REQUIRE(rig.host->waitIdle(5000));
+        log = rig.log();
+        INFO(log);
+        CHECK(contains(log, "OUT unnote null"));
+        CHECK(contains(log, "zk.zotero.deleteNote(NOTEMINE): the note is being deleted already — not asked, resolved null"));
+        for (const auto& ev : rig.drain()) CHECK(ev.kind != PluginHostEvent::Kind::Confirm);
+        CHECK(rig.lib.pluginChangeLog("riffle", 10).size() == 2);  // the first trash and the queued delete; nothing declined
+    }
     SUBCASE("someone else's note, or an item that isn't there, is refused without asking") {
         rig.userEvent({{"kind", "unnote"}, {"key", "NOTEUSER"}});
         rig.userEvent({{"kind", "trash"}, {"key", "NOSUCHIT"}});
