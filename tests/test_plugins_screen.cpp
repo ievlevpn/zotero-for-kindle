@@ -159,6 +159,41 @@ TEST_CASE("plugins: an incompatible or broken folder is listed with its problem 
     CHECK_FALSE(broken->removeRect().empty());
 }
 
+TEST_CASE("plugins: a plugin written for another plugin API is listed by its name as incompatible") {
+    Rig r;
+    r.dir.write("future/plugin.json", "{\"id\":\"future\",\"name\":\"Future Plugin\",\"version\":\"2.0.0\",\"api\":2,"
+                                      "\"main\":\"main.js\",\"permissions\":[\"library:read\"]}");
+    r.dir.write("future/main.js", "");
+    r.start();
+    PluginsScreen list(r.fn());
+    list.onShow(r.nav);
+    REQUIRE(list.plugins().size() == 1);
+    CHECK(pluginName(list.plugins()[0]) == "Future Plugin");
+    CHECK(list.note(0) == "Incompatible: written for plugin API 2");
+    CHECK(list.toggleRect(0).empty());
+    r.host->setEnabled("future", true);
+    CHECK_FALSE(r.status("future")->enabled);
+    CHECK(pluginsSummary(r.host.get()) == "0 on · 1 needs attention");
+}
+
+TEST_CASE("plugins: the host turns on only a listed folder that can load") {
+    Rig r;
+    r.plugin("aged", "Aged", "", ",\"minApp\":\"99.0.0\"");
+    r.dir.write("broken/readme.txt", "no manifest here");
+    r.plugin("good", "Good", "");
+    r.start();
+    r.host->setEnabled("nope", true);
+    r.host->setEnabled("../good", true);
+    r.host->setEnabled("aged", true);
+    r.host->setEnabled("broken", true);
+    for (const auto& s : r.host->status()) CHECK_FALSE(s.enabled);
+    CHECK(r.dir.read(".state.json").find("nope") == std::string::npos);
+    r.host->setEnabled("good", true);
+    CHECK(r.status("good")->enabled);
+    r.host->setEnabled("good", false);  // off: always, for a listed folder
+    CHECK_FALSE(r.status("good")->enabled);
+}
+
 TEST_CASE("plugins: a plugin the app turned off says so; the Settings row counts what needs attention") {
     Rig r;
     r.plugin("tired", "Tired", "");
@@ -247,6 +282,25 @@ TEST_CASE("plugins: What it changed lists the log with outcomes") {
     CHECK(lines[4].what == "Add the tag “to-read”");
     CHECK(lines[4].title == "Recursive Macroeconomic Theory");
     CHECK(lines[4].outcome == "Sent");
+}
+
+TEST_CASE("plugins: What it changed gives a refused change more room and still pages") {
+    Rig r;
+    r.plugin("feed", "Feed Riffle", "\"zotero:tags\"");
+    r.start();
+    for (int i = 0; i < 12; ++i) {
+        const std::string id = r.queue("feed", Kind::AddTag, fixtureKey("IT", i), "t" + std::to_string(i));
+        if (i % 2) r.lib.markPluginChange(id, State::Refused, "Zotero said no");
+    }
+    PluginChangesScreen changes("feed", "Feed Riffle");
+    changes.onShow(r.nav);
+    CHECK(changes.pages() >= 2);
+    size_t seen = 0;
+    for (int p = 0; p < changes.pages(); ++p) {
+        seen += changes.lines().size();
+        changes.onGesture(Gesture{GestureType::Swipe, {600, 400}, {600, 1200}, Direction::Up}, r.nav);
+    }
+    CHECK(seen == 12);
 }
 
 TEST_CASE("plugins: Reset its data and Remove ask first; Remove says how many unsent changes will still be sent") {

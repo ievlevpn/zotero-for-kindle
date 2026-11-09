@@ -123,7 +123,8 @@ public:
     void answer(uint64_t requestId, bool yes);
     bool poll(PluginHostEvent&);
     std::vector<PluginStatus> status() const;
-    // Turning a plugin on clears its failures; turning it off unloads it.
+    // Turning a plugin on clears its failures; turning it off unloads it. Ignored for an id that
+    // isn't a listed folder, and turning on for a folder with a problem (broken, incompatible).
     void setEnabled(const std::string& id, bool);
     // Settings → Plugins → Remove: off at once and no longer listed by status(); then, on the plugin
     // thread, unloaded and its folder deleted (data, settings and all). What it remembered goes

@@ -15,6 +15,7 @@
 #include "screens/home.h"
 #include "screens/library.h"
 #include "screens/notes.h"
+#include "screens/plugin_page.h"
 #include "screens/plugins.h"
 #include "screens/reader_menus.h"
 #include "screens/search.h"
@@ -272,4 +273,91 @@ TEST_CASE("kt4 goldens: a real book page, shrunk") {
         }
     cairo_surface_mark_dirty(c.surface());
     checkShrunk(c, "tests/golden/reader-page-kt4.png");
+}
+
+// ---- a crowded plugin page --------------------------------------------------------------------
+
+namespace {
+
+// Five permissions (one of them two lines long), a long description, a badge and 2 unsent changes.
+void addCrowdedPlugin(FakePlugins& dir, bool on) {
+    dir.write("crowd/plugin.json",
+              "{\"id\":\"crowd\",\"name\":\"Highlight Courier\",\"version\":\"3.1.4\",\"api\":0,\"main\":\"main.js\","
+              "\"author\":\"Ann Author\",\"description\":\"Sends every new highlight and note to Readwise, keeps a "
+              "running list of what it sent, tags each paper it has sent with readwise, files them into a collection of "
+              "their own, and asks before it removes anything it once added. It also runs in the background once an hour "
+              "to catch up after you were offline.\",\"permissions\":[\"library:read\",\"annotations:read\","
+              "\"net:readwise.io\",\"zotero:tags\",\"zotero:remove\"]}");
+    dir.write("crowd/main.js", "");
+    if (on) dir.write(".state.json", R"({"plugins":{"crowd":{"enabled":true,"everEnabled":true,"badge":"12 highlights sent today"}}})");
+}
+
+void queueTwo(Library& lib) {
+    for (const char* key : {"IT000000", "IT000001"}) {
+        PluginChange c;
+        c.pluginId = "crowd";
+        c.kind = PluginChange::Kind::AddTag;
+        c.itemKey = key;
+        c.value = "readwise";
+        REQUIRE(!lib.queuePluginChange(c).empty());
+    }
+}
+
+}  // namespace
+
+TEST_CASE("kt4 layout: a crowded plugin page keeps Turn on and every permission within reach") {
+    for (bool on : {false, true}) {
+        INFO(on);
+        Rig rig;
+        ScopedMetrics s(kKt4);
+        FakePlugins dir;
+        addCrowdedPlugin(dir, on);
+        queueTwo(rig.lib);
+        PluginHost host(dir.deps());
+        PluginPageScreen page("crowd", [&] { return &host; });
+        page.onShow(rig.nav);
+        const Rect turn = page.turnRect();
+        REQUIRE_FALSE(turn.empty());
+        CHECK(page.turnLabel() == (on ? "Turn off" : "Turn on"));
+        CHECK(inside(turn, page.changesRect().y));  // above the repairs
+        const auto all = page.permissionLines();
+        REQUIRE(all.size() == 5);
+        CHECK(page.shownPermissions() >= 1);
+        if (page.shownPermissions() < 5) {
+            const Rect more = page.moreRect();
+            REQUIRE_FALSE(more.empty());
+            CHECK(more.y + more.h <= turn.y);
+            page.onGesture(Gesture{GestureType::Tap, more.center(), more.center()}, rig.nav);
+            REQUIRE(rig.nav.pushed.size() == 1);
+            auto* rest = dynamic_cast<PluginPermissionsScreen*>(rig.nav.pushed[0].get());
+            REQUIRE(rest);
+            rest->onShow(rig.nav);
+            std::vector<std::string> seen;
+            for (int p = 0; p < rest->pages(); ++p) {
+                for (const auto& l : rest->lines()) seen.push_back(l);
+                rest->onGesture(Gesture{GestureType::Swipe, {500, 400}, {500, 1100}, Direction::Up}, rig.nav);
+            }
+            CHECK(seen == all);
+        } else {
+            CHECK(page.moreRect().empty());
+        }
+        // Turn on works from here (a new plugin can't be turned on anywhere else).
+        page.onGesture(Gesture{GestureType::Tap, turn.center(), turn.center()}, rig.nav);
+        CHECK(host.status()[0].enabled == !on);
+    }
+}
+
+TEST_CASE("kt4 goldens: a crowded plugin page") {
+    if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
+    Rig rig;
+    ScopedMetrics s(kKt4);
+    FakePlugins dir;
+    addCrowdedPlugin(dir, true);
+    queueTwo(rig.lib);
+    PluginHost host(dir.deps());
+    PluginPageScreen page("crowd", [&] { return &host; });
+    page.onShow(rig.nav);
+    Canvas c(kKt4.width, kKt4.height);
+    page.draw(c);
+    checkShrunk(c, "tests/golden/plugin-page-kt4.png");
 }

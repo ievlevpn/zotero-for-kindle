@@ -161,6 +161,7 @@ TEST_CASE("background: nothing due: no hold and no plugin loaded") {
     fp.add("b", R"(zk.background(() => {});)", {"background"});
     fp.add("c", R"(console.log("no task");)", {"background"});
     host.reload();
+    REQUIRE(host.waitIdle(3000));  // listed before they can be turned on
     host.setEnabled("b", true);
     host.setEnabled("c", true);
     REQUIRE(host.waitIdle(3000));

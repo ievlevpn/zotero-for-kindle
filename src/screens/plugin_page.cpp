@@ -20,7 +20,11 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kTop = kHeaderH + 10;
-constexpr int kActionH = 100;  // a repair at the bottom: one line of text between rules
+constexpr int kTurnH = 92;
+constexpr int kLabelH = 58;  // "What it can do" and the space under it
+constexpr int kMoreH = 60;   // "+N more ›"
+// A repair at the bottom: one line of text between rules (a little lower on a short window).
+int actionH() { return H() < 1500 ? 88 : 100; }
 
 const TextStyle kByline{kSans, 7.5, 400, false, kSecondary};
 const TextStyle kAbout{kSerif, 8, 400};
@@ -100,8 +104,8 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
     if (manifest) actions.push_back(&l.reset);
     if (status_ && pending_ > 0) actions.push_back(&l.discard);
     if (status_) actions.push_back(&l.remove);
-    const int actionsTop = H() - 30 - static_cast<int>(actions.size()) * kActionH;
-    for (size_t i = 0; i < actions.size(); ++i) *actions[i] = {x, actionsTop + static_cast<int>(i) * kActionH, w, kActionH};
+    const int actionsTop = H() - 30 - static_cast<int>(actions.size()) * actionH();
+    for (size_t i = 0; i < actions.size(); ++i) *actions[i] = {x, actionsTop + static_cast<int>(i) * actionH(), w, actionH()};
     const int bottom = actionsTop - 30;  // what's above stops here
 
     int y = kTop;
@@ -112,34 +116,67 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
         return l;
     }
     const PluginStatus& s = *status_;
+    const bool canTurn = !turnLabel().empty();
+    const int turnH = canTurn ? kTurnH + 30 : 0;
+    auto lines = permissionLines();
+    if (manifest && lines.empty()) lines.push_back("Nothing that needs your permission");
+    auto lineH = [&](const std::string& line) { return measureText(line, kLine, w, 2).height + 8; };
+    // What must stay on the page below the description: the label, the first permission (and
+    // "+N more" when there are others), Turn on/off.
+    const int permsMin = manifest ? kLabelH + lineH(lines[0]) + (lines.size() > 1 ? kMoreH : 0) + 20 : 0;
+    const bool badge = s.enabled && !oneLine(s.badge).empty();
+    const bool alarm = !s.folder.problem.empty() || s.stopped || !s.problem.empty();
+    const int badgeH = badge ? measureText(oneLine(s.badge), kQuiet, w, 1).height + 24 : 0;
+    const int alarmH = alarm ? measureText(pluginNote(s), kAlarm, w, 2).height + 30 : 0;
+
     if (manifest) {
         const PluginManifest& m = *s.folder.manifest;
         std::string by = "Version " + oneLine(m.version);
         if (!oneLine(m.author).empty()) by += " · " + oneLine(m.author);
         y += text(cr, by, kByline, {x, y, w, 50}, 1) + 24;
-        if (!oneLine(m.description).empty())
-            y += text(cr, m.description, kAbout, {x, y, w, bottom - y}, std::min(4, room(52))) + 24;
-        if (s.enabled && !oneLine(s.badge).empty())  // what it says of itself now
-            y += text(cr, oneLine(s.badge), kQuiet, {x, y, w, 50}, std::min(1, room(50))) + 24;
+        if (!oneLine(m.description).empty()) {
+            // Up to 3 lines (then "…"), fewer when what follows needs the room.
+            int n = 3;
+            while (n > 1 && y + measureText(m.description, kAbout, w, n).height + 24 + badgeH + alarmH + permsMin + turnH > bottom) --n;
+            y += text(cr, m.description, kAbout, {x, y, w, 60 * n}, n) + 24;
+        }
+        if (badge) y += text(cr, oneLine(s.badge), kQuiet, {x, y, w, 50}, 1) + 24;  // what it says of itself now
         y += 6;
     }
-    if (!s.folder.problem.empty() || s.stopped || !s.problem.empty())
-        y += text(cr, pluginNote(s), kAlarm, {x, y, w, bottom - y}, std::min(3, room(52))) + 30;
+    if (alarm) y += text(cr, pluginNote(s), kAlarm, {x, y, w, 120}, 2) + 30;
 
     if (manifest) {
-        if (y + 44 < bottom) y += text(cr, "What it can do", kLabel, {x, y, w, 44}, 1) + 14;
-        auto lines = permissionLines();
-        if (lines.empty()) lines.push_back("Nothing that needs your permission");
+        y += text(cr, "What it can do", kLabel, {x, y, w, 44}, 1) + (kLabelH - 44);
+        // As many as fit above Turn on/off; the rest behind "+N more" (a page of its own).
+        const int room = bottom - turnH - 20 - y;
+        int used = 0;
+        size_t shown = 0;
         for (const auto& line : lines) {
-            if (room(52) == 0) break;
-            y += text(cr, line, kLine, {x, y, w, bottom - y}, std::min(2, room(52))) + 8;
+            const bool last = shown + 1 == lines.size();
+            if (used + lineH(line) + (last ? 0 : kMoreH) > room && lines.size() > 1) break;  // a lone one always shows
+            used += lineH(line);
+            ++shown;
+        }
+        for (size_t i = 0; i < shown; ++i) y += text(cr, lines[i], kLine, {x, y, w, 120}, 2) + 8;
+        l.permissions = static_cast<int>(shown);
+        if (shown < lines.size()) {
+            l.more = {x, y, w, kMoreH};
+            if (cr) {
+                centredText(cr, "+" + std::to_string(lines.size() - shown) + " more", {kSans, 8, 500}, {x, y, w - 60, kMoreH},
+                            Align::Left);
+                centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {x + w - 40, y, 40, kMoreH}, Align::Right);
+            }
+            y += kMoreH;
         }
         y += 20;
     }
-    if (!turnLabel().empty() && y + 92 <= bottom) {
-        l.turn = {x, y, 360, 92};
-        if (cr) drawButton(cr, l.turn, turnLabel(), !s.enabled);
-        y += 92 + 40;
+    if (canTurn) {  // always on the page: above the repairs at worst
+        l.turn = {x, std::min(y, bottom - kTurnH), 360, kTurnH};
+        if (cr) {
+            fillRect(cr, {x, l.turn.y - 10, w, kTurnH + 20}, 255);
+            drawButton(cr, l.turn, turnLabel(), !s.enabled);
+        }
+        y = l.turn.y + kTurnH + 40;
     }
     const auto errors = errorLines();
     if (!errors.empty() && y + 44 + 10 + 44 <= bottom) {
@@ -167,6 +204,8 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
 }
 
 Rect PluginPageScreen::turnRect() const { return layout().turn; }
+Rect PluginPageScreen::moreRect() const { return layout().more; }
+int PluginPageScreen::shownPermissions() const { return layout().permissions; }
 Rect PluginPageScreen::changesRect() const { return layout().changes; }
 Rect PluginPageScreen::resetRect() const { return layout().reset; }
 Rect PluginPageScreen::discardRect() const { return layout().discard; }
@@ -251,6 +290,10 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
         nav.damage(whole, Waveform::Ui);
         return;
     }
+    if (!l.more.empty() && l.more.contains(g.pos)) {
+        nav.push(std::make_unique<PluginPermissionsScreen>(name(), permissionLines()));
+        return;
+    }
     if (!l.changes.empty() && l.changes.contains(g.pos)) {
         nav.push(std::make_unique<PluginChangesScreen>(id_, name()));
         return;
@@ -265,11 +308,60 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
     nav.damage(whole, Waveform::Ui);
 }
 
+// ---- What it can do (all of it) ------------------------------------------------------------
+
+namespace {
+constexpr int kPermissionH = 120;  // two lines at most
+}
+
+PluginPermissionsScreen::PluginPermissionsScreen(std::string pluginName, std::vector<std::string> lines)
+    : name_(std::move(pluginName)), all_(std::move(lines)) {
+    pager_ = Pager(static_cast<int64_t>(all_.size()), perPage());
+}
+
+int PluginPermissionsScreen::perPage() const { return std::max(1, (H() - kTop - kPageIndicatorH) / kPermissionH); }
+
+void PluginPermissionsScreen::onShow(Nav&) {
+    const int64_t offset = pager_.offset();
+    pager_ = Pager(static_cast<int64_t>(all_.size()), perPage());
+    while (pager_.offset() < offset && pager_.next()) {
+    }
+}
+
+std::vector<std::string> PluginPermissionsScreen::lines() const {
+    const auto from = all_.begin() + std::min<int64_t>(pager_.offset(), all_.size());
+    return {from, from + std::min<int64_t>(perPage(), all_.end() - from)};
+}
+
+void PluginPermissionsScreen::draw(Canvas& canvas) {
+    cairo_t* cr = canvas.cr();
+    fillRect(cr, {0, 0, W(), H()}, 255);
+    drawHeader(cr, "What " + name_ + " can do", true);
+    const auto shown = lines();
+    for (size_t i = 0; i < shown.size(); ++i) {
+        const Rect r{kMargin, kTop + static_cast<int>(i) * kPermissionH, W() - 2 * kMargin, kPermissionH};
+        const int h = measureText(shown[i], kLine, r.w, 2).height;
+        drawText(cr, shown[i], kLine, {r.x, r.y + (r.h - h) / 2, r.w, h + 4}, 2);
+        hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
+    }
+    drawPageIndicator(cr, {0, H() - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
+}
+
+void PluginPermissionsScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (g.type == GestureType::Swipe && (g.dir == Direction::Up ? pager_.next() : g.dir == Direction::Down && pager_.prev())) {
+        nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
+        return;
+    }
+    if (g.type == GestureType::Tap && headerBackRect().contains(g.pos)) nav.pop();
+}
+
 // ---- What it changed -----------------------------------------------------------------------
 
 namespace {
 
-constexpr int kChangeH = 170;
+// A change: what and the outcome, the item; a refused one has its reason under it, in more room.
+constexpr int kChangeH = 150, kRefusedH = 200;
+int heightOf(const PluginChangesScreen::Line& l) { return l.outcome.find(": ") == std::string::npos ? kChangeH : kRefusedH; }
 
 std::string titleOf(Library& lib, const std::string& key) {
     if (key.empty()) return "";
@@ -314,8 +406,6 @@ std::string outcomeOf(const PluginChange& c) {
 PluginChangesScreen::PluginChangesScreen(std::string pluginId, std::string pluginName)
     : id_(std::move(pluginId)), name_(std::move(pluginName)) {}
 
-int PluginChangesScreen::perPage() const { return std::max(1, (H() - kTop - kPageIndicatorH) / kChangeH); }
-
 void PluginChangesScreen::onShow(Nav& nav) {
     Library& lib = nav.library();
     std::map<std::string, std::string> collections;
@@ -337,15 +427,24 @@ void PluginChangesScreen::onShow(Nav& nav) {
         line.title = oneLine(title);
         all_.push_back(std::move(line));
     }
-    const int64_t offset = pager_.offset();
-    pager_ = Pager(static_cast<int64_t>(all_.size()), perPage());
-    while (pager_.offset() < offset && pager_.next()) {
+    // Pages: as many rows as fit above the page indicator.
+    starts_.assign(1, 0);
+    const int room = H() - kTop - kPageIndicatorH;
+    for (size_t i = 0, used = 0; i < all_.size(); ++i) {
+        const int h = heightOf(all_[i]);
+        if (used + h > static_cast<size_t>(room) && i > starts_.back()) {
+            starts_.push_back(i);
+            used = 0;
+        }
+        used += h;
     }
+    page_ = std::min(page_, starts_.size() - 1);
 }
 
 std::vector<PluginChangesScreen::Line> PluginChangesScreen::lines() const {
-    const auto from = all_.begin() + std::min<int64_t>(pager_.offset(), all_.size());
-    return {from, from + std::min<int64_t>(perPage(), all_.end() - from)};
+    if (all_.empty()) return {};
+    const size_t from = starts_[page_], to = page_ + 1 < starts_.size() ? starts_[page_ + 1] : all_.size();
+    return {all_.begin() + from, all_.begin() + to};
 }
 
 void PluginChangesScreen::draw(Canvas& canvas) {
@@ -361,8 +460,10 @@ void PluginChangesScreen::draw(Canvas& canvas) {
         return;
     }
     const auto shown = lines();
+    int y = kTop;
     for (size_t i = 0; i < shown.size(); ++i) {
-        const Rect r{x, kTop + static_cast<int>(i) * kChangeH, w, kChangeH};
+        const Rect r{x, y, w, heightOf(shown[i])};
+        y += r.h;
         const Line& l = shown[i];
         const size_t colon = l.outcome.find(": ");
         const std::string word = l.outcome.substr(0, colon), message = colon == std::string::npos ? "" : l.outcome.substr(colon + 2);
@@ -371,14 +472,16 @@ void PluginChangesScreen::draw(Canvas& canvas) {
         drawText(cr, word, word == "Refused" ? TextStyle{kSans, 7.5, 500} : state, {r.x + r.w - stateW, r.y + 24, stateW, 48}, 1,
                  Align::Right);
         drawText(cr, l.title.empty() ? "Not in the library" : l.title, title, {r.x, r.y + 72, r.w, 46}, 1);
-        if (!message.empty()) drawText(cr, message, why, {r.x, r.y + 120, r.w, 40}, 1);
+        if (!message.empty()) drawText(cr, message, why, {r.x, r.y + 122, r.w, 44}, 1);
         hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
     }
-    drawPageIndicator(cr, {0, H() - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
+    drawPageIndicator(cr, {0, H() - kPageIndicatorH, W(), kPageIndicatorH}, page_, pages());
 }
 
 void PluginChangesScreen::onGesture(const Gesture& g, Nav& nav) {
-    if (g.type == GestureType::Swipe && (g.dir == Direction::Up ? pager_.next() : g.dir == Direction::Down && pager_.prev())) {
+    const bool turned = g.type == GestureType::Swipe &&
+                        ((g.dir == Direction::Up && page_ + 1 < starts_.size() && ++page_) || (g.dir == Direction::Down && page_ > 0 && page_--));
+    if (turned) {
         nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
         return;
     }

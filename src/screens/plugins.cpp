@@ -43,6 +43,8 @@ std::string pluginName(const PluginStatus& s) {
 
 std::string pluginNote(const PluginStatus& s) {
     if (!s.folder.problem.empty()) {
+        if (s.folder.incompatible && s.folder.otherApi != 0)
+            return "Incompatible: written for plugin API " + std::to_string(s.folder.otherApi);
         if (s.folder.incompatible && s.folder.manifest) return "Incompatible: needs app " + s.folder.manifest->minApp.str();
         return "Can't load: " + oneLine(s.folder.problem);
     }

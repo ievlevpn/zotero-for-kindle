@@ -226,12 +226,27 @@ std::vector<PluginFolder> scanPlugins(const std::string& pluginsDir, Version app
         } else {
             UserError why;
             f.manifest = parseManifest(text, &why);
+            // Written for another plugin API, and otherwise a good manifest: listed by its name as
+            // incompatible (an app update or the plugin's own may fix it), never loaded.
+            long long otherApi = 0;
+            if (!f.manifest) {
+                json j = json::parse(text, nullptr, false);
+                if (j.is_object() && j.contains("api") && j["api"].is_number_integer() && j["api"].get<long long>() != 0) {
+                    otherApi = j["api"].get<long long>();
+                    j["api"] = 0;
+                    f.manifest = parseManifest(j.dump(), nullptr);
+                }
+            }
             if (!f.manifest) {
                 f.problem = why.message;
             } else if (f.manifest->id != f.dir) {
                 f.problem = "The id \"" + f.manifest->id + "\" in plugin.json must be the folder's name.";
             } else if (!ids.insert(f.manifest->id).second) {
                 f.problem = "Another plugin already has the id \"" + f.manifest->id + "\".";
+            } else if (otherApi != 0) {
+                f.problem = "Written for plugin API " + std::to_string(otherApi) + "; this app runs API 0.";
+                f.incompatible = true;
+                f.otherApi = otherApi;
             } else if (app < f.manifest->minApp) {
                 f.problem = "Needs app version " + f.manifest->minApp.str() + " or newer.";
                 f.incompatible = true;

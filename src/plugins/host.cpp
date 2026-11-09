@@ -1318,6 +1318,12 @@ std::vector<PluginStatus> PluginHost::status() const {
 }
 
 void PluginHost::setEnabled(const std::string& id, bool on) {
+    {  // only a folder it lists; turned on, only one that can load
+        std::lock_guard<std::mutex> lock(impl_->mu);
+        const auto& fs_ = impl_->folders;
+        auto f = std::find_if(fs_.begin(), fs_.end(), [&](const PluginFolder& f) { return f.dir == id; });
+        if (f == fs_.end() || (on && (!f->manifest || !f->problem.empty()))) return;
+    }
     impl_->state.setEnabled(id, on);
     if (on) impl_->state.clearFailures(id);
     impl_->post([id, on](Impl& h) {

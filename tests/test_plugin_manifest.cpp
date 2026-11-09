@@ -103,7 +103,10 @@ TEST_CASE("manifest: api other than 0 is incompatible") {
     auto* f = find(v, "future-api");
     REQUIRE(f);
     CHECK_FALSE(f->problem.empty());
-    CHECK_FALSE(f->manifest);
+    // Otherwise a good manifest: kept for its name, marked incompatible (never loaded).
+    CHECK(f->incompatible);
+    CHECK(f->otherApi > 0);
+    REQUIRE(f->manifest);
 }
 
 TEST_CASE("manifest: minApp newer than the app is incompatible") {
