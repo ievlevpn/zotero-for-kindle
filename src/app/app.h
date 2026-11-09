@@ -73,6 +73,8 @@ public:
     Library& library() override { return lib_; }
     Keyboard& keyboard() override { return keyboard_; }
     int64_t nowMs() const override { return clock_(); }
+    // A system dialog or the screensaver is over the app (the Kindle may be asleep).
+    bool inBackground() const { return background_; }
     void quit() override { quit_ = true; }
     void restart() override {
         exitCode_ = 75;

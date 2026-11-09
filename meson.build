@@ -225,6 +225,7 @@ app_lib = static_library('zk-app',
   'src/app/startup.cpp',
   'src/app/lifecycle.cpp',
   'src/app/plugin_events.cpp',
+  'src/app/plugin_background.cpp',
   include_directories : ui_incs,
   dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
 app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])

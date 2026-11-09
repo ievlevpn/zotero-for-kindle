@@ -17,6 +17,7 @@
 #include "docs/fonts.h"
 #include "app/paths.h"
 #include "app/lifecycle.h"
+#include "app/plugin_background.h"
 #include "app/plugin_events.h"
 #include "app/settings_store.h"
 #include "app/stall_watchdog.h"
@@ -314,7 +315,6 @@ int main(int argc, char** argv) {
     // so a failed install makes a new one.
     auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
     PluginEvents pluginEvents(plugins.get());
-    app.setPollHook([&] { pluginEvents.poll(app); });
     // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
     // for JavaScript). Not while the host is stopped for an update's install.
     bool pluginsRunning = true;
@@ -322,6 +322,22 @@ int main(int argc, char** argv) {
         if (plugins && pluginsRunning) plugins->dispatch(std::move(e));
     });
     app.setPluginSink(pluginSink);
+    // After a successful sync, plugins' background tasks run (the host allows each one once an
+    // hour) inside a keep-awake hold of the screen thread's: see app/plugin_background.h.
+    BackgroundRound backgroundRound(
+        keepAwake,
+        [&] {
+            if (plugins && pluginsRunning) plugins->runBackground();
+            else backgroundRound.done();
+        },
+        [&] {
+            if (plugins && pluginsRunning) plugins->cancelBackground();
+        });
+    pluginEvents.onBackgroundDone([&] { backgroundRound.done(); });
+    app.setPollHook([&] {
+        pluginEvents.poll(app);
+        backgroundRound.tick(app.nowMs());
+    });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     auto startService = [&](const Config& c) {
         if (plugins) plugins->setWebdavHost(c.webdavUrl);  // the account (and its WebDAV server) may have changed
@@ -341,9 +357,10 @@ int main(int argc, char** argv) {
         service->start();
     };
 
-    app.setEventHook([&flow, &updateNotice, &pluginSink](const SyncEvent& e, Nav& nav) {
+    app.setEventHook([&flow, &updateNotice, &pluginSink, &backgroundRound, &app](const SyncEvent& e, Nav& nav) {
         flow.onSyncEvent(e, nav);
         forwardSyncToPlugins(e, pluginSink);
+        backgroundRound.onSyncEvent(e, !app.inBackground(), app.nowMs());  // after syncFinished is queued
         updateNotice.poll(nav.library());
         if (e.kind == SyncEvent::Kind::SyncFinished) updateNotice.onSyncFinished(nav.library(), !e.error);
     });
@@ -370,6 +387,7 @@ int main(int argc, char** argv) {
                 if (service) service->stop();
                 app.setSync(nullSync);
                 pluginsRunning = false;
+                backgroundRound.done();
                 if (plugins) plugins->stop();
                 pluginEvents.rebind(nullptr, app);  // its questions go, unanswered
             },
@@ -449,6 +467,7 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
+    lifecycle.setOnBackground([&] { backgroundRound.onSleep(); });  // sleeping cuts background tasks short
     app.setReadingLandscape([&lib] { return loadSettings(lib).landscapeReading; });
     // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
     // Kindle home). Stays on through shutdown, which must not hang either.

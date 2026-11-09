@@ -23,7 +23,10 @@ bool Lifecycle::watch() {
     return true;
 }
 
-void Lifecycle::onBackground() { sync_.setIntervalMinutes(0); }
+void Lifecycle::onBackground() {
+    sync_.setIntervalMinutes(0);
+    if (onBackgroundExtra_) onBackgroundExtra_();
+}
 
 void Lifecycle::onForeground(int64_t nowMs) {
     sync_.setIntervalMinutes(interval_());

@@ -18,6 +18,8 @@ public:
     Lifecycle(SyncControl&, SyncStatus&, std::function<int()> intervalMinutes, std::function<bool()> storageOk);
     void attach(App&);  // installs the hooks; the App must outlive nothing beyond this object
 
+    // Also called when the Kindle goes to the background (plugins' background tasks stop).
+    void setOnBackground(std::function<void()> f) { onBackgroundExtra_ = std::move(f); }
     void onBackground();
     void onForeground(int64_t nowMs);
     bool watch();  // every few seconds: is the app's storage still there?
@@ -27,6 +29,7 @@ private:
     SyncStatus& status_;
     std::function<int()> interval_;
     std::function<bool()> storage_;
+    std::function<void()> onBackgroundExtra_;
 };
 
 }  // namespace zk

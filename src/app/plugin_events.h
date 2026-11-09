@@ -5,9 +5,12 @@
 //  - Withdrawn: that question no longer waits (its call was stopped, or the plugin turned off):
 //    it goes away unanswered.
 //  - ChangesQueued: a plugin queued a change for Zotero: the sync pushes soon.
+//  - BackgroundDone: the background round ended: onBackgroundDone() (the keep-awake hold, see
+//    plugin_background.h).
 //  - Badge, Disabled, Log: kept for Settings → Plugins (Task 17).
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <set>
 #include <string>
@@ -34,6 +37,8 @@ public:
     void rebind(PluginHost*, App&);
 
     // Questions shown or waiting to be shown, not answered or withdrawn yet.
+    void onBackgroundDone(std::function<void()> f) { backgroundDone_ = std::move(f); }
+
     int waiting() const { return static_cast<int>(open_.size()); }
 
     struct Notice {
@@ -51,6 +56,7 @@ private:
     std::set<uint64_t> open_;
     std::vector<Notice> notices_;
     std::map<std::string, std::string> badges_;
+    std::function<void()> backgroundDone_;
 };
 
 }  // namespace zk

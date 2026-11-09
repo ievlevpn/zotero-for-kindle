@@ -39,6 +39,7 @@
 
 namespace zk {
 class Library;
+class PluginState;  // state.h
 }
 
 namespace zk::plugins {
@@ -154,6 +155,8 @@ PluginNet* netOf(PluginCtx&);
 
 // The host's settings (database path, engine environment, plugins folder).
 const PluginHostDeps& depsOf(PluginCtx&);
+// What the user and the app remember about the plugins (on/off, failures, badge, last background run).
+PluginState& pluginStateOf(PluginCtx&);
 // One slot per host for state shared by its plugins (all on the plugin thread): zk.library's
 // database connection and identifier index.
 std::shared_ptr<void>& librarySlot(PluginCtx&);

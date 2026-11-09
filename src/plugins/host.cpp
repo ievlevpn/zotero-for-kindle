@@ -213,7 +213,7 @@ void trackRejection(JSContext*, JSValueConst promise, JSValueConst reason, bool 
 // ---- The host -------------------------------------------------------------------------------
 
 struct PluginHost::Impl {
-    enum class Limit { Time, Memory, Pool, Stack };
+    enum class Limit { Time, Memory, Pool, Stack, Cancel };  // Cancel: cut short on purpose, not a failure
 
     PluginHostDeps deps;
     PluginState state;
@@ -239,6 +239,7 @@ struct PluginHost::Impl {
     std::set<std::string> failedLoad;  // tried since the last reload and failed
     std::set<std::string> turnOffs;    // three failures in a row: off at the next safe point
     std::set<std::string> restarts;    // stopped mid-run: a fresh runtime at the next safe point
+    bool backgroundOpen = false;       // a runBackground() whose tasks haven't all ended: BackgroundDone is due
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
     std::string markerId;  // what the crash marker says now ("" = no marker)
     // zk.fetch's workers: made on the plugin thread at the first fetch; shut down by stop().
@@ -378,6 +379,7 @@ struct PluginHost::Impl {
             guarded("a turn-off", [&] { applyTurnOffs(); });
             guarded("the budgets", [&] { checkDeadlines(); });
             guarded("a turn-off", [&] { applyTurnOffs(); });
+            guarded("the background round", [&] { checkBackgroundRound(); });
         }
         while (!loaded.empty()) unload(loaded.begin()->first);
         clearMarker();
@@ -663,8 +665,25 @@ struct PluginHost::Impl {
         }
     }
 
+    // A background task that returned, failed or went over its budget has had its run for the
+    // hour; one cut short (by stop(), sleep, the plugin turned off or reloaded) hasn't.
+    void backgroundEnded(PluginCtx& p, CallKind kind) {
+        if (kind == CallKind::Background && !stopping) state.setLastBackgroundMs(p.manifest.id, deps.clock());
+    }
+
+    // Posts BackgroundDone once the tasks of a runBackground() have all ended.
+    void checkBackgroundRound() {
+        if (!backgroundOpen || stopping) return;
+        for (const auto& [id, p] : loaded)
+            for (const auto& [cid, c] : p->run->calls)
+                if (c.kind == CallKind::Background) return;
+        backgroundOpen = false;
+        postEvent({PluginHostEvent::Kind::BackgroundDone, "", "", "", {}, 0, ""});
+    }
+
     void succeed(PluginCtx& p, Call& c) {
         const bool counts = c.resets && (c.kind == CallKind::Load || c.kind == CallKind::Event || c.kind == CallKind::Background);
+        backgroundEnded(p, c.kind);
         p.run->calls.erase(c.id);
         if (counts && state.failures(p.manifest.id) > 0) state.clearFailures(p.manifest.id);
     }
@@ -673,6 +692,7 @@ struct PluginHost::Impl {
         const std::string text = capitalised(c.what) + " failed: " + describeError(e);
         const bool quiet = c.kind == CallKind::Cleanup;
         if (c.kind == CallKind::Load) p.run->loadFailed = true;
+        backgroundEnded(p, c.kind);
         p.run->calls.erase(c.id);
         if (quiet) log(p.manifest.id, LogLevel::Error, text);
         else recordFailure(p.manifest.id, text);
@@ -686,15 +706,20 @@ struct PluginHost::Impl {
         if (!c) return;
         const std::string what = c->what;
         const CallKind kind = c->kind;
-        const char* limitName = limit == Limit::Time ? "time" : limit == Limit::Stack ? "stack" : "memory";
+        const char* limitName = limit == Limit::Time || limit == Limit::Cancel ? "time" : limit == Limit::Stack ? "stack" : "memory";
         std::string text = "Stopped: " + what;
-        if (limit == Limit::Time) text += " took longer than " + seconds(c->budgetMs);
+        if (limit == Limit::Cancel) text += " was cut short (the Kindle went to sleep)";
+        else if (limit == Limit::Time) text += " took longer than " + seconds(c->budgetMs);
         else if (limit == Limit::Memory) text += " used more than " + std::to_string(deps.memoryPerPlugin >> 20) + " MB of memory";
         else if (limit == Limit::Pool) text += " — plugins together used more than " + std::to_string(deps.memoryTotal >> 20) + " MB of memory";
         else text += " ran out of stack (too much recursion)";
         if (kind == CallKind::Load) p.run->loadFailed = true;
         p.run->calls.erase(callId);
-        recordFailure(p.manifest.id, text);  // a stopped cleanup counts too
+        if (limit == Limit::Cancel) log(p.manifest.id, LogLevel::Info, text);
+        else {
+            backgroundEnded(p, kind);
+            recordFailure(p.manifest.id, text);  // a stopped cleanup counts too
+        }
 
         auto& run = *p.run;
         for (auto it = run.timers.begin(); it != run.timers.end();) it = it->second.owner == callId ? run.timers.erase(it) : std::next(it);
@@ -872,15 +897,27 @@ struct PluginHost::Impl {
         }
     }
 
+    static constexpr int64_t kBackgroundEveryMs = 60 * 60 * 1000;
+
+    // Runs each loaded plugin's background task that is due: not run, failed or stopped for time
+    // in the last hour (a task cut short counts as not run). Exactly one BackgroundDone follows
+    // once they have all ended (at once if none was due).
     void runBackground() {
         activate();
+        backgroundOpen = true;
         std::vector<std::string> ids;
         for (const auto& [id, p] : loaded) ids.push_back(id);
+        const int64_t now = deps.clock();
         for (const auto& id : ids) {
             auto it = loaded.find(id);
             if (it == loaded.end() || stopping || turnOffs.count(id)) continue;
             PluginCtx& p = *it->second;
             if (p.run->background.isUndefined()) continue;
+            const int64_t last = state.lastBackgroundMs(id);
+            if (last != 0 && last <= now && now - last < kBackgroundEveryMs) continue;
+            bool running = false;
+            for (const auto& [cid, c] : p.run->calls) running = running || c.kind == CallKind::Background;
+            if (running) continue;
             {
                 const js::Value task = p.run->background;
                 startCall(p, CallKind::Background, "the background task", deps.backgroundBudgetMs, false,
@@ -888,6 +925,23 @@ struct PluginHost::Impl {
             }
             applyTurnOffs();
         }
+        checkBackgroundRound();
+    }
+
+    // The Kindle is going to sleep: tasks still running are cut short, uncounted.
+    void cancelBackground() {
+        std::vector<std::string> ids;
+        for (const auto& [id, p] : loaded) ids.push_back(id);
+        for (const auto& id : ids) {
+            auto it = loaded.find(id);
+            if (it == loaded.end() || stopping) continue;
+            PluginCtx& p = *it->second;
+            std::vector<uint64_t> calls;
+            for (const auto& [cid, c] : p.run->calls)
+                if (c.kind == CallKind::Background) calls.push_back(cid);
+            for (uint64_t cid : calls) stopCall(p, cid, Limit::Cancel, false);
+        }
+        checkBackgroundRound();
     }
 
     void answer(uint64_t requestId, bool yes) {
@@ -953,6 +1007,8 @@ PluginNet* netOf(PluginCtx& p) {
 }
 
 const PluginHostDeps& depsOf(PluginCtx& p) { return p.host.deps; }
+
+PluginState& pluginStateOf(PluginCtx& p) { return p.host.state; }
 
 std::shared_ptr<void>& librarySlot(PluginCtx& p) { return p.host.library; }
 
@@ -1150,6 +1206,10 @@ void PluginHost::dispatch(PluginEvent ev) {
 
 void PluginHost::runBackground() {
     impl_->post([](Impl& h) { h.runBackground(); });
+}
+
+void PluginHost::cancelBackground() {
+    impl_->post([](Impl& h) { h.cancelBackground(); });
 }
 
 void PluginHost::answer(uint64_t requestId, bool yes) {

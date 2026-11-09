@@ -8,7 +8,9 @@
 #include <string>
 #include <vector>
 
+#include "plugins/manifest.h"
 #include "plugins/plugin_ctx.h"
+#include "plugins/state.h"
 
 namespace zk::plugins {
 
@@ -1054,6 +1056,45 @@ JSValue jsBackground(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     return JS_UNDEFINED;
 }
 
+// zk.setBadge(text | null): one line, at most kBadgeChars characters (cut with "…"); "" or null
+// clears. Kept in the plugin's state; the screen hears of a change.
+constexpr size_t kBadgeChars = 40;
+
+std::string badgeText(const std::string& raw) {
+    std::string t = oneLine(raw);
+    size_t chars = 0, keepEnd = 0;
+    for (size_t i = 0; i < t.size(); ++i) {
+        if ((static_cast<unsigned char>(t[i]) & 0xC0) == 0x80) continue;  // inside a character
+        if (chars == kBadgeChars - 1) keepEnd = i;                          // where the 40th would start
+        if (++chars > kBadgeChars) {
+            t.resize(keepEnd);
+            while (!t.empty() && t.back() == ' ') t.pop_back();
+            return t + "\xE2\x80\xA6";
+        }
+    }
+    return t;
+}
+
+JSValue jsSetBadge(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+    PluginCtx& p = ctxOf(c);
+    std::string text;
+    if (argc >= 1 && !JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
+        if (!JS_IsString(argv[0])) return JS_ThrowTypeError(c, "zk.setBadge: the text must be a string or null");
+        size_t len = 0;
+        const char* s = JS_ToCStringLen(c, &len, argv[0]);
+        if (!s) return JS_EXCEPTION;
+        text = badgeText(sanitisedUtf8(s, len));
+        JS_FreeCString(c, s);
+    }
+    if (pluginStateOf(p).badge(p.manifest.id) == text) return JS_UNDEFINED;
+    pluginStateOf(p).setBadge(p.manifest.id, text);
+    PluginHostEvent ev;
+    ev.kind = PluginHostEvent::Kind::Badge;
+    ev.text = std::move(text);
+    post(p, std::move(ev));
+    return JS_UNDEFINED;
+}
+
 }  // namespace
 
 // ---- Helpers for every binding --------------------------------------------------------------
@@ -1146,6 +1187,7 @@ void installCore(PluginCtx& p) {
     JS_FreeValue(c, global);
     defineFunction<jsOn>(c, p.zk.raw(), "on", 2);
     defineFunction<jsBackground>(c, p.zk.raw(), "background", 1);
+    defineFunction<jsSetBadge>(c, p.zk.raw(), "setBadge", 1);
 }
 
 }  // namespace zk::plugins

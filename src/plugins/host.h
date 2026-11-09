@@ -56,8 +56,10 @@ struct PluginHostDeps {
 // goes when there are several, `action` the yes button ("Move to trash"); answer it with
 // PluginHost::answer(requestId). Withdrawn: that request no longer waits (its call was stopped, or
 // the plugin turned off or reloaded): take the question away without answering.
+// BackgroundDone: the tasks of a runBackground() have all ended (also when none was due): the
+// screen thread's keep-awake hold may end. Badge: `text` is the plugin's new badge ("" cleared).
 struct PluginHostEvent {
-    enum class Kind { Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn } kind;
+    enum class Kind { Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
     uint64_t requestId = 0;
@@ -90,7 +92,13 @@ public:
     void reload();
     void reload(const std::string& id);
     void dispatch(PluginEvent);
+    // Runs the background task of each plugin that has one and hasn't run, failed or gone over its
+    // budget in the last hour (PluginState::lastBackgroundMs, persisted). Calls cut short (stop(),
+    // cancelBackground(), the plugin turned off) don't count: that plugin is due again. One
+    // BackgroundDone event follows when the tasks have ended.
     void runBackground();
+    // The Kindle is going to sleep: stops background tasks still running. Not failures.
+    void cancelBackground();
     // Empties the plugin's data/ folder and its storage (Settings → Plugins → Reset its data). Works
     // whether or not the plugin is loaded; if it is, its queued storage writes are dropped.
     void resetData(const std::string& id);
