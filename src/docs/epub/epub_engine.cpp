@@ -586,6 +586,76 @@ int64_t EpubEngine::wordsBetween(int fromPage, int toPage) {
 
 namespace {
 
+// Paragraphs of crengine's range text (one '\n' per block) joined by a blank line: each trimmed,
+// empty ones dropped.
+void appendParagraphs(const std::string& raw, std::string& out) {
+    size_t i = 0;
+    while (i <= raw.size()) {
+        size_t j = raw.find('\n', i);
+        if (j == std::string::npos) j = raw.size();
+        size_t a = i, b = j;
+        while (a < b && (raw[a] == ' ' || raw[a] == '\t' || raw[a] == '\r')) ++a;
+        while (b > a && (raw[b - 1] == ' ' || raw[b - 1] == '\t' || raw[b - 1] == '\r')) --b;
+        if (b > a) {
+            if (!out.empty()) out += "\n\n";
+            out.append(raw, a, b - a);
+        }
+        i = j + 1;
+    }
+}
+
+}  // namespace
+
+// The book's chapters (crengine's DocFragments) in order, paragraphs separated by a blank line.
+// The crengine lock is taken per chapter, so the reader's render worker can run in between.
+std::string EpubEngine::fullText() {
+    std::vector<int> fragments;  // child indexes of the root's first element with DocFragments
+    ldomNode* holder = nullptr;
+    {
+        std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+        if (!view_) return {};
+        ldomNode* root = view_->getDocument()->getRootNode();
+        // Chapters are DocFragment elements, children of <body>; with none, the whole document is one.
+        std::vector<ldomNode*> stack{root};
+        while (!stack.empty() && !holder) {
+            ldomNode* n = stack.back();
+            stack.pop_back();
+            for (int i = 0; i < (int)n->getChildCount(); ++i) {
+                ldomNode* c = n->getChildNode(i);
+                if (c && c->isElement() && nameOf(c) == "DocFragment") {
+                    holder = n;
+                    break;
+                }
+                if (c && c->isElement()) stack.push_back(c);
+            }
+        }
+        if (holder)
+            for (int i = 0; i < (int)holder->getChildCount(); ++i) {
+                ldomNode* c = holder->getChildNode(i);
+                if (c && c->isElement() && nameOf(c) == "DocFragment") fragments.push_back(i);
+            }
+    }
+    std::string out;
+    auto take = [&](ldomNode* n) {
+        ldomXRange whole(n, true);
+        appendParagraphs(utf8(whole.getRangeText('\n')), out);
+    };
+    if (!holder) {
+        std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+        take(view_->getDocument()->getRootNode());
+        return out;
+    }
+    for (int i : fragments) {
+        if (out.size() > kMaxFullTextBytes) break;
+        std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+        if (!view_ || i >= (int)holder->getChildCount()) break;
+        take(holder->getChildNode(i));
+    }
+    return out;
+}
+
+namespace {
+
 bool isSpace(lChar32 c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == 0xA0 || c == 0xFEFF; }
 
 lChar32 charAt(const ldomXPointer& p) {

@@ -50,6 +50,7 @@ public:
     std::string zoteroPosition(int page) override { return guard([&] { return e_->zoteroPosition(page); }, std::string()); }
     int pageOfZoteroPosition(const std::string& v) override { return guard([&] { return e_->pageOfZoteroPosition(v); }, -1); }
     int64_t wordsBetween(int from, int to) override { return guard([&] { return e_->wordsBetween(from, to); }, int64_t{0}); }
+    std::string fullText() override { return guard([&] { return e_->fullText(); }, std::string()); }
     std::optional<Selection> select(int page, Point from, Point to) override {
         return guard([&] { return e_->select(page, from, to); }, std::optional<Selection>{});
     }

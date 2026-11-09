@@ -825,6 +825,19 @@ int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
     return total / views;
 }
 
+// Pages in order, "\f" between them. This engine has its own MuPDF context, so nothing is shared
+// with the reader's engine.
+std::string PdfEngine::fullText() {
+    std::string out;
+    if (!doc_) return out;
+    const int pages = pdfPages();
+    for (int p = 0; p < pages && out.size() <= kMaxFullTextBytes; ++p) {
+        if (p) out += '\f';
+        out += pageText(p);
+    }
+    return out;
+}
+
 namespace {
 
 template <class F> void forEachChar(fz_stext_page* st, F&& f) {

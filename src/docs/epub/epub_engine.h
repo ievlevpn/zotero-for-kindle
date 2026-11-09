@@ -35,6 +35,7 @@ public:
     std::string zoteroPosition(int page) override;
     int pageOfZoteroPosition(const std::string& json) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
+    std::string fullText() override;
 
 private:
     void applyLayout();

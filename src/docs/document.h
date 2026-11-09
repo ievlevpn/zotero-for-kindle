@@ -118,6 +118,10 @@ struct InkPlacement {
     std::string sortIndex, pageLabel;
 };
 
+// The most text fullText() may return; an engine stops once it has gone over (the caller then
+// refuses the file).
+constexpr size_t kMaxFullTextBytes = 32u * 1024 * 1024;
+
 // Where an engine finds its data (crengine's hyphenation dictionaries and CSS, fonts, cache).
 struct EngineEnv {
     std::string dataDir;
@@ -152,6 +156,10 @@ public:
     virtual std::string zoteroPosition(int /*page*/) { return ""; }
     virtual int pageOfZoteroPosition(const std::string& /*json*/) { return -1; }
     virtual int64_t wordsBetween(int fromPage, int toPage) = 0;  // for "time left"
+    // The whole document's text, UTF-8, in reading order, for plugins. EPUB: paragraphs separated
+    // by "\n\n". PDF: each page's text, pages separated by "\f". Stops (returning more than
+    // kMaxFullTextBytes) once it is over the limit. "" if nothing could be read.
+    virtual std::string fullText() { return {}; }
     // The whole words between two points on a page (in either order); nullopt if `from` is not on
     // text. A Selection with empty text means the page has no text layer at all (a scan).
     virtual std::optional<Selection> select(int page, Point from, Point to) = 0;
