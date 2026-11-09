@@ -95,6 +95,20 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         if (!fetchAndApply(kind, phase.name, changed, rep, progress, accept)) return;
     }
 
+    if (lib_.metaValue("notesBackfill") == "1") {
+        // A database from before notes were kept: its notes' versions are recorded but their
+        // content never was. List every note once; the flag clears only when all are in.
+        auto listing = api_.versions("items", 0, &err, "note");
+        if (!listing) return void(rep.error = err);
+        std::vector<std::string> missing;
+        for (const auto& [key, version] : listing->versions) {
+            auto have = lib_.note(key);
+            if (!have || have->version < version) missing.push_back(key);
+        }
+        if (!fetchAndApply("items", "notes", missing, rep, progress)) return;
+        lib_.setMetaValue("notesBackfill", "0");
+    }
+
     if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
         std::vector<std::string> keys;
         keys.swap(refetch_);
@@ -393,8 +407,9 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         }
         return;
     }
+    const bool known = lib_.objectVersion(key) > 0;
     if (lib_.note(key)) lib_.removeObject("note", key);
-    if (lib_.objectVersion(key) > 0) ++rep.itemsRemoved;  // notes count too; they share the key space
+    if (known) ++rep.itemsRemoved;  // notes count too; they share the key space
     lib_.removeObject("item", key);
 }
 

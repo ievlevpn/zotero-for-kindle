@@ -142,6 +142,7 @@ public:
                 if (o["version"].get<int64_t>() <= since) continue;
                 const bool isAnnotation = o["data"].value("itemType", "") == "annotation";
                 if ((type == "annotation" && !isAnnotation) || (type == "-annotation" && isAnnotation)) continue;
+                if (type == "note" && o["data"].value("itemType", "") != "note") continue;
                 out[k] = o["version"];
             }
             return ok(r, out);

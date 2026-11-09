@@ -73,7 +73,9 @@ TEST_CASE("notes: a deletion removes them") {
     json trashed = FakeZotero::note("NOTE0002", "BOOK0001", "<p>b</p>");
     trashed["deleted"] = 1;
     rig.server.put(trashed);  // trash
-    REQUIRE_FALSE(rig.pull().error);
+    auto report = rig.pull();
+    REQUIRE_FALSE(report.error);
+    CHECK(report.itemsRemoved == 2);
     CHECK_FALSE(rig.lib.note("NOTE0001"));
     CHECK_FALSE(rig.lib.note("NOTE0002"));
     CHECK(rig.lib.notes("BOOK0001").empty());
@@ -126,4 +128,66 @@ TEST_CASE("notes: a version 6 database gains the table and keeps its data") {
     lib.removeObject("note", "NOTE0001");
     CHECK_FALSE(lib.note("NOTE0001"));
     std::filesystem::remove_all(dir);
+}
+
+namespace {
+// A version 6 database that already knows the server's notes' versions (an older pull skipped them).
+std::string v6WithSeenNotes(Rig& rig, const std::string& name) {
+    char tmpl[] = "/tmp/zk-notes-bf-XXXXXX";
+    std::filesystem::path dir = mkdtemp(tmpl);
+    const std::string path = (dir / name).string();
+    Db db = Db::open(path);
+    {
+        Library lib(db);
+        for (const char* k : {"NOTE0001", "NOTE0002"}) lib.setObjectVersion(k, rig.server.items[k]["version"]);
+        lib.setLibraryVersion(rig.server.libraryVersion);
+        db.exec("DROP TABLE notes; DELETE FROM meta WHERE key = 'notesBackfill';");
+        db.setUserVersion(6);
+    }
+    return path;
+}
+}  // namespace
+
+TEST_CASE("notes: a version 6 database gets its existing notes on the next pull") {
+    Rig rig;
+    rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>a</p>"));
+    rig.server.put(FakeZotero::note("NOTE0002", "BOOK0001", "<p>b</p>"));
+    const std::string path = v6WithSeenNotes(rig, "z.db");
+    Db db = Db::open(path);
+    Library lib(db);
+    ZoteroApi api{rig.server, 1, "k3y"};
+    api.setSleeper([](int) {});
+    SyncEngine engine{api, lib};
+    CHECK(lib.metaValue("notesBackfill") == "1");
+    REQUIRE_FALSE(engine.pull([](const SyncProgress&) {}).error);
+    CHECK(lib.notes("BOOK0001").size() == 2);
+    CHECK(lib.metaValue("notesBackfill") == "0");
+}
+
+TEST_CASE("notes: an interrupted backfill resumes and keeps the flag until done") {
+    Rig rig;
+    rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>a</p>"));
+    rig.server.put(FakeZotero::note("NOTE0002", "BOOK0001", "<p>b</p>"));
+    const std::string path = v6WithSeenNotes(rig, "z2.db");
+    Db db = Db::open(path);
+    Library lib(db);
+    ZoteroApi api{rig.server, 1, "k3y"};
+    api.setSleeper([](int) {});
+    SyncEngine engine{api, lib};
+    rig.server.failWhen = [](const HttpRequest& r) { return r.url.find("itemKey=") != std::string::npos; };
+    CHECK(engine.pull([](const SyncProgress&) {}).error);
+    CHECK(lib.metaValue("notesBackfill") == "1");
+    CHECK(lib.notes("BOOK0001").empty());
+    rig.server.failWhen = nullptr;
+    REQUIRE_FALSE(engine.pull([](const SyncProgress&) {}).error);
+    CHECK(lib.notes("BOOK0001").size() == 2);
+    CHECK(lib.metaValue("notesBackfill") == "0");
+}
+
+TEST_CASE("notes: a fresh database runs no backfill") {
+    Rig rig;
+    CHECK(rig.lib.metaValue("notesBackfill").empty());
+    rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>a</p>"));
+    REQUIRE_FALSE(rig.pull().error);
+    for (const auto& r : rig.server.sent) CHECK(r.url.find("itemType=note") == std::string::npos);
 }

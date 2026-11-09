@@ -289,6 +289,10 @@ void Library::migrate() {
                 "NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT "
                 "NULL DEFAULT '', createdBy TEXT NOT NULL DEFAULT '');"
                 "CREATE INDEX IF NOT EXISTS notes_parent ON notes(parentKey);");
+            // Earlier pulls recorded their notes' versions without keeping them: the next pull lists them again.
+            if (version < 7)
+                db_.exec("INSERT INTO meta (key, value) VALUES ('notesBackfill', '1') "
+                         "ON CONFLICT(key) DO UPDATE SET value = '1'");
             auto has = [&](const char* table) {
                 Stmt st = db_.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
                 st.bind(1, std::string(table));
