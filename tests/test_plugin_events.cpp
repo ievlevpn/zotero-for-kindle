@@ -594,3 +594,21 @@ TEST_CASE("events: collecting 20,000 pulled annotations is fast") {
     const auto order = p.created.ordered();
     CHECK(order.front() == "A1");  // pulled order kept
 }
+
+TEST_CASE("events: a push of a plugin's new item that has to pull first reports what that pull brought in") {
+    SyncRig rig;
+    PluginChange c;
+    c.pluginId = "p";
+    c.kind = PluginChange::Kind::CreateItem;
+    c.value = nlohmann::json{{"fields", {{"type", "preprint"}, {"title", "New"}}}, {"collections", nlohmann::json::array()},
+                             {"tags", nlohmann::json::array()}}
+                  .dump();
+    REQUIRE_FALSE(rig.lib.queuePluginChange(c).empty());
+    rig.server.put(FakeZotero::annotation("DESKTOP1", "EPUB0001", "made on the desktop meanwhile"));
+    const SyncReport rep = rig.engine.push();  // the item's POST: 412, then the pull, then the POST
+    REQUIRE_FALSE(rep.error);
+    CHECK(rep.pluginSent == 1);
+    REQUIRE(rep.pluginEvents.size() == 1);
+    CHECK(rep.pluginEvents[0].name == "highlightCreated");
+    CHECK(rep.pluginEvents[0].payload["annotations"][0]["key"] == "DESKTOP1");
+}

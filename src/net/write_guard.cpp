@@ -164,7 +164,8 @@ std::string pluginPostRefusal(const nlohmann::json& obj, const WriteGuard::Plugi
     const std::string key = obj["key"].get<std::string>();
     const auto shape = pluginChanges(key);
     if (!shape) return "item " + key + ": no plugin change pending";
-    if (obj.contains("version") && !(obj["version"].is_number_integer() && obj["version"].get<int64_t>() == 0))
+    // Version 0 says "new": Zotero then refuses (412) a key it already has instead of overwriting it.
+    if (!obj.contains("version") || !obj["version"].is_number_integer() || obj["version"].get<int64_t>() != 0)
         return "item " + key + ": a plugin's POST is of a new object (version 0)";
     const std::string type = obj.contains("itemType") && obj["itemType"].is_string() ? obj["itemType"].get<std::string>() : "";
     if (type == "note") {

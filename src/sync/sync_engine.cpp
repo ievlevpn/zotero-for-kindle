@@ -638,6 +638,7 @@ bool SyncEngine::pushPluginChanges(SyncReport& rep) {
         // The library changed on the server since our version: pull, then once more.
         SyncReport pulled = pull(nullptr);
         rep.conflicts += pulled.conflicts;
+        rep.pluginEvents.insert(rep.pluginEvents.end(), pulled.pluginEvents.begin(), pulled.pluginEvents.end());
         if (pulled.error) {
             rep.error = pulled.error;
             ok = false;

@@ -306,15 +306,14 @@ struct PluginRig {
 
 TEST_CASE("guard: a plugin's changes go out in exactly their pending shape") {
     PluginRig rig;
-    // CreateItem: its data, under its key, without a version or at version 0.
-    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({rig.withKey(rig.created, "NEWITEM1")}))));
+    // CreateItem: its data, under its key, at version 0 (a new object: Zotero never overwrites one).
     nlohmann::json v0 = rig.withKey(rig.created, "NEWITEM1");
     v0["version"] = 0;
     CHECK_FALSE(blocked(rig.post(nlohmann::json::array({v0}))));
     // AddNote: a child note on its parent, with its HTML.
-    nlohmann::json note = {{"key", "NOTE0001"}, {"itemType", "note"}, {"parentItem", "BOOK0001"}, {"note", "<p>hi</p>"}};
+    nlohmann::json note = {{"key", "NOTE0001"}, {"version", 0}, {"itemType", "note"}, {"parentItem", "BOOK0001"}, {"note", "<p>hi</p>"}};
     CHECK_FALSE(blocked(rig.post(nlohmann::json::array({note}))));
-    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({rig.withKey(rig.created, "NEWITEM1"), note}))));  // a batch
+    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({v0, note}))));  // a batch
     // AddToCollection / RemoveFromCollection: one key more or less than Zotero's copy.
     CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","MATHS001"]})")));
     CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":[]})")));
@@ -324,7 +323,19 @@ TEST_CASE("guard: a plugin's changes go out in exactly their pending shape") {
     CHECK_FALSE(blocked(rig.send("DELETE", "items/NOTE0002", "")));
     // Plugin tags go by the read-tag rule: one tag more or less.
     CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"plugin"}]})")));
-    CHECK(rig.inner.sent.size() == 9);
+    CHECK(rig.inner.sent.size() == 8);
+}
+
+TEST_CASE("guard: a plugin's create or note POST without version 0 is refused") {
+    PluginRig rig;
+    nlohmann::json none = rig.withKey(rig.created, "NEWITEM1");
+    CHECK(blocked(rig.post(nlohmann::json::array({none}))));  // no version: it could overwrite
+    nlohmann::json v5 = none;
+    v5["version"] = 5;
+    CHECK(blocked(rig.post(nlohmann::json::array({v5}))));
+    nlohmann::json note = {{"key", "NOTE0001"}, {"itemType", "note"}, {"parentItem", "BOOK0001"}, {"note", "<p>hi</p>"}};
+    CHECK(blocked(rig.post(nlohmann::json::array({note}))));
+    CHECK(rig.inner.sent.empty());
 }
 
 TEST_CASE("guard: a plugin PATCH that changes a title, two tags, or deletes an item the plugin didn't create is refused") {
