@@ -1,0 +1,11 @@
+{
+  "id": "highlights-to-markdown",
+  "name": "Highlights to Markdown",
+  "version": "0.1.0",
+  "api": 0,
+  "minApp": "0.3.0",
+  "author": "Zotero for Kindle",
+  "description": "Keeps a Markdown file of each book's highlights and comments in the plugin's data folder, to copy off over USB.",
+  "main": "main.js",
+  "permissions": ["library:read", "annotations:read", "background"]
+}

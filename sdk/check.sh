@@ -1,9 +1,9 @@
 #!/bin/sh
 # Checks the plugin SDK from a clean checkout: installs its pinned tools, type-checks zk.d.ts,
-# then for the template and every folder in examples/ type-checks it against zk.d.ts (its own
-# tsconfig.json, extending ../tsconfig.json), validates its plugin.json against the manifest
-# schema, and builds it with its build.mjs. Finally it checks that build.mjs bundles an npm
-# package (test-fixtures/).
+# then for the template and every folder in examples/ installs its own npm packages (if it has a
+# package-lock.json), type-checks it against zk.d.ts (its own tsconfig.json, extending the SDK's
+# tsconfig.json), validates its plugin.json against the manifest schema, and builds it with its
+# build.mjs. Finally it checks that build.mjs bundles an npm package (test-fixtures/).
 #
 #   sdk/check.sh
 set -eu
@@ -18,6 +18,10 @@ for dir in template examples/*/; do
   [ -d "$dir" ] || continue
   dir=${dir%/}
   echo "== $dir"
+  # a plugin that bundles npm packages pins them in its own package-lock.json
+  if [ -f "$dir/package-lock.json" ]; then
+    (cd "$dir" && npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error)
+  fi
   "$BIN/tsc" -p "$dir"
   node validate-manifest.mjs "$dir/plugin.json"
   node "$dir/build.mjs"

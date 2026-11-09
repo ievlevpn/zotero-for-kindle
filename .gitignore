@@ -14,5 +14,5 @@ local/
 dist/
 
 # Plugin SDK
-sdk/node_modules/
+sdk/**/node_modules/
 sdk/**/dist/
