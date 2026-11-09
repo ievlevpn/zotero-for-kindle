@@ -1,0 +1,3 @@
+Used by check.sh to prove build.mjs bundles npm packages: bundles-a-package imports
+main-only-package (a CommonJS package with only a "main" field), which check.sh installs
+into a temporary copy's node_modules/ before building it.

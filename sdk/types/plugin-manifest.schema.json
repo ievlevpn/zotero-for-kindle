@@ -21,8 +21,7 @@
     },
     "api": {
       "description": "The plugin API version it was written for. 0 is the current, unstable one.",
-      "type": "integer",
-      "minimum": 0
+      "const": 0
     },
     "minApp": {
       "description": "The oldest app version it runs on.",

@@ -304,9 +304,10 @@ declare namespace zk {
 
   /**
    * Fetches a URL, like the web's `fetch`, but HTTPS only, to declared hosts only, without cookies
-   * and without any of the app's credentials. Response size and time are capped (over the cap:
-   * {@link zk.LimitError}). Zotero's own hosts (`zotero.org`, `api.zotero.org`) and the user's
-   * WebDAV host are always refused.
+   * and without any of the app's credentials. Responses are capped at 10 MB and requests at 30 s
+   * each; going over rejects with a {@link zk.LimitError} (`"responseSize"`, `"responseTime"`).
+   * `zotero.org`, every `*.zotero.org` host and the user's WebDAV host are always refused, even
+   * with `net:*`.
    *
    * **Permission**: `net:<host>` for the URL's host (e.g. `"net:export.arxiv.org"`; `"net:*.example.org"`
    * covers subdomains), or `net:*` for any host. Redirects are checked the same way.
