@@ -197,3 +197,29 @@ TEST_CASE("js: recursion is caught when the runtime is used from another thread"
     ns = Value();
     cx.reset();
 }
+
+TEST_CASE("js: stack-overflow classification is best effort, enforcement is not") {
+    Runtime rt(16 << 20);
+    Context cx(rt);
+    Value ns = cx.evalModule(
+        "function deep(n) { if (n == 0) throw new RangeError('Maximum call stack size exceeded'); deep(n - 1); }\n"
+        "export function fakeDeep() { deep(20); }\n"
+        "export function runaway() { Error.stackTraceLimit = 0; return runaway() + 1; }\n"
+        "export function rethrown() { try { (function f() { return f() + 1; })(); } catch (e) { throw new Error(e.message); } }",
+        "m.js");
+    REQUIRE_FALSE(cx.takeError().has_value());
+    // Documented: a deep hand-thrown look-alike reads as a limit stop.
+    cx.call(ns.get("fakeDeep"), {});
+    auto err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK(err->limit);
+    // Documented: evasion changes the wording only; recursion is still stopped, without a crash.
+    cx.call(ns.get("runaway"), {});
+    err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK(err->message == "Maximum call stack size exceeded");
+    cx.call(ns.get("rethrown"), {});
+    err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK_FALSE(err->limit);
+}

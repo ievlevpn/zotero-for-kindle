@@ -18,7 +18,18 @@ namespace zk::js {
 
 struct JsError {
     std::string message, stack;
-    bool limit = false;  // stopped by the memory limit or the deadline, not thrown by the script
+    // Wording only: "stopped by a resource limit" rather than "threw". The host counts both kinds
+    // of failure alike, so a wrong value here changes the message shown, never what is enforced.
+    //  - Reliable (observed events): the deadline interrupt (uncatchable) and a refused allocation
+    //    under the memory limit. A script cannot fake or hide them, even by catching the error.
+    //  - Best effort: stack overflow. QuickJS reports it as an ordinary RangeError, with no host
+    //    hook, so it is recognised by that exact message plus a trace of at least 8 frames (the
+    //    engine's own overflow is raised deep). A script can evade this (Error.stackTraceLimit,
+    //    catch and rethrow) or fake it (recurse 8+ deep, then throw that RangeError); it then
+    //    reads as an ordinary error or a limit stop respectively.
+    // Safety never rests on this flag: QuickJS's own stack check (JS_SetMaxStackSize) cannot be
+    // disabled from script and always stops runaway recursion.
+    bool limit = false;
 };
 
 enum class PromiseState { NotAPromise, Pending, Fulfilled, Rejected };
