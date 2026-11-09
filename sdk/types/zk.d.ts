@@ -15,6 +15,13 @@
  * the network or files is `async`, because plugins run on their own thread and the screen never
  * waits for them.
  *
+ * The module is run once and stays loaded while the plugin is on, so module-level variables
+ * last from one call to the next (but not across restarts: keep what must last in
+ * {@link zk.storage}). Calls into the plugin (event handlers, the background task, actions) may
+ * interleave at each `await`, as in any async JavaScript: a read-modify-write of storage that
+ * awaits in between can lose another call's write, so run such updates one after another
+ * (`sdk/examples/` show a five-line way).
+ *
  * What a plugin may do is declared in `plugin.json` under `"permissions"`. Calling something not
  * declared rejects (or throws) with a {@link zk.PermissionError} that names what to add. Each
  * member below says which permission it needs.
@@ -22,15 +29,18 @@
  * @example
  * // main.ts — log every book finished on the Kindle (needs "library:read")
  * zk.on("bookFinished", ({ item }) => {
- *   zk.log(`Finished ${item.title} (${item.year ?? "n.d."})`);
+ *   console.log(`Finished ${item.title} (${item.year ?? "n.d."})`);
  * });
  */
 
 /**
  * Writes to the plugin's log (Settings → Plugins → the plugin, and the terminal of the desktop
- * build). `console.log` is the same as {@link zk.log}. No permission.
+ * build). Arguments are joined with spaces; objects are shown as JSON. `warn` and `error` are
+ * marked as such in the log. The preferred way to log: it is standard, has levels, and is what
+ * bundled libraries call. No permission.
  *
  * @example
+ * console.log("filed", change.key, "into", collection.path.join(" / "));
  * console.warn("feed returned no entries", url);
  */
 declare var console: {
@@ -58,7 +68,7 @@ declare function setTimeout(callback: () => void, ms?: number): number;
  * Cancels a timer set with {@link setTimeout}; unknown ids are ignored. No permission.
  *
  * @example
- * const timer = setTimeout(() => zk.log("slow"), 2000);
+ * const timer = setTimeout(() => console.log("slow"), 2000);
  * await work();
  * clearTimeout(timer);
  */
@@ -154,7 +164,7 @@ declare namespace zk {
    * This plugin, as installed. No permission.
    *
    * @example
-   * zk.log(`${zk.plugin.id} ${zk.plugin.version}, data in ${zk.plugin.dataDir}`);
+   * console.log(`${zk.plugin.id} ${zk.plugin.version}, data in ${zk.plugin.dataDir}`);
    */
   const plugin: {
     /** The plugin's id from `plugin.json`; also its folder name. */
@@ -199,8 +209,7 @@ declare namespace zk {
   }
 
   /**
-   * Writes to the plugin's log. Arguments are joined with spaces; objects are shown as JSON.
-   * No permission.
+   * The same as `console.log`, which is preferred (see {@link console}). No permission.
    *
    * @example
    * zk.log("filed", change.key, "into", collection.path.join(" / "));
@@ -251,7 +260,7 @@ declare namespace zk {
      * All keys, in no particular order.
      *
      * @example
-     * for (const key of await zk.storage.keys()) if (key.startsWith("feed:")) zk.log(key);
+     * for (const key of await zk.storage.keys()) if (key.startsWith("feed:")) console.log(key);
      */
     keys(): Promise<string[]>;
   }
@@ -263,7 +272,7 @@ declare namespace zk {
    *
    * @example
    * await zk.files.write("highlights/Gaussian random fields.md", markdown);
-   * zk.log("written to", `${zk.plugin.dataDir}/highlights/`);
+   * console.log("written to", `${zk.plugin.dataDir}/highlights/`);
    */
   namespace files {
     /**
@@ -305,7 +314,8 @@ declare namespace zk {
   /**
    * Fetches a URL, like the web's `fetch`, but HTTPS only, to declared hosts only, without cookies
    * and without any of the app's credentials. Responses are capped at 10 MB and requests at 30 s
-   * each; going over rejects with a {@link zk.LimitError} (`"responseSize"`, `"responseTime"`).
+   * each (less with {@link RequestInit.timeout}); going over rejects with a {@link zk.LimitError}
+   * (`"responseSize"`, `"responseTime"`).
    * `zotero.org`, every `*.zotero.org` host and the user's WebDAV host are always refused, even
    * with `net:*`.
    *
@@ -340,6 +350,15 @@ declare namespace zk {
     headers?: Record<string, string> | [string, string][];
     /** Request body; send JSON with `JSON.stringify` and a `content-type` header. */
     body?: string;
+    /**
+     * Give up after this many milliseconds (at most, and by default, 30 000), rejecting with a
+     * {@link zk.LimitError} `"responseTime"`. For calls that share a budget, e.g. several feeds
+     * fetched in one 30-second background run.
+     *
+     * @example
+     * const res = await zk.fetch(feedUrl, { timeout: 8000 });
+     */
+    timeout?: number;
   }
 
   /**
@@ -348,7 +367,7 @@ declare namespace zk {
    *
    * @example
    * const type = res.headers.get("Content-Type") ?? "";
-   * for (const [name, value] of res.headers) zk.log(name, value); // names in lower case
+   * for (const [name, value] of res.headers) console.log(name, value); // names in lower case
    */
   interface Headers extends Iterable<[string, string]> {
     /** The header's value, or `null` if it is absent. */
@@ -370,8 +389,19 @@ declare namespace zk {
     readonly url: string;
     /** Response headers, as in the web's `Headers`: `res.headers.get("content-type")`. */
     readonly headers: Headers;
-    /** The body as text (decoded as UTF-8 unless the response says otherwise). */
+    /**
+     * The body as text, decoded as UTF-8 whatever the response's charset (as on the web); invalid
+     * bytes become U+FFFD. For another encoding, decode {@link bytes} yourself.
+     */
     text(): Promise<string>;
+    /**
+     * The body as bytes.
+     *
+     * @example
+     * // a Latin-1 feed
+     * const xml = Array.from(await res.bytes(), (b) => String.fromCharCode(b)).join("");
+     */
+    bytes(): Promise<Uint8Array>;
     /** The body parsed as JSON. `T` is not checked. Rejects if it isn't JSON. */
     json<T = Json>(): Promise<T>;
   }
@@ -392,12 +422,12 @@ declare namespace zk {
      *
      * @example
      * for await (const item of zk.library.items({ collection: inbox.key })) {
-     *   if (!item.read) zk.log(item.title);
+     *   if (!item.read) console.log(item.title);
      * }
      *
      * @example
      * // first ten items tagged "to-read"
-     * for await (const item of zk.library.items({ tag: "to-read", limit: 10 })) zk.log(item.title);
+     * for await (const item of zk.library.items({ tag: "to-read", limit: 10 })) console.log(item.title);
      */
     function items(query?: ItemsQuery): AsyncIterable<Item>;
 
@@ -422,7 +452,7 @@ declare namespace zk {
      *
      * @example
      * const [existing] = await zk.library.findByIdentifier({ arxiv: "2401.01234v2" });
-     * if (existing) zk.log("already have", existing.title);
+     * if (existing) console.log("already have", existing.title);
      */
     function findByIdentifier(id: { doi?: string; arxiv?: string; isbn?: string }): Promise<Item[]>;
 
@@ -531,16 +561,19 @@ declare namespace zk {
    * (without ever overwriting an edit made elsewhere). Settings → Plugins → *What it changed*
    * lists every change a plugin asked for and what became of it.
    *
-   * - **Adding** (items, collections, tags, notes) is allowed by its permission. Each add resolves
-   *   at once with a {@link Change}: the key of what changed and a `changeId` to {@link cancel} it
-   *   while it is still unsent.
+   * Every call changes one thing and resolves with a {@link Change}: the key of what changed and a
+   * `changeId` to {@link cancel} it while it is still unsent.
+   *
+   * - **Adding** (items, collections, tags, notes) is allowed by its permission and resolves at once.
    * - **Removing** (trash, remove from a collection, remove a tag, delete a note) needs the user's
-   *   yes every time: the app shows its own confirmation and the call resolves `true` (done) or
-   *   `false` (declined, or not allowed right now). Removals are only asked in answer to
-   *   something the user just did (an action, a screen, an event they caused on the Kindle); from
-   *   a background task or an event that came in with a sync they resolve `false` without asking.
-   *   Removals asked together (before awaiting any of them) are confirmed together, in one list.
-   *   Nothing is ever deleted for good except a note this plugin created: items go to Zotero's trash.
+   *   yes every time: the app shows its own confirmation and the call resolves with the change
+   *   (done) or `null` (declined, or not allowed right now) — so `if (await zk.zotero.trash(key))`
+   *   reads as "if it was trashed". Removals are only asked in answer to something the user just
+   *   did (an action, a screen, an event they caused on the Kindle); from a background task or an
+   *   event that came in with a sync they resolve `null` without asking. Removals asked together
+   *   (before awaiting any of them, e.g. with `Promise.all`) are confirmed together, in one list,
+   *   with one answer for all. Nothing is ever deleted for good except a note this plugin created:
+   *   items go to Zotero's trash.
    * - **Editing** existing data (a title, a note, an annotation) is not possible in API v0.
    */
   namespace zotero {
@@ -549,8 +582,8 @@ declare namespace zk {
      * One change: cancelling it withdraws the item with its collections and tags. The new item
      * is readable at once (`zk.library.item(change.key)`).
      *
-     * **Permission**: `zotero:create-items`; also `zotero:collections` with `collections`,
-     * `zotero:tags` with `tags`.
+     * **Permission**: `zotero:create-items`; also `zotero:collections` if `collections` isn't
+     * empty, `zotero:tags` if `tags` isn't empty.
      *
      * @example
      * const change = await zk.zotero.createItem(
@@ -602,17 +635,22 @@ declare namespace zk {
     function addNote(itemKey: string, html: string): Promise<Change>;
 
     /**
-     * Asks the user to move items to Zotero's trash (recoverable there). One confirmation for
-     * all of them; resolves `true` if they said yes.
+     * Asks the user to move an item to Zotero's trash (recoverable there). Resolves with the
+     * change if they said yes (`change.key` is the item's key), `null` if not. To trash several,
+     * ask for them together: one confirmation lists them all.
      *
      * **Permission**: `zotero:remove`, and the user's yes each time.
      *
      * @example
      * // replace an old version with a new one, keeping its notes
      * for (const note of await zk.library.notes(old.key)) await zk.zotero.addNote(fresh.key, note.html);
-     * if (!(await zk.zotero.trash([old.key]))) zk.log("kept the old version");
+     * if (!(await zk.zotero.trash(old.key))) console.log("kept the old version");
+     *
+     * @example
+     * // several at once, in one confirmation
+     * const trashed = await Promise.all(duplicates.map((d) => zk.zotero.trash(d.key)));
      */
-    function trash(itemKeys: string[]): Promise<boolean>;
+    function trash(itemKey: string): Promise<Change | null>;
 
     /**
      * Asks the user to take an item out of a collection (the item stays in the library).
@@ -620,9 +658,9 @@ declare namespace zk {
      * **Permission**: `zotero:remove`, and the user's yes each time.
      *
      * @example
-     * const removed = await zk.zotero.removeFromCollection(item.key, inbox.key);
+     * const removed = await zk.zotero.removeFromCollection(item.key, inbox.key); // Change | null
      */
-    function removeFromCollection(itemKey: string, collectionKey: string): Promise<boolean>;
+    function removeFromCollection(itemKey: string, collectionKey: string): Promise<Change | null>;
 
     /**
      * Asks the user to remove a tag from an item.
@@ -632,7 +670,7 @@ declare namespace zk {
      * @example
      * await zk.zotero.removeTag(item.key, "to-read");
      */
-    function removeTag(itemKey: string, tag: string): Promise<boolean>;
+    function removeTag(itemKey: string, tag: string): Promise<Change | null>;
 
     /**
      * Asks the user to delete a note — only one this plugin created (see {@link Note.createdBy});
@@ -644,20 +682,23 @@ declare namespace zk {
      * const mine = (await zk.library.notes(item.key)).filter((n) => n.createdBy === zk.plugin.id);
      * for (const note of mine) await zk.zotero.deleteNote(note.key);
      */
-    function deleteNote(noteKey: string): Promise<boolean>;
+    function deleteNote(noteKey: string): Promise<Change | null>;
 
     /**
-     * Withdraws one of this plugin's changes that hasn't been sent to Zotero yet — no confirmation,
-     * since nothing leaves Zotero. Withdrawing a new item also withdraws what was added to it.
-     * Resolves `false` if the change was already sent (undoing it then is a removal: ask with
-     * {@link trash} and friends) or isn't this plugin's.
+     * Withdraws one of this plugin's changes that hasn't been sent to Zotero yet, of any kind — no
+     * confirmation, since nothing leaves Zotero. Withdrawing an add takes it back (withdrawing a
+     * new item also withdraws what was added to it); withdrawing a removal the user agreed to puts
+     * back what it removed (an item comes back out of the trash, a deleted note comes back).
+     * Resolves `true` if withdrawn, `false` if the change was already sent or isn't this plugin's.
+     * Undoing a sent add is a removal: ask with {@link trash} and friends. Undoing a sent removal
+     * isn't possible from a plugin (restoring is an edit); the user restores it in Zotero.
      *
      * **Permission**: none beyond the one the change needed.
      *
      * @example
      * const changeId = await zk.storage.get<string>(`undo:${entry.id}`);
      * if (changeId && !(await zk.zotero.cancel(changeId))) {
-     *   await zk.zotero.trash([itemKey]); // already synced: ask instead
+     *   await zk.zotero.trash(itemKey); // already synced: ask instead
      * }
      */
     function cancel(changeId: string): Promise<boolean>;
@@ -674,9 +715,12 @@ declare namespace zk {
     function pending(): Promise<PendingChange[]>;
   }
 
-  /** What an add in {@link zk.zotero} resolves with. */
+  /** What a change asked of {@link zk.zotero} resolves with (a removal: if the user said yes). */
   interface Change {
-    /** The key of what the change made or changed: the new item or note, or the item tagged or filed. */
+    /**
+     * The key of what the change made or changed: the new item or note; the item filed, tagged,
+     * trashed, or taken out of a collection or tag; the note deleted.
+     */
     key: string;
     /** Identifies the change, to {@link zk.zotero.cancel} it while it is unsent. */
     changeId: string;
@@ -689,7 +733,16 @@ declare namespace zk {
     /** When it was asked for (ISO 8601). */
     requested: string;
   } & (
-    | { kind: "createItem"; /** The new item. */ key: string; fields: ItemFields }
+    | {
+        kind: "createItem";
+        /** The new item. */
+        key: string;
+        fields: ItemFields;
+        /** Collections it was filed into with it (`[]` if none). */
+        collections: string[];
+        /** Tags it was given with it (`[]` if none). */
+        tags: string[];
+      }
     | { kind: "addToCollection"; /** The item. */ key: string; collection: string }
     | { kind: "addTag"; /** The item. */ key: string; tag: string }
     | { kind: "addNote"; /** The new note. */ key: string; itemKey: string }
@@ -716,12 +769,12 @@ declare namespace zk {
    *
    * @example
    * zk.on("highlightCreated", async ({ origin, annotations }) => {
-   *   for (const a of annotations) zk.log(origin, a.text);
+   *   for (const a of annotations) console.log(origin, a.text);
    * });
    *
    * @example
    * zk.on("syncFinished", ({ initial }) => {
-   *   if (!initial) zk.log("synced");
+   *   if (!initial) console.log("synced");
    * });
    */
   function on<K extends keyof Events>(event: K, handler: (e: Events[K]) => void | Promise<void>): void;
@@ -785,7 +838,7 @@ declare namespace zk {
    * app runs it after a successful sync, at most once an hour, while the Kindle is awake and
    * online; it never wakes a sleeping Kindle. A run has 30 seconds. Three failed runs in a row
    * turn the plugin off. A background task can't show anything or ask the user: removals resolve
-   * `false`; use {@link setBadge} to say there is something to see.
+   * `null`; use {@link setBadge} to say there is something to see.
    *
    * **Permission**: `background`.
    *
@@ -1065,11 +1118,13 @@ declare namespace zk {
    * try {
    *   await zk.library.fullText(pdf.key);
    * } catch (e) {
-   *   if (e instanceof zk.PermissionError) zk.log("missing", e.permission);
+   *   if (e instanceof zk.PermissionError) console.log("missing", e.permission);
    *   else throw e;
    * }
    */
   class PermissionError extends Error {
+    /** Only the app makes these. */
+    private constructor();
     readonly name: "PermissionError";
     /** The permission that was missing, exactly as it must appear in `plugin.json`. */
     readonly permission: Permission;
@@ -1084,11 +1139,13 @@ declare namespace zk {
    * try {
    *   const res = await zk.fetch(bigFeedUrl);
    * } catch (e) {
-   *   if (e instanceof zk.LimitError && e.limit === "responseSize") zk.log("feed too large");
+   *   if (e instanceof zk.LimitError && e.limit === "responseSize") console.log("feed too large");
    *   else throw e;
    * }
    */
   class LimitError extends Error {
+    /** Only the app makes these. */
+    private constructor();
     readonly name: "LimitError";
     /** Which limit: run time, memory, stack depth, or a fetch's response size or duration. */
     readonly limit: "time" | "memory" | "stack" | "responseSize" | "responseTime";

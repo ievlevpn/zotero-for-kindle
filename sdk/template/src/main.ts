@@ -15,5 +15,5 @@
 // PermissionError saying exactly that.
 zk.on("bookFinished", ({ item, attachment }) => {
   const authors = item.creators.map((c) => c.last ?? c.name).join(", ");
-  zk.log(`Finished "${item.title}" by ${authors || "unknown"} (${attachment.contentType})`);
+  console.log(`Finished "${item.title}" by ${authors || "unknown"} (${attachment.contentType})`);
 });
