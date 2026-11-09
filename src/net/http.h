@@ -2,6 +2,8 @@
 // The HTTP seam: everything that talks to zotero.org or WebDAV goes through `Http`, so tests
 // can substitute a scripted fake and the write guard can sit in front of the real client.
 
+#include <sys/socket.h>
+
 #include <atomic>
 #include <functional>
 #include <map>
@@ -25,6 +27,10 @@ struct HttpRequest {
     int timeoutS = 120;
     int timeoutMs = 0;          // > 0: the whole transfer's limit in ms, instead of timeoutS
     size_t maxBodyBytes = 0;    // > 0: the transfer fails (tooLarge) once the body would pass this
+    // When set: asked for every address the client is about to connect to (on a fresh connection;
+    // no cached one is reused); false refuses it (HttpResponse::addressRefused if none was allowed).
+    std::function<bool(const sockaddr*, socklen_t)> allowAddress;
+    bool noProxy = false;       // connect directly, whatever the environment's proxy settings
     std::function<void(int64_t done, int64_t total)> onProgress;  // download progress (bytes)
     std::shared_ptr<std::atomic<bool>> cancel;                    // set to abort the transfer
 };
@@ -35,6 +41,7 @@ struct HttpResponse {
     std::string body;
     std::string url;          // the URL that answered, when the client tracks it (PluginHttp does)
     bool tooLarge = false;    // the body passed HttpRequest::maxBodyBytes; reading stopped there
+    bool addressRefused = false;  // HttpRequest::allowAddress refused an address it would have used
     int curlCode = 0;
     std::string curlError;
     double seconds = 0;

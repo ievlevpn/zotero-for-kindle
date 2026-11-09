@@ -228,6 +228,7 @@ struct PluginHost::Impl {
     std::set<std::string> loadedIds;
     std::map<std::string, std::string> problems;  // a current problem, shown on its row
     std::deque<PluginHostEvent> events;
+    std::string webdavHost;  // zk.fetch refuses it; the app may change it (setWebdavHost)
     std::mutex runningMu;
     js::Runtime* running = nullptr;  // whose code is running (stop() interrupts it)
 
@@ -244,6 +245,7 @@ struct PluginHost::Impl {
     std::unique_ptr<plugins::PluginNet> net;
 
     explicit Impl(PluginHostDeps d) : deps(std::move(d)), state(deps.pluginsDir + "/.state.json") {
+        webdavHost = deps.webdavHost;
         if (!deps.clock) deps.clock = systemMs;
         pool.limit = deps.memoryTotal;
         folders = scanPlugins(deps.pluginsDir, deps.appVersion);
@@ -484,6 +486,7 @@ struct PluginHost::Impl {
         auto it = loaded.find(id);
         if (it == loaded.end()) return;
         for (auto& [wid, w] : it->second->run->work) w.cancel->store(true);
+        if (net) net->sweep();  // its queued fetches (and their bodies) go now
         loaded.erase(it);  // the runtime and everything in it
         setLoaded(id, false);
     }
@@ -688,6 +691,7 @@ struct PluginHost::Impl {
             it = run.work.erase(it);
             doomed = true;
         }
+        if (doomed && net) net->sweep();
         if (stopping) return;
         // Rejected in an entry of its own, posted: never nested in this one, and the loop (other
         // plugins, turning this one off) runs in between.
@@ -715,6 +719,7 @@ struct PluginHost::Impl {
             it->second.cancel->store(true);
             it = run.work.erase(it);
         }
+        if (net) net->sweep();
         recordFailure(p.manifest.id, "Stopped: the app hit an internal error while running " + what + ": " + internal);
         if (!load) restarts.insert(p.manifest.id);
     }
@@ -920,7 +925,11 @@ PluginCtx& ctxOf(JSContext* c) { return *static_cast<PluginCtx*>(JS_GetContextOp
 
 PluginNet* netOf(PluginCtx& p) {
     auto& h = p.host;
-    if (!h.net && h.deps.makeHttp) h.net = std::make_unique<PluginNet>(h.deps.makeHttp, h.deps.webdavHost);
+    if (!h.net && h.deps.makeHttp)
+        h.net = std::make_unique<PluginNet>(h.deps.makeHttp, [&h] {
+            std::lock_guard<std::mutex> lock(h.mu);
+            return h.webdavHost;
+        });
     return h.net.get();
 }
 
@@ -1157,6 +1166,11 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
         h.setProblem(id, "");
         if (!on) h.unload(id);
     });
+}
+
+void PluginHost::setWebdavHost(std::string host) {
+    std::lock_guard<std::mutex> lock(impl_->mu);
+    impl_->webdavHost = std::move(host);
 }
 
 bool PluginHost::waitIdle(int timeoutMs) {

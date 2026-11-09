@@ -121,7 +121,11 @@ JSValue fetchNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     job.request = std::move(req);
     job.timeoutMs = timeoutMs;
     job.done = [work](FetchResult r) { work->finish(settleFor(std::move(r))); };
-    net->submit(std::move(job));
+    if (auto refused = net->submit(std::move(job))) {
+        FetchResult r;
+        r.error = std::move(refused);
+        work->finish(settleFor(std::move(r)));
+    }
     return promise;
 }
 

@@ -101,7 +101,8 @@ bool requirePermission(PluginCtx&, Permission, const std::string& detail);
 // Throws zk.PermissionError for a permission spelled out (e.g. "net:api.deepl.com"); returns
 // JS_EXCEPTION.
 JSValue throwPermissionError(PluginCtx&, const std::string& permission, const std::string& detail);
-// A new zk.LimitError; limit is "time", "memory", "stack", "responseSize" or "responseTime".
+// A new zk.LimitError; limit is "time", "memory", "stack", "responseSize", "responseTime" or
+// "fetches".
 // JS_EXCEPTION (pending) if it couldn't be made.
 JSValue newLimitError(PluginCtx&, const std::string& limit, const std::string& message);
 

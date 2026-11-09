@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <mutex>
 
+#include <sys/socket.h>
+
 namespace zk {
 
 namespace {
@@ -62,6 +64,21 @@ int onXfer(void* user, curl_off_t dltotal, curl_off_t dlnow, curl_off_t, curl_of
     if (req->cancel && *req->cancel) return 1;  // aborts with CURLE_ABORTED_BY_CALLBACK
     if (req->onProgress) req->onProgress(static_cast<int64_t>(dlnow), static_cast<int64_t>(dltotal));
     return 0;
+}
+
+struct SocketGate {
+    const HttpRequest* req;
+    HttpResponse* resp;
+};
+
+// Every address curl tries (each one, in happy-eyeballs order) passes through here first.
+curl_socket_t onOpenSocket(void* user, curlsocktype, curl_sockaddr* a) {
+    auto* gate = static_cast<SocketGate*>(user);
+    if (!gate->req->allowAddress(&a->addr, a->addrlen)) {
+        gate->resp->addressRefused = true;
+        return CURL_SOCKET_BAD;
+    }
+    return ::socket(a->family, a->socktype, a->protocol);
 }
 
 void globalInit() {
@@ -124,6 +141,16 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, onHeader);
     curl_easy_setopt(h, CURLOPT_HEADERDATA, &resp);
     if (!caBundle_.empty()) curl_easy_setopt(h, CURLOPT_CAINFO, caBundle_.c_str());
+    SocketGate gate{&req, &resp};
+    if (req.allowAddress) {
+        curl_easy_setopt(h, CURLOPT_OPENSOCKETFUNCTION, onOpenSocket);
+        curl_easy_setopt(h, CURLOPT_OPENSOCKETDATA, &gate);
+        curl_easy_setopt(h, CURLOPT_FRESH_CONNECT, 1L);  // a cached connection was never checked
+    }
+    if (req.noProxy) {
+        curl_easy_setopt(h, CURLOPT_PROXY, "");
+        curl_easy_setopt(h, CURLOPT_NOPROXY, "*");
+    }
     if (req.onProgress || req.cancel) {
         curl_easy_setopt(h, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(h, CURLOPT_XFERINFOFUNCTION, onXfer);

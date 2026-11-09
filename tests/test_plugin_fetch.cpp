@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -15,6 +19,7 @@ using namespace zk;
 using namespace zk::test;
 using zk::plugins::FetchError;
 using zk::plugins::PluginHttp;
+using zk::plugins::PluginNet;
 
 namespace {
 
@@ -494,4 +499,229 @@ TEST_CASE("fetch: zk.fetch's timeout rejects with LimitError responseTime") {
     CHECK(contains(log, "ERR LimitError"));
     CHECK(contains(log, "limit=responseTime"));
     CHECK(contains(log, "80 ms"));
+}
+
+// ---- Fix round 1: local addresses, the per-plugin cap, a WebDAV host that changes -----------
+
+namespace {
+
+// An address as getaddrinfo would hand it to the socket: IPv4 in inet_aton's forms (so "127.1" and
+// "0x7f000001" too), or IPv6.
+bool publicAddress(const std::string& text) {
+    sockaddr_in v4{};
+    if (inet_aton(text.c_str(), &v4.sin_addr)) {
+        v4.sin_family = AF_INET;
+        return plugins::isPublicAddress(reinterpret_cast<const sockaddr*>(&v4), sizeof v4);
+    }
+    sockaddr_in6 v6{};
+    REQUIRE(inet_pton(AF_INET6, text.c_str(), &v6.sin6_addr) == 1);
+    v6.sin6_family = AF_INET6;
+    return plugins::isPublicAddress(reinterpret_cast<const sockaddr*>(&v6), sizeof v6);
+}
+
+}  // namespace
+
+TEST_CASE("fetch: the address check refuses loopback, private, link-local and unspecified addresses") {
+    for (const char* a : {"127.0.0.1", "127.1", "0x7f000001", "2130706433", "127.255.255.254", "10.0.0.1", "10.255.1.2",
+                          "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "0.0.0.0", "0.1.2.3",
+                          "100.64.0.1", "100.127.255.255", "255.255.255.255", "224.0.0.1", "::1", "::", "fc00::1",
+                          "fd12:3456::1", "fe80::1", "febf::1", "::ffff:127.0.0.1", "::ffff:192.168.0.1",
+                          "::ffff:7f00:1", "::ffff:169.254.169.254", "::127.0.0.1", "64:ff9b::a00:1", "ff02::1", "fec0::1"}) {
+        CAPTURE(a);
+        CHECK_FALSE(publicAddress(a));
+    }
+    for (const char* a : {"93.184.216.34", "8.8.8.8", "172.15.255.255", "172.32.0.1", "192.169.0.1", "100.63.255.255",
+                          "100.128.0.1", "169.255.0.1", "11.0.0.1", "126.255.255.255", "128.0.0.1", "2606:2800:220:1::1",
+                          "2001:4860:4860::8888", "::ffff:8.8.8.8", "64:ff9b::808:808"}) {
+        CAPTURE(a);
+        CHECK(publicAddress(a));
+    }
+    sockaddr bogus{};
+    bogus.sa_family = AF_UNIX;
+    CHECK_FALSE(plugins::isPublicAddress(&bogus, sizeof bogus));
+    sockaddr_in shortV4{};
+    shortV4.sin_family = AF_INET;
+    CHECK_FALSE(plugins::isPublicAddress(reinterpret_cast<const sockaddr*>(&shortV4), 4));  // too short to read
+}
+
+TEST_CASE("fetch: the address check is on for hosts reached through net:*, off for declared ones; no proxy") {
+    FakeHttp fake;
+    fake.expect("GET", "https://named.example.org/", FakeHttp::ok("1"));
+    fake.expect("GET", "https://other.example.com/", FakeHttp::ok("2"));
+    fake.expect("GET", "https://named.example.org/r", redirect(302, "https://third.example.net/"));
+    fake.expect("GET", "https://third.example.net/", FakeHttp::ok("3"));
+    PluginHttp ph(fake, "");
+    const auto m = manifest({Permission::NetAny}, {"named.example.org"});
+    REQUIRE_FALSE(send(ph, m, get("https://named.example.org/")).threw);
+    REQUIRE_FALSE(send(ph, m, get("https://other.example.com/")).threw);
+    REQUIRE_FALSE(send(ph, m, get("https://named.example.org/r")).threw);
+    REQUIRE(fake.sent.size() == 4);
+    CHECK_FALSE(fake.sent[0].allowAddress);
+    REQUIRE(fake.sent[1].allowAddress);
+    CHECK_FALSE(fake.sent[2].allowAddress);
+    REQUIRE(fake.sent[3].allowAddress);  // checked again at the redirect hop
+    for (const auto& r : fake.sent) CHECK(r.noProxy);
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    inet_aton("127.0.0.1", &a.sin_addr);
+    CHECK_FALSE(fake.sent[1].allowAddress(reinterpret_cast<const sockaddr*>(&a), sizeof a));
+    inet_aton("93.184.216.34", &a.sin_addr);
+    CHECK(fake.sent[1].allowAddress(reinterpret_cast<const sockaddr*>(&a), sizeof a));
+}
+
+TEST_CASE("fetch: a connection refused for its address is the local-network error") {
+    FakeHttp fake;
+    HttpResponse refused;  // what CurlHttp returns when the open-socket hook says no
+    refused.curlCode = 7;
+    refused.curlError = "Couldn't connect to server";
+    refused.addressRefused = true;
+    fake.expect("GET", "https://intranet.example.com/", refused);
+    PluginHttp ph(fake, "");
+    Outcome o = send(ph, manifest({Permission::NetAny}), get("https://intranet.example.com/x"));
+    REQUIRE(o.threw);
+    CHECK(o.kind == FetchError::Kind::Refused);
+    CHECK(contains(o.message, "intranet.example.com is on your local network; plugins with net:* can't reach it"));
+    CHECK(contains(o.message, "declare it by name"));
+}
+
+namespace {
+
+PluginNet::Job job(std::string url, std::string body = "", std::shared_ptr<std::atomic<bool>> cancel = nullptr,
+                   std::function<void(plugins::FetchResult)> done = [](plugins::FetchResult) {}) {
+    PluginNet::Job j;
+    j.pluginId = "p";
+    j.manifest = manifest({}, {"slow.example.org"});
+    j.manifest.id = "p";
+    j.request.method = body.empty() ? "GET" : "POST";
+    j.request.url = std::move(url);
+    j.request.body = std::move(body);
+    j.request.cancel = std::move(cancel);
+    j.done = std::move(done);
+    return j;
+}
+
+// Blocks every request until released (never looks at its cancel flag).
+struct Gate {
+    std::atomic<bool> release{false};
+    std::atomic<int> started{0};
+    std::function<std::unique_ptr<Http>()> maker() {
+        return [this] {
+            return std::make_unique<FnHttp>([this](const HttpRequest&) {
+                ++started;
+                while (!release) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                return FakeHttp::ok("x");
+            });
+        };
+    }
+};
+
+}  // namespace
+
+TEST_CASE("fetch: a plugin's 9th fetch under way rejects with LimitError fetches") {
+    FakePlugins fp;
+    Gate gate;
+    fp.add("a", pluginWith(R"(
+        const ps = [];
+        for (let i = 0; i < 8; i++) ps.push(zk.fetch("https://slow.example.org/" + i).then((r) => r.text()));
+        try { await zk.fetch("https://slow.example.org/9"); out("no"); } catch (e) { out("9th " + e.name + " " + e.limit); }
+        out("done " + (await Promise.all(ps)).length);
+        out((await (await zk.fetch("https://slow.example.org/again")).text()));  // room again
+    )"),
+           {"net:slow.example.org"});
+    auto deps = fp.deps();
+    deps.handlerBudgetMs = 4000;
+    deps.makeHttp = gate.maker();
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    CHECK(eventually([&] { return contains(fp.log("a"), "OUT 9th LimitError fetches"); }, 2000));
+    gate.release = true;
+    REQUIRE(host.waitIdle(5000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "OUT done 8"));
+    CHECK(contains(log, "OUT x"));
+    CHECK_FALSE(contains(log, "OUT no"));
+}
+
+TEST_CASE("fetch: request bodies under way past 20 MB reject with LimitError fetches") {
+    Gate gate;
+    PluginNet net(gate.maker(), [] { return std::string(); });
+    const std::string nine(9u << 20, 'x');
+    CHECK_FALSE(net.submit(job("https://slow.example.org/1", nine)));
+    CHECK_FALSE(net.submit(job("https://slow.example.org/2", nine)));
+    auto third = net.submit(job("https://slow.example.org/3", nine));
+    REQUIRE(third);
+    CHECK(third->kind == FetchError::Kind::Limit);
+    CHECK(third->detail == "fetches");
+    CHECK(contains(third->what(), "20 MB"));
+    CHECK_FALSE(net.submit(job("https://slow.example.org/4", "small")));
+    CHECK(net.pending("p").bytes == 2 * nine.size() + 5);
+    gate.release = true;
+    CHECK(eventually([&] { return net.pending("p").jobs == 0; }));
+    CHECK(net.pending("p").bytes == 0);
+}
+
+TEST_CASE("fetch: cancelled queued fetches are released at once") {
+    Gate gate;
+    PluginNet net(gate.maker(), [] { return std::string(); });
+    std::vector<std::shared_ptr<std::atomic<bool>>> flags;
+    for (int i = 0; i < 8; ++i) {
+        flags.push_back(std::make_shared<std::atomic<bool>>(false));
+        REQUIRE_FALSE(net.submit(job("https://slow.example.org/" + std::to_string(i), std::string(1000, 'b'), flags.back())));
+    }
+    REQUIRE(eventually([&] { return gate.started == 2; }));  // 2 run (the per-plugin cap), 6 wait
+    CHECK(net.pending("p").jobs == 8);
+    for (auto& f : flags) *f = true;  // the call was stopped: the host cancels its work, then sweeps
+    net.sweep();
+    CHECK(net.pending("p").jobs == 2);  // the running two stay counted until their transfers end
+    CHECK(net.pending("p").bytes == 2000);
+    for (int i = 0; i < 6; ++i) CHECK_FALSE(net.submit(job("https://slow.example.org/n" + std::to_string(i))));
+    CHECK(net.submit(job("https://slow.example.org/over")));
+    gate.release = true;
+    CHECK(eventually([&] { return net.pending("p").jobs == 0; }));
+}
+
+TEST_CASE("fetch: the WebDAV host is read per request (changing it takes effect at once)") {
+    FakePlugins fp;
+    SharedFake net;
+    for (int i = 0; i < 2; ++i) {
+        net.fake.expect("GET", "https://dav.a.example.org/", FakeHttp::ok("A"));
+        net.fake.expect("GET", "https://dav.b.example.org/", FakeHttp::ok("B"));
+    }
+    fp.add("a", pluginWith(R"(
+        for (const h of ["dav.a.example.org", "dav.b.example.org"]) {
+          try { out((initial ? "2 " : "1 ") + (await (await zk.fetch(`https://${h}/x`)).text())); }
+          catch (e) { out((initial ? "2 " : "1 ") + "refused " + h); }
+        }
+    )"),
+           {"net:dav.a.example.org", "net:dav.b.example.org"});
+    auto deps = fp.deps();
+    deps.webdavHost = "dav.a.example.org";
+    deps.makeHttp = net.maker();
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(5000));
+    host.setWebdavHost("https://dav.b.example.org/remote.php/dav");
+    host.dispatch({"syncFinished", {{"origin", "zotero"}, {"initial", true}}, false});
+    REQUIRE(host.waitIdle(5000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "OUT 1 refused dav.a.example.org"));
+    CHECK(contains(log, "OUT 1 B"));
+    CHECK(contains(log, "OUT 2 A"));
+    CHECK(contains(log, "OUT 2 refused dav.b.example.org"));
+}
+
+TEST_CASE("fetch: through the real client, net:* can't open a connection to localhost, 127.1 or [::1]") {
+    CurlHttp curl("");
+    PluginHttp ph(curl, "");
+    for (const char* url : {"https://localhost:9/", "https://127.1:9/", "https://[::1]:9/", "https://0x7f000001:9/"}) {
+        CAPTURE(url);
+        Outcome o = send(ph, manifest({Permission::NetAny}), get(url), 3000);
+        REQUIRE(o.threw);
+        CHECK(o.kind == FetchError::Kind::Refused);
+        CHECK(contains(o.message, "is on your local network"));
+    }
 }

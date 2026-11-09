@@ -2,10 +2,62 @@
 
 #include <algorithm>
 #include <cctype>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
 #include <cstdio>
+#include <cstring>
 #include <string_view>
 
 namespace zk::plugins {
+
+namespace {
+
+bool publicV4(uint32_t a) {  // host byte order
+    auto in = [a](uint32_t net, int bits) { return (a >> (32 - bits)) == (net >> (32 - bits)); };
+    return !(in(0x00000000, 8) ||   // 0/8: "this network", unspecified
+             in(0x0A000000, 8) ||   // 10/8
+             in(0x64400000, 10) ||  // 100.64/10: carrier-grade NAT
+             in(0x7F000000, 8) ||   // 127/8: loopback
+             in(0xA9FE0000, 16) ||  // 169.254/16: link-local (cloud metadata)
+             in(0xAC100000, 12) ||  // 172.16/12
+             in(0xC0A80000, 16) ||  // 192.168/16
+             in(0xE0000000, 3));    // 224/4 multicast, 240/4 reserved, broadcast
+}
+
+}  // namespace
+
+bool isPublicAddress(const sockaddr* sa, socklen_t len) {
+    if (!sa || len < static_cast<socklen_t>(sizeof(sa_family_t))) return false;
+    if (sa->sa_family == AF_INET) {
+        if (len < static_cast<socklen_t>(sizeof(sockaddr_in))) return false;
+        sockaddr_in v4;
+        std::memcpy(&v4, sa, sizeof v4);
+        return publicV4(ntohl(v4.sin_addr.s_addr));
+    }
+    if (sa->sa_family == AF_INET6) {
+        if (len < static_cast<socklen_t>(sizeof(sockaddr_in6))) return false;
+        sockaddr_in6 v6;
+        std::memcpy(&v6, sa, sizeof v6);
+        const unsigned char* b = v6.sin6_addr.s6_addr;
+        auto v4At12 = [b] { return (uint32_t(b[12]) << 24) | (uint32_t(b[13]) << 16) | (uint32_t(b[14]) << 8) | b[15]; };
+        auto zeros = [b](int from, int to) {
+            for (int i = from; i < to; ++i)
+                if (b[i]) return false;
+            return true;
+        };
+        if (zeros(0, 10) && b[10] == 0xFF && b[11] == 0xFF) return publicV4(v4At12());  // ::ffff:a.b.c.d
+        if (zeros(0, 12)) return publicV4(v4At12());  // ::a.b.c.d (also :: and ::1)
+        static const unsigned char kNat64[12] = {0x00, 0x64, 0xFF, 0x9B, 0, 0, 0, 0, 0, 0, 0, 0};
+        if (std::memcmp(b, kNat64, 12) == 0) return publicV4(v4At12());  // 64:ff9b::/96
+        if ((b[0] & 0xFE) == 0xFC) return false;                  // fc00::/7 unique local
+        if (b[0] == 0xFE && (b[1] & 0xC0) == 0x80) return false;  // fe80::/10 link-local
+        if (b[0] == 0xFE && (b[1] & 0xC0) == 0xC0) return false;  // fec0::/10 site-local (old)
+        if (b[0] == 0xFF) return false;                           // multicast
+        return true;
+    }
+    return false;
+}
 
 namespace {
 
@@ -145,9 +197,18 @@ std::string duration(int ms) {
     return std::to_string(ms) + " ms";
 }
 
-// The rules for one URL, the first (`from` null) or a redirect's target.
+// Declared by name (net:<host> or net:*.<domain>), not just covered by net:*.
+bool declared(const PluginManifest& m, const std::string& host) {
+    PluginManifest named;
+    named.hosts = m.hosts;
+    named.permissions.insert(Permission::Net);
+    return hostAllowed(named, host);
+}
+
+// The rules for one URL, the first (`from` null) or a redirect's target. anyOnly: allowed only by
+// net:* (its addresses must then be public).
 Url check(const PluginManifest& m, const std::optional<Url>& u, const std::string& raw, const Url* from,
-          const std::string& webdav) {
+          const std::string& webdav, bool& anyOnly) {
     const std::string at = from ? "zk.fetch(\"" + from->shown() + "\"): the redirect to " : "zk.fetch: ";
     using K = FetchError::Kind;
     if (!u) throw FetchError(K::Refused, at + "\"" + clip(raw) + "\" isn't a valid URL");
@@ -160,6 +221,7 @@ Url check(const PluginManifest& m, const std::optional<Url>& u, const std::strin
     if (u->userinfo)
         throw FetchError(K::Refused, at + (from ? u->shown() + " is refused: " : "") +
                                          "a user name or password in the URL isn't allowed (set an Authorization header)");
+    anyOnly = !declared(m, u->host);
     if (!hostAllowed(m, u->host)) {
         const std::string perm = isIpLiteral(u->host) ? "net:*" : "net:" + u->host;
         throw FetchError(K::Permission, from ? at + u->shown() : "zk.fetch(\"" + u->shown() + "\")", perm);
@@ -182,11 +244,14 @@ bool isRedirect(long status) { return status == 301 || status == 302 || status =
 
 PluginHttp::PluginHttp(Http& inner, std::string webdavHost) : inner_(inner), webdav_(normalisedHost(webdavHost)) {}
 
+void PluginHttp::setWebdavHost(const std::string& host) { webdav_ = normalisedHost(host); }
+
 HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeoutMs, Clock::time_point started) {
     using K = FetchError::Kind;
     timeoutMs = std::clamp(timeoutMs, 1, kFetchMaxMs);
     const auto deadline = started + std::chrono::milliseconds(timeoutMs);
-    Url u = check(m, parseUrl(in.url), in.url, nullptr, webdav_);
+    bool anyOnly = false;
+    Url u = check(m, parseUrl(in.url), in.url, nullptr, webdav_, anyOnly);
     const std::string first = u.shown();
 
     std::string method = in.method;
@@ -226,9 +291,15 @@ HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeo
         r.timeoutMs = static_cast<int>(left);
         r.maxBodyBytes = kFetchMaxBytes;
         r.cancel = in.cancel;
+        r.noProxy = true;  // the address checked is the peer's
+        if (anyOnly) r.allowAddress = [](const sockaddr* a, socklen_t n) { return isPublicAddress(a, n); };
         HttpResponse resp = inner_.send(r);
 
         if (in.cancel && *in.cancel) throw FetchError(K::Network, "zk.fetch(\"" + first + "\") was cancelled");
+        if (resp.addressRefused && resp.curlCode != 0)
+            throw FetchError(K::Refused, "zk.fetch(\"" + u.shown() + "\"): " + u.host +
+                                             " is on your local network; plugins with net:* can't reach it — declare it by name (\"net:" +
+                                             u.host + "\") in plugin.json");
         if (resp.tooLarge || resp.body.size() > kFetchMaxBytes)
             throw FetchError(K::Limit, "zk.fetch(\"" + first + "\"): the response is over 10 MB", "responseSize");
         if (resp.curlCode == 28 /* CURLE_OPERATION_TIMEDOUT */ || (resp.curlCode != 0 && Clock::now() >= deadline))
@@ -244,7 +315,7 @@ HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeo
         }
         if (redirects == kFetchMaxRedirects)
             throw FetchError(K::Refused, "zk.fetch(\"" + first + "\"): more than " + std::to_string(kFetchMaxRedirects) + " redirects");
-        Url next = check(m, resolve(u, loc->second), loc->second, &u, webdav_);
+        Url next = check(m, resolve(u, loc->second), loc->second, &u, webdav_, anyOnly);
         // As browsers do: 303 (and 301/302 after a POST) turn into a GET without the body.
         if ((resp.status == 303 && method != "HEAD") || ((resp.status == 301 || resp.status == 302) && method == "POST")) {
             if (method != "HEAD") method = "GET";
@@ -258,20 +329,73 @@ HttpResponse PluginHttp::send(const PluginManifest& m, HttpRequest in, int timeo
 
 // ---- The workers ----------------------------------------------------------------------------------
 
-PluginNet::PluginNet(std::function<std::unique_ptr<Http>()> makeHttp, std::string webdavHost, int maxWorkers, int perPlugin)
+PluginNet::PluginNet(std::function<std::unique_ptr<Http>()> makeHttp, std::function<std::string()> webdavHost, int maxWorkers,
+                     int perPlugin)
     : makeHttp_(std::move(makeHttp)), webdav_(std::move(webdavHost)), maxWorkers_(maxWorkers), perPlugin_(perPlugin) {}
 
 PluginNet::~PluginNet() { shutdown(); }
 
-void PluginNet::submit(Job job) {
+void PluginNet::release(const std::string& id, size_t bytes) {
+    auto it = pending_.find(id);
+    if (it == pending_.end()) return;
+    it->second.jobs -= 1;
+    it->second.bytes -= std::min(bytes, it->second.bytes);
+    if (it->second.jobs <= 0) pending_.erase(it);
+}
+
+void PluginNet::sweepLocked() {
+    for (auto it = queue_.begin(); it != queue_.end();) {
+        if (*it->job.request.cancel) {
+            release(it->job.pluginId, it->job.request.body.size());
+            it = queue_.erase(it);  // and its body with it
+        } else {
+            ++it;
+        }
+    }
+}
+
+void PluginNet::sweep() {
     std::lock_guard<std::mutex> lock(mu_);
-    if (stopping_) return;
+    sweepLocked();
+    cv_.notify_all();
+}
+
+PluginNet::Pending PluginNet::pending(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = pending_.find(id);
+    return it == pending_.end() ? Pending{} : it->second;
+}
+
+std::optional<FetchError> PluginNet::submit(Job job) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (stopping_) return FetchError(FetchError::Kind::Network, "zk.fetch: the app is closing");
+    sweepLocked();
+    Pending& mine = pending_[job.pluginId];
+    const size_t bytes = job.request.body.size();
+    std::optional<FetchError> refused;
+    if (mine.jobs >= kFetchMaxPending)
+        refused = FetchError(FetchError::Kind::Limit,
+                             "zk.fetch: this plugin already has " + std::to_string(kFetchMaxPending) +
+                                 " fetches under way; await some before starting more",
+                             "fetches");
+    else if (mine.bytes + bytes > kFetchMaxPendingBytes)
+        refused = FetchError(FetchError::Kind::Limit,
+                             "zk.fetch: the request bodies of this plugin's fetches under way would pass 20 MB; await some "
+                             "before starting more",
+                             "fetches");
+    if (refused) {
+        if (mine.jobs == 0) pending_.erase(job.pluginId);
+        return refused;
+    }
+    mine.jobs += 1;
+    mine.bytes += bytes;
     if (!job.request.cancel) job.request.cancel = std::make_shared<std::atomic<bool>>(false);
     queue_.push_back({std::move(job), Clock::now()});
     // A thread for every job no waiting worker can take (bounded): a busy worker is never waited for.
     if (static_cast<int>(queue_.size()) > idle_ && static_cast<int>(threads_.size()) < maxWorkers_)
         threads_.emplace_back([this] { work(); });
     cv_.notify_all();
+    return std::nullopt;
 }
 
 bool PluginNet::pickable() const {
@@ -292,15 +416,18 @@ void PluginNet::work() {
         cv_.wait(lock, [&] { return stopping_ || pickable(); });
         --idle_;
         if (stopping_) return;
+        sweepLocked();
         auto it = std::find_if(queue_.begin(), queue_.end(), [&](const Queued& q) {
             auto a = active_.find(q.job.pluginId);
-            return *q.job.request.cancel || a == active_.end() || a->second < perPlugin_;
+            return a == active_.end() || a->second < perPlugin_;
         });
+        if (it == queue_.end()) continue;
         Queued q = std::move(*it);
         queue_.erase(it);
+        const std::string id = q.job.pluginId;
+        const size_t bytes = q.job.request.body.size();
         auto cancel = q.job.request.cancel;
-        if (*cancel) continue;  // its call was stopped while it waited: its promise has rejected already
-        ++active_[q.job.pluginId];
+        ++active_[id];
         running_.insert(cancel);
         lock.unlock();
 
@@ -309,23 +436,28 @@ void PluginNet::work() {
             if (!http) {
                 http = makeHttp_();
                 if (!http) throw std::runtime_error("the network isn't available");
-                guard = std::make_unique<PluginHttp>(*http, webdav_);
+                guard = std::make_unique<PluginHttp>(*http, "");
             }
+            guard->setWebdavHost(webdav_ ? webdav_() : std::string());  // as configured now
             result.response = guard->send(q.job.manifest, std::move(q.job.request), q.job.timeoutMs, q.started);
         } catch (const FetchError& e) {
             result.error = e;
         } catch (const std::exception& e) {
             result.error = FetchError(FetchError::Kind::Network, std::string("zk.fetch failed: ") + e.what());
         }
+
+        lock.lock();
+        if (--active_[id] <= 0) active_.erase(id);
+        running_.erase(cancel);
+        release(id, bytes);  // before `done`: the plugin's next fetch, started from its settle, has room
+        cv_.notify_all();
+        lock.unlock();
         try {
             if (!*cancel) q.job.done(std::move(result));
         } catch (...) {  // nothing to tell; the promise is settled by its call's end
         }
-
+        q = Queued{};  // the response and body go now, not at the next job
         lock.lock();
-        if (--active_[q.job.pluginId] <= 0) active_.erase(q.job.pluginId);
-        running_.erase(cancel);
-        cv_.notify_all();
     }
 }
 
@@ -336,6 +468,7 @@ void PluginNet::shutdown() {
         stopping_ = true;
         for (const auto& c : running_) *c = true;  // aborts the transfers (curl checks it while it waits)
         queue_.clear();
+        pending_.clear();
         threads.swap(threads_);
     }
     cv_.notify_all();

@@ -31,7 +31,7 @@ struct PluginHostDeps {
     std::string crashMarker;
     Version appVersion;
     std::function<std::unique_ptr<Http>()> makeHttp;
-    std::string webdavHost;
+    std::string webdavHost;  // the configured WebDAV server (host or URL); later: setWebdavHost
     std::function<int64_t()> clock;  // wall clock, ms since the epoch (log times); default: system
     size_t memoryPerPlugin = 32 << 20;
     // What all plugins together may use (actual use, shared): an allocation that would pass it
@@ -95,6 +95,9 @@ public:
     std::vector<PluginStatus> status() const;
     // Turning a plugin on clears its failures; turning it off unloads it.
     void setEnabled(const std::string& id, bool);
+    // The WebDAV server changed (host or URL; "" for none): zk.fetch refuses the new one from the
+    // next request on. Any thread.
+    void setWebdavHost(std::string);
 
     // Blocks until no command is queued and no call is running or awaiting (timers may be
     // pending), or `timeoutMs` passes. True if idle. For tests and the background keep-awake hold.
