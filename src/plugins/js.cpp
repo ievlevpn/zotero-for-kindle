@@ -109,7 +109,7 @@ void Runtime::setDeadline(int64_t epochMs) {
 
 int Runtime::interrupt(JSContext*, void* self) {
     auto* r = static_cast<Runtime*>(self);
-    if (r->deadline_ != 0 && nowMs() > r->deadline_) {
+    if (r->abort_.load(std::memory_order_relaxed) || (r->deadline_ != 0 && nowMs() > r->deadline_)) {
         r->hit_ = true;
         return 1;
     }
@@ -213,6 +213,9 @@ void Context::recordException() {
         JSValue msg = JS_GetPropertyStr(cx_, ex, "message");
         e.message = JS_IsUndefined(msg) ? toStd(cx_, ex) : toStd(cx_, msg);
         JS_FreeValue(cx_, msg);
+        JSValue nm = JS_GetPropertyStr(cx_, ex, "name");
+        if (JS_IsString(nm)) e.name = toStd(cx_, nm);
+        JS_FreeValue(cx_, nm);
         JSValue st = JS_GetPropertyStr(cx_, ex, "stack");
         if (!JS_IsUndefined(st)) e.stack = toStd(cx_, st);
         JS_FreeValue(cx_, st);

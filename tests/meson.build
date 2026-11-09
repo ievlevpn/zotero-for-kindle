@@ -88,6 +88,7 @@ test_sources = files(
   'test_review_fixes4.cpp',
   'test_js.cpp',
   'test_plugin_manifest.cpp',
+  'test_plugin_host.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 

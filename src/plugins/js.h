@@ -4,6 +4,7 @@
 // and a wall-clock deadline, contexts that evaluate ES modules, and RAII values.
 // Destruction order: Values, then their Context, then the Runtime.
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -18,6 +19,7 @@ namespace zk::js {
 
 struct JsError {
     std::string message, stack;
+    std::string name;  // "TypeError", … ("" when what was thrown isn't an object)
     // Wording only: "stopped by a resource limit" rather than "threw". The host counts both kinds
     // of failure alike, so a wrong value here changes the message shown, never what is enforced.
     //  - Reliable (observed events): the deadline interrupt (uncatchable) and a refused allocation
@@ -58,6 +60,10 @@ public:
     // differ from the one that created the runtime; the Context does this before each operation.
     void anchorStack() { JS_UpdateStackTop(rt_); }
 
+    // Any thread: stops the running script (and every later one) as if its deadline had passed.
+    // For shutting down; there is no way back.
+    void interruptNow() { abort_.store(true); }
+
 private:
     static int interrupt(JSContext*, void* self);
     static void* allocate(void* self, size_t size);
@@ -70,6 +76,7 @@ private:
     size_t used_ = 0;
     int64_t deadline_ = 0;
     bool hit_ = false;  // the deadline interrupted a script
+    std::atomic<bool> abort_{false};
     bool oom_ = false;  // an allocation was refused by the memory limit
 };
 
