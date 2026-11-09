@@ -189,6 +189,11 @@ void clearTimer(PluginCtx&, uint64_t id);
 // zk.on / zk.background registrations.
 void addHandler(PluginCtx&, const std::string& event, js::Value handler);
 void setBackgroundTask(PluginCtx&, js::Value task);
+// Entry points (bindings_entry.cpp). The host keeps the function referenced for part 2 and lists
+// (kind, id, title) in PluginStatus::entries. kind: "selectionAction", "itemAction", "screen".
+bool hasEntry(PluginCtx&, const std::string& kind, const std::string& id);
+void addEntry(PluginCtx&, const std::string& kind, const std::string& id, const std::string& title, js::Value run);
+
 // The error just made for a lost connection: remembered by identity, so a background task that
 // lets exactly it escape isn't held to account (a copy, a new error or a forged flag is).
 void noteNetworkError(PluginCtx&, js::Value error);
@@ -211,6 +216,9 @@ void installFetch(PluginCtx&);
 void installLibrary(PluginCtx&);
 // zk.zotero (bindings_zotero.cpp). Throws std::runtime_error on an internal error.
 void installZotero(PluginCtx&);
+// zk.selectionAction, zk.itemAction, zk.screen (bindings_entry.cpp): checked and recorded for part 2.
+// Throws std::runtime_error on an internal error.
+void installEntry(PluginCtx&);
 // Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
 // are dropped and its storage closed (it reopens, empty, at the next use).
 void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);

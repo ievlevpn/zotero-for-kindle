@@ -66,11 +66,18 @@ struct PluginHostEvent {
     std::string action;
 };
 
+// What a plugin registered with zk.selectionAction / zk.itemAction / zk.screen (shown in part 2).
+// kind: "selectionAction", "itemAction" or "screen"; title is "" for a screen.
+struct PluginEntry {
+    std::string kind, id, title;
+};
+
 struct PluginStatus {
     PluginFolder folder;
     bool enabled = false, loaded = false;
     std::string badge;
     std::vector<std::string> errors;  // newest last: past failures, then a current problem
+    std::vector<PluginEntry> entries;  // registered by the loaded plugin, in order; empty when not loaded
 };
 
 class PluginHost {

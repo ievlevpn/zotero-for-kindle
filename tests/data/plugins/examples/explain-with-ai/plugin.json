@@ -1,0 +1,11 @@
+{
+  "id": "explain-with-ai",
+  "name": "Explain with AI",
+  "version": "0.1.0",
+  "api": 0,
+  "minApp": "0.3.0",
+  "author": "Zotero for Kindle",
+  "description": "Select a passage and choose Explain: Claude explains it in the context of the book. Sends the passage and the book's title to Anthropic.",
+  "main": "main.js",
+  "permissions": ["net:api.anthropic.com"]
+}

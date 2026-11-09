@@ -131,6 +131,11 @@ struct PluginRun {
     uint64_t current = 0;            // the call whose entry is running
     std::map<std::string, std::vector<js::Value>> handlers;
     js::Value background;
+    struct Entry {
+        PluginEntry info;
+        js::Value fn;  // run / render, kept for part 2
+    };
+    std::vector<Entry> entries;
     std::map<uint64_t, Timer> timers;
     std::map<uint64_t, PendingWork> work;
     std::vector<Doomed> doomed;
@@ -245,6 +250,7 @@ struct PluginHost::Impl {
     bool backgroundOpen = false;       // a runBackground() whose tasks haven't all ended: BackgroundDone is due
     uint64_t backgroundRound = 0;      // the round that Done reports (the latest asked for)
     std::map<std::string, int> uncounted;  // consecutive background runs not counted for a lost connection
+    std::map<std::string, std::vector<PluginEntry>> entryList;  // loaded plugins' entry points (under mu)
     std::set<std::string> withTask;    // loaded plugins that registered a background task (under mu)
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
     std::string markerId;  // what the crash marker says now ("" = no marker)
@@ -303,6 +309,7 @@ struct PluginHost::Impl {
 
     void setLoaded(const std::string& id, bool on) {
         std::lock_guard<std::mutex> lock(mu);
+        entryList.erase(id);  // a fresh load registers again
         if (on) loadedIds.insert(id);
         else {
             loadedIds.erase(id);
@@ -481,6 +488,7 @@ struct PluginHost::Impl {
             installFetch(p);
             installLibrary(p);
             installZotero(p);
+            installEntry(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -1173,6 +1181,19 @@ void noteNetworkError(PluginCtx& p, js::Value error) {
     if (list.size() > 8) list.erase(list.begin());
 }
 
+bool hasEntry(PluginCtx& p, const std::string& kind, const std::string& id) {
+    for (const auto& e : p.run->entries)
+        if (e.info.kind == kind && e.info.id == id) return true;
+    return false;
+}
+
+void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, const std::string& title, js::Value fn) {
+    PluginEntry info{kind, id, title};
+    p.run->entries.push_back({info, std::move(fn)});
+    std::lock_guard<std::mutex> lock(p.host.mu);
+    p.host.entryList[p.manifest.id].push_back(std::move(info));
+}
+
 void setBackgroundTask(PluginCtx& p, js::Value task) {
     p.run->background = std::move(task);
     std::lock_guard<std::mutex> lock(p.host.mu);
@@ -1282,6 +1303,7 @@ std::vector<PluginStatus> PluginHost::status() const {
         s.enabled = h.state.enabled(f.dir);
         s.loaded = h.loadedIds.count(f.dir) > 0;
         s.badge = h.state.badge(f.dir);
+        if (auto e = h.entryList.find(f.dir); e != h.entryList.end() && s.loaded) s.entries = e->second;
         s.errors = h.state.lastErrors(f.dir);
         if (auto p = h.problems.find(f.dir); p != h.problems.end()) s.errors.push_back(p->second);
         out.push_back(std::move(s));
