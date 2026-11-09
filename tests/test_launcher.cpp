@@ -237,3 +237,14 @@ TEST_CASE("launcher fix: an unreadable state with a backup rolls back") {
     CHECK(k.file("zotero/bin/zotero") == app("0.2.0", 0));
     CHECK_FALSE(fs::exists(k.home / "update/state"));
 }
+
+TEST_CASE("launcher: Zotero-no-plugins.sh sets ZK_NO_PLUGINS=1 and runs the launcher it is told to") {
+    char tmpl[] = "/tmp/zk-noplug-XXXXXX";
+    const fs::path root = mkdtemp(tmpl);
+    writeFile(root / "Zotero.sh", "#!/bin/sh\necho \"$ZK_NO_PLUGINS $*\" > \"" + (root / "seen").string() + "\"\n", true);
+    const std::string cmd = "ZK_LAUNCHER=" + (root / "Zotero.sh").string() + " sh assets/launcher/Zotero-no-plugins.sh a b";
+    REQUIRE(std::system(cmd.c_str()) == 0);
+    CHECK(readFile(root / "seen") == "1 a b\n");
+    CHECK(readFile("assets/launcher/Zotero-no-plugins.sh").find("# Name: Zotero (no plugins)") != std::string::npos);
+    fs::remove_all(root);
+}

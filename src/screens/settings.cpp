@@ -41,9 +41,10 @@ std::string mb(int64_t bytes) {
 
 SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount, Updater* updater,
                                std::function<void(Nav&)> openUpdate,
-                               std::function<std::optional<std::string>()> pendingUpdate, PluginHostFn plugins)
+                               std::function<std::optional<std::string>()> pendingUpdate, PluginHostFn plugins, PluginsOff pluginsOff)
     : config_(std::move(c)), changeAccount_(std::move(changeAccount)), updater_(updater),
-      openUpdate_(std::move(openUpdate)), pendingUpdate_(std::move(pendingUpdate)), plugins_(std::move(plugins)) {}
+      openUpdate_(std::move(openUpdate)), pendingUpdate_(std::move(pendingUpdate)), plugins_(std::move(plugins)),
+      pluginsOff_(std::move(pluginsOff)) {}
 
 // The band between the rules above and below (no buttons in it: the whole row opens the list).
 Rect SettingsScreen::pluginsRect() const {
@@ -197,7 +198,7 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (pluginsRect().contains(g.pos)) {
-        if (plugins_ && plugins_()) nav.push(std::make_unique<PluginsScreen>(plugins_));
+        if (plugins_ && plugins_()) nav.push(std::make_unique<PluginsScreen>(plugins_, pluginsOff_));
         return;
     }
     for (int i = 0; i < 4; ++i)

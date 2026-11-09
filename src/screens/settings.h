@@ -21,7 +21,8 @@ public:
     // current plugin host, for the Plugins row.
     SettingsScreen(Config, std::function<void(Nav&)> changeAccount, Updater* updater = nullptr,
                    std::function<void(Nav&)> openUpdate = nullptr,
-                   std::function<std::optional<std::string>()> pendingUpdate = nullptr, PluginHostFn plugins = nullptr);
+                   std::function<std::optional<std::string>()> pendingUpdate = nullptr, PluginHostFn plugins = nullptr,
+                   PluginsOff pluginsOff = {});
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
@@ -50,6 +51,7 @@ private:
     std::function<void(Nav&)> openUpdate_;
     std::function<std::optional<std::string>()> pendingUpdate_;
     PluginHostFn plugins_;
+    PluginsOff pluginsOff_;  // why plugins aren't running, shown in Settings → Plugins
     bool checking_ = false;
     std::string updateResult_;
     int interval_ = 10;

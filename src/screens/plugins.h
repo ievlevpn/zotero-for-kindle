@@ -26,9 +26,16 @@ bool pluginNeedsAttention(const PluginStatus&);
 // The Settings row: "3 on · 1 needs attention", "None installed", "Not available" (no host).
 std::string pluginsSummary(PluginHost*);
 
+// Why plugins aren't running this time ("" when they are), and a call when the list is shown (the
+// Home notice of an automatic safe mode goes once the user has seen it).
+struct PluginsOff {
+    std::string reason;
+    std::function<void()> seen;
+};
+
 class PluginsScreen final : public Screen {
 public:
-    explicit PluginsScreen(PluginHostFn);
+    explicit PluginsScreen(PluginHostFn, PluginsOff off = {});
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onShow(Nav&) override;
@@ -44,9 +51,11 @@ public:
 private:
     void load();
     int perPage() const;
+    int top() const;  // the first row's y: below the "Plugins are off" line when there is one
     const PluginStatus* at(int row) const;
 
     PluginHostFn host_;
+    PluginsOff off_;
     std::vector<PluginStatus> plugins_;
     Pager pager_{0, 1};
 };

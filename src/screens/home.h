@@ -21,6 +21,10 @@ struct HomeActions {
     std::function<std::optional<std::string>()> updateNotice;
     std::function<void()> openUpdate;
     std::function<void()> dismissUpdate;  // ×
+    // Safe mode, the automatic case: plugins were turned off because the app stopped. True until
+    // the user opens Settings → Plugins (here or by hand). A tap on the notice calls openPlugins.
+    std::function<bool()> safeModeNotice;
+    std::function<void()> openPlugins;
 };
 
 class HomeScreen final : public Screen {
@@ -39,7 +43,10 @@ public:
     static Rect searchFieldRect();
     static Rect cardRect();
     std::vector<Rect> recentRowRects() const;
-    // The update banner: in the error banner's place when there's no error.
+    // The safe-mode notice: in the error banner's place when there's no error, before the update banner.
+    std::optional<std::string> safeModeBannerText() const;
+    Rect safeModeBannerRect() const;
+    // The update banner: in the error banner's place when there's no error (and no safe-mode notice).
     std::optional<std::string> updateBannerText() const;
     Rect updateBannerRect() const;
     Rect updateDismissRect() const;
@@ -49,7 +56,9 @@ public:
 private:
     void reload(Library&);
     Rect bannerRect() const;
-    bool bannerShown() const { return status_.hasError() || updateBannerText().has_value(); }
+    bool bannerShown() const {
+        return status_.hasError() || safeModeBannerText().has_value() || updateBannerText().has_value();
+    }
     std::string cardMeta() const;
 
     SyncStatus& status_;
@@ -64,6 +73,7 @@ private:
     std::optional<ItemSheet> sheet_;  // long-press on the card or a Recent row
     Rect sheetArea() const;
     int64_t total_ = 0;
+    bool safe_ = false;                  // the safe-mode notice is wanted
     std::optional<std::string> update_;  // the version the banner names
 };
 

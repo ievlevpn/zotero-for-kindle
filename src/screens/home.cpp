@@ -58,8 +58,15 @@ Rect HomeScreen::cardRect() { return {kMargin, kCardY, W() - 2 * kMargin, kCover
 
 Rect HomeScreen::bannerRect() const { return {0, H() - kTabBarH - kBannerH, W(), kBannerH}; }
 
+std::optional<std::string> HomeScreen::safeModeBannerText() const {
+    if (!safe_ || status_.hasError()) return std::nullopt;
+    return "Plugins were turned off because the app stopped. Settings → Plugins";
+}
+
+Rect HomeScreen::safeModeBannerRect() const { return safeModeBannerText() ? bannerRect() : Rect{}; }
+
 std::optional<std::string> HomeScreen::updateBannerText() const {
-    if (!update_ || status_.hasError()) return std::nullopt;
+    if (!update_ || status_.hasError() || safe_) return std::nullopt;
     return "Version " + *update_ + " is available";
 }
 
@@ -122,15 +129,17 @@ void HomeScreen::reload(Library& lib) {
 void HomeScreen::onShow(Nav& nav) {
     nowMs_ = nav.nowMs();
     update_ = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
+    safe_ = actions_.safeModeNotice && actions_.safeModeNotice();
     reload(nav.library());
     if (!status_.syncing() && (status_.hasError() || status_.msSinceSync(nav.nowMs()) > kResyncAfterMs)) nav.sync().syncNow();
 }
 
 void HomeScreen::onTick(Nav& nav) {
-    if (!actions_.updateNotice) return;
-    auto now = actions_.updateNotice();
-    if (now == update_) return;
+    auto now = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
+    const bool safe = actions_.safeModeNotice && actions_.safeModeNotice();
+    if (now == update_ && safe == safe_) return;
     update_ = std::move(now);
+    safe_ = safe;
     nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Ui);  // the banner and the rows above it
 }
 
@@ -211,6 +220,11 @@ void HomeScreen::draw(Canvas& canvas) {
     }
     if (status_.hasError()) {
         drawBanner(cr, bannerRect(), status_.error());
+    } else if (const auto notice = safeModeBannerText()) {
+        const Rect b = bannerRect();
+        fillRect(cr, b, 235);
+        fillRect(cr, {b.x, b.y, 8, b.h}, kInk);
+        drawText(cr, *notice, {kSans, 7.5, 500}, {b.x + kMargin, b.y + 44, b.w - 2 * kMargin, 64}, 1);
     } else if (const auto text = updateBannerText()) {
         const Rect b = bannerRect(), x = updateDismissRect();
         fillRect(cr, b, 235);
@@ -269,6 +283,10 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (safeModeBannerRect().contains(g.pos)) {
+        if (actions_.openPlugins) actions_.openPlugins();
+        return;
+    }
     if (updateBannerRect().contains(g.pos)) {
         if (updateDismissRect().contains(g.pos)) {
             if (actions_.dismissUpdate) actions_.dismissUpdate();

@@ -56,6 +56,8 @@
 #include "update/release_key.h"
 #include "platform/scaled_display.h"
 #include "plugins/host.h"
+#include "plugins/safe_mode.h"
+#include "screens/plugins.h"
 #include "update/update_notice.h"
 #include "update/updater.h"
 
@@ -75,6 +77,11 @@ const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", readingFontDirs(), "
 const char* kCaBundle = "";
 const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", readingFontDirs(), "local/cache/cre"};
 #endif
+
+bool envFlag(const char* name) {
+    const char* v = std::getenv(name);
+    return v && std::string(v) == "1";
+}
 
 // The plugin host's settings for this run. Seams for later: --plugins-dir (Task 19) picks the
 // folder, safe mode (Task 18) decides whether start() is called at all.
@@ -313,13 +320,19 @@ int main(int argc, char** argv) {
     // drawn and stopped before the app exits. Its events are routed every loop iteration.
     // An update's install stops it (the library is backed up meanwhile); a host can't start again,
     // so a failed install makes a new one.
+    // Safe mode (plugins/safe_mode.h): decided before the host reads its state. Off: the host still
+    // scans (Settings → Plugins lists what is installed) but never starts, so no plugin code runs.
+    const SafeModeDecision safeMode = decideSafeMode(paths.pluginsDir, envFlag("ZK_NO_PLUGINS"));
+    const bool pluginsOff = safeMode.pluginsOff;
+    if (pluginsOff)
+        log(LogLevel::Warn, "plugins: off (%s)", safeMode.automatic ? "the app stopped twice" : "OFF file or launcher");
     auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
     PluginEvents pluginEvents(plugins.get());
     // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
     // for JavaScript). Not while the host is stopped for an update's install.
     bool pluginsRunning = true;
     FnPluginSink pluginSink([&](PluginEvent e) {
-        if (plugins && pluginsRunning) plugins->dispatch(std::move(e));
+        if (plugins && pluginsRunning && !pluginsOff) plugins->dispatch(std::move(e));
     });
     app.setPluginSink(pluginSink);
     // After a successful sync, plugins' background tasks run (the host allows each one once an
@@ -327,18 +340,26 @@ int main(int argc, char** argv) {
     BackgroundRound backgroundRound(
         keepAwake,
         [&](uint64_t round) {
-            if (plugins && pluginsRunning) plugins->runBackground(round);
+            if (plugins && pluginsRunning && !pluginsOff) plugins->runBackground(round);
             else backgroundRound.done(round);
         },
         [&] {
-            if (plugins && pluginsRunning) plugins->cancelBackground();
+            if (plugins && pluginsRunning && !pluginsOff) plugins->cancelBackground();
         },
         [&] {  // not while the app knows it is offline; not when no plugin has a task due
             if (status.hasError() && status.error().kind == ErrorKind::NoWifi) return false;
-            return plugins && pluginsRunning && plugins->backgroundDue();
+            return plugins && pluginsRunning && !pluginsOff && plugins->backgroundDue();
         });
     pluginEvents.onBackgroundDone([&](uint64_t round) { backgroundRound.done(round); });
+    // The start counts as good after 60 s of running (not at the first screen: plugins start after
+    // it); a clean exit counts too. Until then a crash leaves the count for the next start.
+    bool startConfirmed = pluginsOff;
+    const int64_t startedMs = app.nowMs();
     app.setPollHook([&] {
+        if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {
+            startConfirmed = true;
+            confirmSafeModeStart(paths.pluginsDir);
+        }
         pluginEvents.poll(app);
         backgroundRound.tick(app.nowMs());
     });
@@ -401,7 +422,7 @@ int main(int argc, char** argv) {
                 plugins.reset();
                 plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
                 pluginEvents.rebind(plugins.get(), app);
-                plugins->start();
+                if (!pluginsOff) plugins->start();
                 pluginsRunning = true;
             }));
     };
@@ -409,14 +430,23 @@ int main(int argc, char** argv) {
         const auto v = updateNotice.pending(lib);
         return v ? std::optional<std::string>(v->str()) : std::nullopt;
     };
-    auto openSettings = [&] {
-        app.push(std::make_unique<SettingsScreen>(
+    // The automatic case's Home notice stays until the user has seen Settings → Plugins.
+    bool safeNotice = safeMode.automatic;
+    std::string pluginsOffReason;
+    if (pluginsOff)
+        pluginsOffReason = safeMode.automatic ? "Plugins are off: the app stopped while they were running. Turn on the ones you trust."
+                           : envFlag("ZK_NO_PLUGINS") ? "Plugins are off: started with Zotero (no plugins)"
+                                                      : "Plugins are off: the OFF file is in the plugins folder";
+    const PluginsOff pluginsOffInfo{pluginsOffReason, [&safeNotice] { safeNotice = false; }};
+    auto makeSettings = [&]() -> std::unique_ptr<Screen> {
+        return std::make_unique<SettingsScreen>(
             *config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }, &updater, pushUpdateScreen,
             pendingUpdate,
             // Settings → Plugins: the host of the moment (none while an update installs; a failed
             // install makes a new one, so the screens ask each time instead of keeping a pointer).
-            [&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; }));
+            [&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; }, pluginsOffInfo);
     };
+    auto openSettings = [&] { app.push(makeSettings()); };
     auto makeHome = [&]() {
         HomeActions home;
         home.openSearch = [&app, &flow, openItem] { app.push(std::make_unique<SearchScreen>(openItem, flow.statusFn())); };
@@ -434,6 +464,12 @@ int main(int argc, char** argv) {
             updater.reset();
             updater.check();
             openSettings();
+        };
+        home.safeModeNotice = [&safeNotice] { return safeNotice; };
+        home.openPlugins = [&] {
+            app.push(makeSettings());
+            app.push(std::make_unique<PluginsScreen>([&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; },
+                                                     pluginsOffInfo));
         };
         home.dismissUpdate = [&] { updateNotice.dismiss(lib); };
         home.openItem = openItem;
@@ -485,7 +521,7 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
-    plugins->start();  // after the first screen: plugins load lazily, at the first event
+    if (!pluginsOff) plugins->start();  // after the first screen: plugins load lazily, at the first event
     switch (const Confirmed c = confirmStartup(installPaths); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;
         case StartupNote::RolledBack:
@@ -505,6 +541,7 @@ int main(int argc, char** argv) {
             if (auto att = lib.attachment(argv[i + 1]))
                 if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey)) flow.open(*row, app);
     const int rc = app.run();
+    if (!pluginsOff) confirmSafeModeStart(paths.pluginsDir);  // a clean end is a good start, however short
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     watchdog.beat("stopping plugins");

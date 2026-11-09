@@ -210,7 +210,8 @@ namespace {
 
 struct UpdateRig : Rig {
     std::optional<std::string> notice;
-    int updatesOpened = 0, dismissed = 0;
+    int updatesOpened = 0, dismissed = 0, pluginsOpened = 0;
+    bool safeNotice = false;
     std::unique_ptr<HomeScreen> home;  // hides Rig's: built with the update actions
     UpdateRig() : Rig(40) {}
     void wire() {
@@ -218,6 +219,11 @@ struct UpdateRig : Rig {
                       [this](const ItemRow& r) { opened.push_back(r.key); }, nullptr};
         a.updateNotice = [this] { return notice; };
         a.openUpdate = [this] { ++updatesOpened; };
+        a.safeModeNotice = [this] { return safeNotice; };
+        a.openPlugins = [this] {
+            ++pluginsOpened;
+            safeNotice = false;
+        };
         a.dismissUpdate = [this] {
             ++dismissed;
             notice.reset();
@@ -292,4 +298,47 @@ TEST_CASE("home: the update banner matches the reviewed golden") {
     rig.home->onShow(rig.nav);
     rig.home->draw(rig.canvas);
     test::checkGolden(rig.canvas, "tests/golden/home-update.png");
+}
+
+TEST_CASE("home: the automatic case shows \"Plugins were turned off because the app stopped. Settings → Plugins\"") {
+    UpdateRig rig;
+    rig.safeNotice = true;
+    rig.notice = "0.2.5";  // the notice comes before the update banner
+    rig.wire();
+    REQUIRE(rig.home->safeModeBannerText());
+    CHECK(*rig.home->safeModeBannerText() == "Plugins were turned off because the app stopped. Settings → Plugins");
+    CHECK_FALSE(rig.home->updateBannerText());
+
+    // A tap opens Settings → Plugins; once seen, the notice goes (the update banner is back).
+    rig.home->onGesture(tapAt(rig.home->safeModeBannerRect().center()), rig.nav);
+    CHECK(rig.pluginsOpened == 1);
+    CHECK(rig.updatesOpened == 0);
+    rig.home->onShow(rig.nav);
+    CHECK_FALSE(rig.home->safeModeBannerText());
+    CHECK(rig.home->updateBannerText());
+}
+
+TEST_CASE("home: no safe-mode notice unless asked, and a sync error takes its place") {
+    UpdateRig rig;
+    rig.wire();
+    CHECK_FALSE(rig.home->safeModeBannerText());
+    rig.safeNotice = true;
+    rig.home->onTick(rig.nav);  // appears without a tap
+    CHECK(rig.home->safeModeBannerText());
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::SyncFinished;
+    e.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", "curl 6: x"};
+    rig.status.onEvent(e, 1000);
+    CHECK_FALSE(rig.home->safeModeBannerText());
+}
+
+TEST_CASE("home: the safe-mode notice matches the reviewed golden") {
+    if (!fonts()) return;
+    UpdateRig rig;
+    rig.safeNotice = true;
+    rig.wire();
+    rig.lib.markOpened("IT000006", "EP000006", kNowWall - 26 * 3600 * 1000LL);
+    rig.home->onShow(rig.nav);
+    rig.home->draw(rig.canvas);
+    test::checkGolden(rig.canvas, "tests/golden/home-safe-mode.png");
 }

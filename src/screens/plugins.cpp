@@ -21,6 +21,7 @@ int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kListRowH = 160;
 constexpr int kTop = kHeaderH + 10;
+constexpr int kOffLineH = 120;  // "Plugins are off: …" above the list
 
 std::string folded(const std::string& s) {
     gchar* f = g_utf8_casefold(s.c_str(), -1);
@@ -74,9 +75,11 @@ std::string pluginsSummary(PluginHost* host) {
     return out;
 }
 
-PluginsScreen::PluginsScreen(PluginHostFn host) : host_(std::move(host)) {}
+PluginsScreen::PluginsScreen(PluginHostFn host, PluginsOff off) : host_(std::move(host)), off_(std::move(off)) {}
 
-int PluginsScreen::perPage() const { return std::max(1, (H() - kTop - kPageIndicatorH) / kListRowH); }
+int PluginsScreen::top() const { return kTop + (off_.reason.empty() ? 0 : kOffLineH); }
+
+int PluginsScreen::perPage() const { return std::max(1, (H() - top() - kPageIndicatorH) / kListRowH); }
 
 void PluginsScreen::load() {
     PluginHost* h = host_ ? host_() : nullptr;
@@ -90,7 +93,10 @@ void PluginsScreen::load() {
     }
 }
 
-void PluginsScreen::onShow(Nav&) { load(); }
+void PluginsScreen::onShow(Nav&) {
+    load();
+    if (off_.seen) off_.seen();
+}
 
 const PluginStatus* PluginsScreen::at(int row) const {
     const int64_t i = pager_.offset() + row;
@@ -100,14 +106,14 @@ const PluginStatus* PluginsScreen::at(int row) const {
 
 std::vector<Rect> PluginsScreen::rowRects() const {
     std::vector<Rect> out;
-    for (int i = 0; i < perPage() && at(i); ++i) out.push_back({kMargin, kTop + i * kListRowH, W() - 2 * kMargin, kListRowH});
+    for (int i = 0; i < perPage() && at(i); ++i) out.push_back({kMargin, top() + i * kListRowH, W() - 2 * kMargin, kListRowH});
     return out;
 }
 
 Rect PluginsScreen::toggleRect(int row) const {
     const PluginStatus* s = at(row);
     if (!s || !canTurnOn(*s)) return {};
-    const Rect r{kMargin, kTop + row * kListRowH, W() - 2 * kMargin, kListRowH};
+    const Rect r{kMargin, top() + row * kListRowH, W() - 2 * kMargin, kListRowH};
     return {r.x + r.w - 140, r.y + (r.h - 80) / 2, 140, 80};
 }
 
@@ -131,14 +137,18 @@ void PluginsScreen::draw(Canvas& canvas) {
     const TextStyle name{kSans, 9.5, 500}, version{kSans, 7, 400, false, kTertiary}, quiet{kSans, 7, 400, false, kSecondary},
         loud{kSans, 7, 500};
     const int w = W() - 2 * kMargin;
+    if (!off_.reason.empty()) {
+        drawText(cr, off_.reason, loud, {kMargin, kTop + 14, w, kOffLineH - 20}, 2);
+        hRule(cr, kTop + kOffLineH - 4, kMargin, W() - kMargin);
+    }
     if (!host_ || !host_()) {
-        drawText(cr, "Plugins aren't available right now.", quiet, {kMargin, kTop + 20, w, 120}, 2);
+        drawText(cr, "Plugins aren't available right now.", quiet, {kMargin, top() + 20, w, 120}, 2);
         return;
     }
     if (plugins_.empty()) {
         drawText(cr, "No plugins installed. To add one, connect the Kindle by USB and copy the plugin's folder into "
                      "zotero/plugins.",
-                 quiet, {kMargin, kTop + 20, w, 160}, 3);
+                 quiet, {kMargin, top() + 20, w, 160}, 3);
         return;
     }
     const auto rows = rowRects();

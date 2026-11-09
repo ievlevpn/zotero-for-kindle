@@ -18,7 +18,7 @@ Connect the Kindle by USB.
   first if they're running.
 
 Copy both folders into the top level of the Kindle, next to its existing `documents` folder.
-When asked, **merge** them: don't replace the Kindle's `documents` folder, only add `Zotero.sh` to it.
+When asked, **merge** them: don't replace the Kindle's `documents` folder, only add `Zotero.sh` and `Zotero-no-plugins.sh` to it.
 
 You end up with:
 
@@ -26,6 +26,7 @@ You end up with:
       zotero/            the app
       documents/
         Zotero.sh        its launcher (other books stay as they were)
+        Zotero-no-plugins.sh   the same with every plugin off, in case a plugin gets in the way
 
 Eject the Kindle and unplug it.
 
@@ -71,7 +72,7 @@ files. Your library, downloads and account stay.
 
 ## Uninstalling
 
-Delete the `zotero` folder and `documents/Zotero.sh`.
+Delete the `zotero` folder, `documents/Zotero.sh` and `documents/Zotero-no-plugins.sh`.
 
 ## If something goes wrong
 
