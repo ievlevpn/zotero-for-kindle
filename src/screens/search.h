@@ -1,5 +1,6 @@
 #pragma once
-// Search: one field (the Kindle's own keyboard), results as item rows above the keyboard.
+// Search for books: one field (the Kindle's own keyboard), results as item rows above the keyboard.
+// It matches titles, people, publications and tags; highlights are searched from the Notes tab.
 // Keys echo instantly in the field; results update on Return or after a 700 ms pause, since
 // every list update is an e-ink refresh. Opened from a collection, it searches that collection
 // (and its subcollections) until its "In: <name> ✕" chip is tapped. With nothing searched yet,
@@ -42,7 +43,6 @@ public:
     Rect clearRect() const;
     const ItemList& results() const { return list_; }
     std::string emptyMessage() const;
-    std::string note(Nav&) const;  // "" when every highlight is searchable
 
 private:
     void search(Nav&);
@@ -56,7 +56,6 @@ private:
     std::string searched_;
     bool pending_ = false;
     int64_t lastKeyMs_ = 0;
-    std::string noteCache_;
     Rect areaCache_{};
     std::string scopeKey_, scopeName_;
     std::vector<std::string> recent_;

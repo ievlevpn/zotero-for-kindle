@@ -95,12 +95,9 @@ TEST_CASE("search: the keyboard opens with the screen and closes on Escape or a 
     CHECK(rig.nav.pops == 1);
 }
 
-TEST_CASE("search: results stay above the keyboard; a note says highlights are on demand") {
+TEST_CASE("search: results stay above the keyboard") {
     Rig rig;
     CHECK(rig.screen.resultsArea(rig.nav).y + rig.screen.resultsArea(rig.nav).h <= 980);
-    CHECK_FALSE(rig.screen.note(rig.nav).empty());
-    rig.lib.setAllAnnotationsOffline(true);
-    CHECK(rig.screen.note(rig.nav).empty());
 }
 
 TEST_CASE("search screen matches the reviewed golden") {

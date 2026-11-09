@@ -157,7 +157,7 @@ TEST_CASE("sync: annotations are pulled under their attachment") {
     auto anns = rig.lib.annotationsFor("EPUB0001");
     REQUIRE(anns.size() == 1);
     CHECK(anns[0].text == "server text");
-    CHECK(rig.lib.search("server", 10).size() == 1);
+    CHECK(rig.lib.countAnnotations("server") == 1);
 }
 
 TEST_CASE("sync: push sends a new local annotation without a key and stores the server's key") {
@@ -247,7 +247,7 @@ TEST_CASE("sync: an annotation deleted on the desktop and untouched here is remo
     rig.server.remove("ANNO0001");
     CHECK_FALSE(rig.pull().error);
     CHECK(rig.lib.annotationsFor("EPUB0001").empty());
-    CHECK(rig.lib.search("server", 10).empty());
+    CHECK(rig.lib.countAnnotations("server") == 0);
 }
 
 TEST_CASE("sync: a replaced file turns unsynced local annotations into conflicts") {
@@ -373,7 +373,7 @@ TEST_CASE("sync on demand: opening a book downloads its annotations and tracks i
     CHECK(rig.lib.isTracked("EPUB0001"));
     CHECK(rig.server.count("GET", "items/EPUB0001/children") == 1);
     CHECK(rig.server.fetchedItemKeys().size() == 70);  // 2 batches of 50 + 20
-    CHECK(rig.lib.search("first", 10).size() == 1);
+    CHECK(rig.lib.countAnnotations("first") == 70);
 
     rig.server.sent.clear();
     CHECK(rig.engine.pullAnnotationsFor("EPUB0001", nullptr).annotations == 0);  // nothing new: no fetch

@@ -18,7 +18,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 5;
+constexpr int64_t kSchemaVersion = 6;
 
 // The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
@@ -65,7 +65,29 @@ CREATE TABLE reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT 
   remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL DEFAULT 0,
   remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');
 CREATE TABLE read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);
-CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags, notes,
+CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags,
+  tokenize='unicode61 remove_diacritics 2');
+)sql";
+
+// Highlight and note search (the Notes tab): kept by triggers, so every write to annotations counts.
+const char* kNoteSearch = R"sql(
+CREATE VIRTUAL TABLE IF NOT EXISTS note_fts USING fts5(text, comment, tags, tokenize='unicode61 remove_diacritics 2');
+CREATE TRIGGER IF NOT EXISTS annotations_fts_insert AFTER INSERT ON annotations BEGIN
+  INSERT INTO note_fts(rowid, text, comment, tags) VALUES (new.rowid, new.text, new.comment, new.tags);
+END;
+CREATE TRIGGER IF NOT EXISTS annotations_fts_delete AFTER DELETE ON annotations BEGIN
+  DELETE FROM note_fts WHERE rowid = old.rowid;
+END;
+CREATE TRIGGER IF NOT EXISTS annotations_fts_update AFTER UPDATE ON annotations BEGIN
+  DELETE FROM note_fts WHERE rowid = old.rowid;
+  INSERT INTO note_fts(rowid, text, comment, tags) VALUES (new.rowid, new.text, new.comment, new.tags);
+END;
+)sql";
+
+// Version 6 on an older database: book search without highlight text (then kNoteSearch, filled).
+const char* kVersion6 = R"sql(
+DROP TABLE IF EXISTS item_fts;
+CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags,
   tokenize='unicode61 remove_diacritics 2');
 )sql";
 
@@ -244,8 +266,8 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 4) {
-            // Versions 2 to 4 may hold unsent Kindle work, so they are extended in place, never rebuilt.
+        if (version >= 2 && version <= 5) {
+            // Versions 2 to 5 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
                     "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
@@ -257,6 +279,19 @@ void Library::migrate() {
                 "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');");
             db_.exec(  // version 5: read marks
                 "CREATE TABLE IF NOT EXISTS read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);");
+            db_.exec(kVersion6);
+            auto has = [&](const char* table) {
+                Stmt st = db_.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+                st.bind(1, std::string(table));
+                return st.step();
+            };
+            if (has("items"))
+                db_.exec("INSERT INTO item_fts(rowid, title, creators, publication, tags) "
+                         "SELECT rowid, title, creatorsText, publication, tagsText FROM items;");
+            if (!has("note_fts")) {
+                db_.exec(kNoteSearch);
+                db_.exec("INSERT INTO note_fts(rowid, text, comment, tags) SELECT rowid, text, comment, tags FROM annotations;");
+            }
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -270,12 +305,13 @@ void Library::migrate() {
             {
                 Stmt st = db_.prepare(
                     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' "
-                    "AND name NOT LIKE 'item_fts_%'");
+                    "AND name NOT LIKE 'item_fts_%' AND name NOT LIKE 'note_fts_%'");
                 while (st.step()) tables.push_back(st.text(0));
             }
             for (const auto& t : tables) db_.exec("DROP TABLE IF EXISTS \"" + t + "\"");
         }
         db_.exec(kSchema);
+        db_.exec(kNoteSearch);
         db_.setUserVersion(kSchemaVersion);
         db_.exec("COMMIT");
     } catch (...) {
@@ -299,12 +335,8 @@ void Library::reindex(const std::string& itemKey) {
     Stmt del = db_.prepare("DELETE FROM item_fts WHERE rowid = (SELECT rowid FROM items WHERE key = ?)");
     del.bind(1, itemKey).step();
     Stmt ins = db_.prepare(
-        "INSERT INTO item_fts(rowid, title, creators, publication, tags, notes) "
-        "SELECT i.rowid, i.title, i.creatorsText, i.publication, i.tagsText, "
-        "  (SELECT coalesce(group_concat(n.text || ' ' || n.comment || ' ' || n.tags, ' '), '') "
-        "   FROM annotations n JOIN attachments a ON n.parentKey = a.key "
-        "   WHERE n.deletedHere = 0 AND (a.parentKey = i.key OR (a.key = i.key AND a.parentKey = ''))) "
-        "FROM items i WHERE i.key = ?");
+        "INSERT INTO item_fts(rowid, title, creators, publication, tags) "
+        "SELECT i.rowid, i.title, i.creatorsText, i.publication, i.tagsText FROM items i WHERE i.key = ?");
     ins.bind(1, itemKey).step();
     Stmt readable = db_.prepare(
         "UPDATE items SET (readableKey, readableType) = (SELECT coalesce(a.key, ''), coalesce(CASE a.contentType "
@@ -1120,7 +1152,9 @@ std::vector<ItemRow> Library::recentlyOpened(int limit) {
     return rows;
 }
 
-std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
+std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std::string& query) {
+    const std::string fts = ftsQuery(query);
+    if (!query.empty() && fts.empty()) return {};
     return guarded([&] {
         std::string cols;
         for (const char* c : {"key", "parentKey", "type", "text", "comment", "color", "pageLabel", "sortIndex", "position",
@@ -1131,8 +1165,13 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
                               ", coalesce(i.key, ''), coalesce(i.title, '') FROM annotations n "
                               "LEFT JOIN attachments a ON a.key = n.parentKey "
                               "LEFT JOIN items i ON i.key = CASE WHEN a.parentKey = '' THEN a.key ELSE a.parentKey END "
-                              "WHERE n.deletedHere = 0 ORDER BY n.dateModified DESC, n.key LIMIT ? OFFSET ?");
+                              "WHERE n.deletedHere = 0" +
+                              (fts.empty() ? std::string(" ORDER BY n.dateModified DESC, n.key")
+                                           : std::string(" AND n.rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?3) "
+                                                         "ORDER BY i.title COLLATE NOCASE, i.key, n.parentKey, n.sortIndex, n.key")) +
+                              " LIMIT ?1 OFFSET ?2");
         st.bind(1, int64_t{limit}).bind(2, int64_t{offset});
+        if (!fts.empty()) st.bind(3, fts);
         std::vector<NoteRow> out;
         while (st.step()) {
             NoteRow row;
@@ -1145,9 +1184,13 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit) {
     });
 }
 
-int64_t Library::countAnnotations() {
+int64_t Library::countAnnotations(const std::string& query) {
+    const std::string fts = ftsQuery(query);
+    if (!query.empty() && fts.empty()) return 0;
     return guarded([&] {
-        Stmt st = db_.prepare("SELECT count(*) FROM annotations WHERE deletedHere = 0");
+        Stmt st = db_.prepare(std::string("SELECT count(*) FROM annotations WHERE deletedHere = 0") +
+                              (fts.empty() ? "" : " AND rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?)"));
+        if (!fts.empty()) st.bind(1, fts);
         st.step();
         return st.integer(0);
     });

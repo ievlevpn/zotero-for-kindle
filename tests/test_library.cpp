@@ -104,7 +104,7 @@ TEST_CASE("library: odd items (no title, 40 creators, emoji) store and are found
     CHECK(items[1].creators[40].name == "Институт 🦉 Collective");
 }
 
-TEST_CASE("library: tags, publication and annotation text are searchable") {
+TEST_CASE("library: tags and publication find books; annotation text finds highlights, not books") {
     Rig rig;
     ItemRecord r = item("ITEM0001", "Plain title", "2021-01-01");
     r.tags = {"economics"};
@@ -126,10 +126,20 @@ TEST_CASE("library: tags, publication and annotation text are searchable") {
     rig.lib.upsertAnnotation(n);
     CHECK(keys(rig.lib.search("econom", 10)) == std::vector<std::string>{"ITEM0001"});
     CHECK(keys(rig.lib.search("dynamics", 10)) == std::vector<std::string>{"ITEM0001"});
-    CHECK(keys(rig.lib.search("hamilton", 10)) == std::vector<std::string>{"ITEM0001"});
-    CHECK(keys(rig.lib.search("lemma", 10)) == std::vector<std::string>{"ITEM0001"});
-    rig.lib.removeObject("annotation", "ANNOT001");
     CHECK(rig.lib.search("hamilton", 10).empty());
+    CHECK(rig.lib.searchRows("lemma", 0, 10).empty());
+    CHECK(rig.lib.countAnnotations("hamilton") == 1);
+    REQUIRE(rig.lib.recentAnnotations(0, 10, "lemma").size() == 1);
+    CHECK(rig.lib.recentAnnotations(0, 10, "lemma")[0].itemKey == "ITEM0001");
+    CHECK(rig.lib.countAnnotations("Hamiltonian convex") == 1);  // every word, any case
+    CHECK(rig.lib.countAnnotations("hamilton concave") == 0);
+    n.comment = "an edit";
+    rig.lib.editAnnotation(n);
+    CHECK(rig.lib.countAnnotations("lemma") == 0);
+    CHECK(rig.lib.countAnnotations("edit") == 1);
+    rig.lib.removeObject("annotation", "ANNOT001");
+    CHECK(rig.lib.countAnnotations("hamilton") == 0);
+    CHECK(rig.lib.countAnnotations("") == 0);
 }
 
 TEST_CASE("library: removeObject removes an item from lists and search") {

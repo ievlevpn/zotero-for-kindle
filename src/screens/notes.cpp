@@ -3,6 +3,8 @@
 #include <algorithm>
 
 #include "screens/book.h"
+#include "screens/collections.h"
+#include "screens/search.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -18,12 +20,19 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kGroupH = 70;
-Rect contentArea() { return {0, kHeaderH, W(), H() - kTabBarH - kHeaderH}; }
-// Notes per page: as many as fit if each comes from a different book (its own header): 4 on the PW5.
-int perPage() { return std::max(1, (contentArea().h - kPageIndicatorH) / (kNoteRowH + kGroupH)); }
 Rect confirmBox() { return {kMargin, 560, W() - 2 * kMargin, 300}; }
 
 }  // namespace
+
+Rect NotesScreen::searchRect() { return CollectionsScreen::searchRect(); }
+
+Rect NotesScreen::contentArea() const {
+    const int bottom = bottom_ > 0 ? bottom_ : H() - kTabBarH;
+    return {0, kHeaderH, W(), bottom - kHeaderH};
+}
+
+// Notes per page: as many as fit if each comes from a different book (its own header): 4 on the PW5.
+int NotesScreen::perPage() const { return std::max(1, (contentArea().h - kPageIndicatorH) / (kNoteRowH + kGroupH)); }
 
 Rect NotesScreen::confirmRect(int i) {
     const int w = (confirmBox().w - 3 * 40) / 2;
@@ -33,12 +42,16 @@ Rect NotesScreen::confirmRect(int i) {
 void NotesScreen::load(Library& lib) {
     allOffline_ = lib.allAnnotationsOffline();
     const int64_t offset = pager_.offset();
-    pager_ = Pager(lib.countAnnotations(), perPage());
+    lines_.clear();
+    if (searching_ && query_.empty()) {
+        pager_ = Pager(0, perPage());
+        return;
+    }
+    pager_ = Pager(lib.countAnnotations(query_), perPage());
     while (pager_.offset() < offset && pager_.next()) {
     }
-    lines_.clear();
     std::string current;
-    for (auto& n : lib.recentAnnotations(static_cast<int>(pager_.offset()), perPage())) {
+    for (auto& n : lib.recentAnnotations(static_cast<int>(pager_.offset()), perPage(), query_)) {
         if (n.itemKey != current) {
             current = n.itemKey;
             lines_.push_back({true, n.itemKey, n.itemTitle, {}});
@@ -47,7 +60,40 @@ void NotesScreen::load(Library& lib) {
     }
 }
 
-void NotesScreen::onShow(Nav& nav) { load(nav.library()); }
+void NotesScreen::onShow(Nav& nav) {
+    if (searching_) {
+        nav.keyboard().show();
+        const Rect kb = nav.keyboard().bounds();
+        bottom_ = kb.empty() ? H() : kb.y;
+    }
+    load(nav.library());
+}
+
+void NotesScreen::search(Nav& nav) {
+    pending_ = false;
+    query_ = field_.text();
+    pager_ = Pager(0, 1);  // from the first page
+    load(nav.library());
+    nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
+}
+
+void NotesScreen::onKey(const KeyEvent& k, Nav& nav) {
+    if (!searching_) return;
+    if (k.code == KeyEvent::Code::Escape) {
+        nav.keyboard().hide();
+        nav.pop();
+        return;
+    }
+    field_.apply(k);
+    if (k.code == KeyEvent::Code::Return) return search(nav);
+    pending_ = true;
+    lastKeyMs_ = nav.nowMs();
+    nav.damage(SearchScreen::fieldRect(), Waveform::Fast);
+}
+
+void NotesScreen::onTick(Nav& nav) {
+    if (pending_ && nav.nowMs() - lastKeyMs_ >= kPauseMs) search(nav);
+}
 
 std::vector<Rect> NotesScreen::lineRects() const {
     std::vector<Rect> out;
@@ -63,11 +109,30 @@ std::vector<Rect> NotesScreen::lineRects() const {
 void NotesScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, W(), H()}, 255);
-    drawHeader(cr, "Notes", false);
+    if (searching_) {
+        drawHeader(cr, "", true);
+        const Rect f = SearchScreen::fieldRect();
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 3);
+        roundedRect(cr, f.x + 1.5, f.y + 1.5, f.w - 3, f.h - 3, f.h / 2.0);
+        cairo_stroke(cr);
+        searchIcon(cr, f.x + 54, f.y + f.h / 2.0 - 4, kTertiary);
+        const bool empty = field_.text().empty();
+        centredText(cr, empty ? "Search your highlights…" : field_.text() + "|",
+                    {kSans, 9, 400, false, empty ? kTertiary : kInk}, {f.x + 96, f.y, f.w - 120, f.h}, Align::Left);
+    } else {
+        drawHeader(cr, "Notes", false, searchRect().w + 20);
+        const Rect s = searchRect();
+        searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
+    }
     if (lines_.empty()) {
-        const std::string msg = allOffline_ ? "No highlights yet."
-                                            : "Highlights appear here for books you've opened on the Kindle. To see all "
-                                              "of them, turn on Keep all highlights offline in Settings.";
+        if (searching_ && query_.empty()) return;
+        const std::string onDemand = "Only books you've opened on the Kindle are searched. To search all highlights, "
+                                     "turn on Keep all highlights offline in Settings.";
+        const std::string msg = searching_ ? "Nothing found for “" + query_ + "”." + (allOffline_ ? "" : "\n" + onDemand)
+                                : allOffline_ ? "No highlights yet."
+                                              : "Highlights appear here for books you've opened on the Kindle. To see all "
+                                                "of them, turn on Keep all highlights offline in Settings.";
         drawText(cr, msg, {kSerif, 10, 400, false, kSecondary}, {kMargin + 40, 420, W() - 2 * kMargin - 80, 300}, 5,
                  Align::Center);
         return;
@@ -102,6 +167,23 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (searching_ && SearchScreen::fieldRect().contains(g.pos)) {
+        nav.keyboard().show();
+        const Rect kb = nav.keyboard().bounds();
+        bottom_ = kb.empty() ? H() : kb.y;
+        load(nav.library());
+        nav.redrawAll(Waveform::Quality);
+        return;
+    }
+    if (searching_ && headerBackRect().contains(g.pos)) {
+        nav.keyboard().hide();
+        nav.pop();
+        return;
+    }
+    if (!searching_ && searchRect().contains(g.pos)) {
+        nav.push(std::make_unique<NotesScreen>(open_, true));
+        return;
+    }
     if (!discardKey_.empty()) {
         if (confirmRect(0).contains(g.pos)) nav.library().discardConflict(discardKey_);
         if (!confirmBox().contains(g.pos) || confirmRect(0).contains(g.pos) || confirmRect(1).contains(g.pos)) {
@@ -131,6 +213,7 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         }
         auto row = nav.library().rowFor(lines_[i].itemKey);
         if (!row) return;
+        if (searching_) nav.keyboard().hide();
         if (!open_) return nav.push(std::make_unique<BookScreen>(*row));  // no reader (screenshots)
         open_(*row, lines_[i].header ? std::nullopt : std::optional<AnnotationRecord>(a));
         return;

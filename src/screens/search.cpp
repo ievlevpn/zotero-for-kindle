@@ -16,7 +16,7 @@ namespace {
 
 int W() { return metrics().width; }
 int H() { return metrics().height; }
-constexpr int kNoteH = 56;
+constexpr int kGapH = 20;  // between the field (or the scope chip) and the results
 constexpr int kScopeH = 90;   // the scope chip's row
 constexpr int kRecentH = 104, kRecentLabelH = 70;
 constexpr int kMaxResults = 200;
@@ -57,14 +57,9 @@ Rect SearchScreen::fieldRect() { return {kMargin + 70, 30, W() - 2 * kMargin - 7
 
 Rect SearchScreen::resultsArea(Nav& nav) const {
     const Rect kb = nav.keyboard().bounds();
-    const int y = top() + kNoteH;
+    const int y = top() + kGapH;
     const int bottom = kb.empty() ? H() : kb.y;
     return {0, y, W(), bottom - y};
-}
-
-std::string SearchScreen::note(Nav& nav) const {
-    if (nav.library().allAnnotationsOffline()) return {};
-    return "Highlights are searched only in books you've opened on the Kindle.";
 }
 
 std::string SearchScreen::emptyMessage() const {
@@ -78,7 +73,6 @@ void SearchScreen::layout(Nav& nav) {
 
 void SearchScreen::onShow(Nav& nav) {
     nav.keyboard().show();
-    noteCache_ = note(nav);
     recent_ = nav.library().recentSearches();
     layout(nav);
 }
@@ -151,8 +145,6 @@ void SearchScreen::draw(Canvas& canvas) {
         cairo_line_to(cr, cx - 11, cy + 11);
         cairo_stroke(cr);
     }
-    if (!searched_.empty() && !noteCache_.empty())
-        drawText(cr, noteCache_, {kSans, 6.5, 400, false, kTertiary}, {kMargin, top() + 6, W() - 2 * kMargin, kNoteH}, 1);
     const auto recents = recentRects();
     if (!recents.empty()) {
         const Rect a = areaCache_;

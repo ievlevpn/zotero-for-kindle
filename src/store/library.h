@@ -1,6 +1,6 @@
 #pragma once
-// The local copy of the Zotero library: items, collections, attachments, annotations, and a
-// full-text index over item metadata and annotation text. All SQL lives here.
+// The local copy of the Zotero library: items, collections, attachments, annotations, and
+// full-text indexes over item metadata and over annotation text. All SQL lives here.
 
 #include "net/errors.h"
 #include "store/db.h"
@@ -164,8 +164,8 @@ public:
     std::vector<ItemRecord> recentItems(int limit);  // top-level items, newest dateAdded first
     std::vector<ItemRecord> itemsInCollection(const std::string& key);
     std::vector<CollectionRecord> collections();
-    // Every word of `query` must match a word prefix in title, creators, publication, tags or
-    // annotation text/comments; case and diacritics are ignored.
+    // Every word of `query` must match a word prefix in title, creators, publication or tags (not
+    // highlights: recentAnnotations searches those); case and diacritics are ignored.
     std::vector<ItemRecord> search(const std::string& query, int limit);
     std::vector<AnnotationRecord> annotationsFor(const std::string& attachmentKey);
     std::vector<AnnotationRecord> dirtyAnnotations();  // edits and creations; not tombstones
@@ -249,8 +249,10 @@ public:
     std::vector<CollectionEntry> collectionsTab();
     // Items whose books were opened on the Kindle, last opened first.
     std::vector<ItemRow> recentlyOpened(int limit);
-    std::vector<NoteRow> recentAnnotations(int offset, int limit);
-    int64_t countAnnotations();
+    // Highlights and notes, newest first; with a query (as search()'s, over their text, comment and
+    // tags) only those that match, grouped by item and in book order.
+    std::vector<NoteRow> recentAnnotations(int offset, int limit, const std::string& query = "");
+    int64_t countAnnotations(const std::string& query = "");
     void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);
     std::optional<ReadingState> lastOpened();
     std::optional<ReadingState> readingState(const std::string& itemKey);

@@ -2,12 +2,15 @@
 // Notes tab: highlights and notes across the library, newest first, grouped by item. With
 // annotations on demand it covers the books opened on the Kindle (and says so when empty).
 // Each note shows its sync state; a conflict has Re-apply and Discard (which asks first).
+// The header's search icon opens the same list searching: a field in place of the title, the
+// highlights and notes whose text, comment or tags match, by book and in book order.
 
 #include <functional>
 #include <optional>
 
 #include "screens/screen.h"
 #include "ui/pager.h"
+#include "ui/text_field.h"
 
 namespace zk {
 
@@ -15,7 +18,9 @@ class NotesScreen final : public Screen {
 public:
     // Opens a book, at a highlight when given (the open flow: downloads first if needed).
     using OpenBook = std::function<void(const ItemRow&, std::optional<AnnotationRecord> at)>;
-    explicit NotesScreen(OpenBook open = {}) : open_(std::move(open)) {}
+    static constexpr int64_t kPauseMs = 700;  // typing: the results follow after this pause (or Return)
+
+    explicit NotesScreen(OpenBook open = {}, bool searching = false) : open_(std::move(open)), searching_(searching) {}
 
     struct Line {
         bool header = false;  // the item's title above its notes
@@ -27,6 +32,13 @@ public:
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
+    void onKey(const KeyEvent&, Nav&) override;
+    void onTick(Nav&) override;
+    bool wantsKeyboard() const override { return searching_; }
+    bool showsTabBar() const override { return !searching_; }
+    static Rect searchRect();  // the tab's search icon
+    bool searching() const { return searching_; }
+    const std::string& query() const { return query_; }
 
     const std::vector<Line>& page() const { return lines_; }
     std::vector<Rect> lineRects() const;
@@ -35,11 +47,20 @@ public:
 
 private:
     void load(Library&);
+    Rect contentArea() const;
+    int perPage() const;
+    void search(Nav&);
     std::vector<Line> lines_;
     Pager pager_{0, 1};
     bool allOffline_ = false;
     std::string discardKey_;
     OpenBook open_;  // asking "Discard your Kindle change?" for this conflict
+    bool searching_ = false;
+    TextField field_;
+    std::string query_;  // what the list shows matches for
+    bool pending_ = false;
+    int64_t lastKeyMs_ = 0;
+    int bottom_ = 0;  // the list's bottom: above the tab bar, or the keyboard while searching
 };
 
 }  // namespace zk
