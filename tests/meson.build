@@ -14,6 +14,7 @@ test_sources = files(
   'test_http_fake.cpp',
   'test_write_guard.cpp',
   'test_mark_read.cpp',
+  'test_search_scope.cpp',
   'test_errors.cpp',
   'test_library.cpp',
   'test_parse.cpp',

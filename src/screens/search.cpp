@@ -1,5 +1,7 @@
 #include "screens/search.h"
 
+#include <algorithm>
+
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -15,12 +17,38 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kNoteH = 56;
+constexpr int kScopeH = 90;   // the scope chip's row
+constexpr int kRecentH = 104, kRecentLabelH = 70;
 constexpr int kMaxResults = 200;
+const TextStyle kChipText{kSans, 7.5, 600};
 
 }  // namespace
 
-SearchScreen::SearchScreen(std::function<void(const ItemRow&)> openItem, StatusFn status) : openItem_(std::move(openItem)) {
+SearchScreen::SearchScreen(std::function<void(const ItemRow&)> openItem, StatusFn status, std::string scopeKey,
+                           std::string scopeName)
+    : openItem_(std::move(openItem)), scopeKey_(std::move(scopeKey)), scopeName_(std::move(scopeName)) {
     list_.setStatusFn(std::move(status));
+}
+
+int SearchScreen::top() const { return kHeaderH + (scopeKey_.empty() ? 0 : kScopeH); }
+
+Rect SearchScreen::scopeRect() const {
+    if (scopeKey_.empty()) return {};
+    const int w = std::min(measureText("In: " + scopeName_, kChipText, W(), 1).width + 120, W() - 2 * kMargin);
+    return {kMargin, kHeaderH + 6, w, kScopeH - 16};
+}
+
+Rect SearchScreen::clearRect() const { return {W() - kMargin - 180, areaCache_.y, 180, kRecentLabelH}; }
+
+std::vector<Rect> SearchScreen::recentRects() const {
+    std::vector<Rect> out;
+    if (!searched_.empty()) return out;
+    for (size_t i = 0; i < recent_.size(); ++i) {
+        const int y = areaCache_.y + kRecentLabelH + static_cast<int>(i) * kRecentH;
+        if (y + kRecentH > areaCache_.y + areaCache_.h) break;
+        out.push_back({kMargin, y, W() - 2 * kMargin, kRecentH});
+    }
+    return out;
 }
 
 void SearchScreen::onSyncEvent(const SyncEvent& e, Nav& nav) { list_.onDownloadEvent(e, areaCache_, nav); }
@@ -29,9 +57,9 @@ Rect SearchScreen::fieldRect() { return {kMargin + 70, 30, W() - 2 * kMargin - 7
 
 Rect SearchScreen::resultsArea(Nav& nav) const {
     const Rect kb = nav.keyboard().bounds();
-    const int top = kHeaderH + kNoteH;
+    const int y = top() + kNoteH;
     const int bottom = kb.empty() ? H() : kb.y;
-    return {0, top, W(), bottom - top};
+    return {0, y, W(), bottom - y};
 }
 
 std::string SearchScreen::note(Nav& nav) const {
@@ -43,22 +71,29 @@ std::string SearchScreen::emptyMessage() const {
     return searched_.empty() ? std::string{} : "Nothing found for “" + searched_ + "”";
 }
 
+void SearchScreen::layout(Nav& nav) {
+    areaCache_ = resultsArea(nav);
+    list_.setRowsPerPage(ItemList::rowsFitting(areaCache_));
+}
+
 void SearchScreen::onShow(Nav& nav) {
     nav.keyboard().show();
     noteCache_ = note(nav);
-    areaCache_ = resultsArea(nav);
-    list_.setRowsPerPage(ItemList::rowsFitting(areaCache_));
+    recent_ = nav.library().recentSearches();
+    layout(nav);
 }
 
 void SearchScreen::search(Nav& nav) {
     pending_ = false;
     const std::string q = field_.text();
     searched_ = q;
-    areaCache_ = resultsArea(nav);
-    list_.setRowsPerPage(ItemList::rowsFitting(areaCache_));
-    list_.setSource([q](Library& lib, int64_t offset, int limit) { return lib.searchRows(q, static_cast<int>(offset), limit); },
-                    [q](Library& lib) { return static_cast<int64_t>(lib.searchRows(q, 0, kMaxResults).size()); },
-                    nav.library());
+    layout(nav);
+    const std::string in = scopeKey_;
+    list_.setSource(
+        [q, in](Library& lib, int64_t offset, int limit) { return lib.searchRows(q, static_cast<int>(offset), limit, in); },
+        [q, in](Library& lib) { return static_cast<int64_t>(lib.searchRows(q, 0, kMaxResults, in).size()); },
+        nav.library());
+    if (q.empty()) recent_ = nav.library().recentSearches();
     nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
 }
 
@@ -74,6 +109,7 @@ void SearchScreen::onKey(const KeyEvent& k, Nav& nav) {
     }
     field_.apply(k);
     if (k.code == KeyEvent::Code::Return) {
+        nav.library().rememberSearch(field_.text());
         search(nav);
         return;
     }
@@ -97,10 +133,44 @@ void SearchScreen::draw(Canvas& canvas) {
     cairo_stroke(cr);
     searchIcon(cr, f.x + 54, f.y + f.h / 2.0 - 4, kTertiary);
     const bool empty = field_.text().empty();
-    centredText(cr, empty ? "Search your library…" : field_.text() + "|", {kSans, 9, 400, false, empty ? kTertiary : kInk},
+    const std::string placeholder = scopeKey_.empty() ? "Search your library…" : "Search in " + scopeName_ + "…";
+    centredText(cr, empty ? placeholder : field_.text() + "|", {kSans, 9, 400, false, empty ? kTertiary : kInk},
                 {f.x + 96, f.y, f.w - 120, f.h}, Align::Left);
+    if (const Rect c = scopeRect(); !c.empty()) {  // "In: Economics ✕"
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 3);
+        roundedRect(cr, c.x + 1.5, c.y + 1.5, c.w - 3, c.h - 3, c.h / 2.0);
+        cairo_stroke(cr);
+        centredText(cr, "In: " + scopeName_, kChipText, {c.x + 34, c.y, c.w - 110, c.h}, Align::Left);
+        const double cx = c.x + c.w - 48, cy = c.y + c.h / 2.0;
+        cairo_set_line_width(cr, 4);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_move_to(cr, cx - 11, cy - 11);
+        cairo_line_to(cr, cx + 11, cy + 11);
+        cairo_move_to(cr, cx + 11, cy - 11);
+        cairo_line_to(cr, cx - 11, cy + 11);
+        cairo_stroke(cr);
+    }
     if (!searched_.empty() && !noteCache_.empty())
-        drawText(cr, noteCache_, {kSans, 6.5, 400, false, kTertiary}, {kMargin, kHeaderH + 6, W() - 2 * kMargin, kNoteH}, 1);
+        drawText(cr, noteCache_, {kSans, 6.5, 400, false, kTertiary}, {kMargin, top() + 6, W() - 2 * kMargin, kNoteH}, 1);
+    const auto recents = recentRects();
+    if (!recents.empty()) {
+        const Rect a = areaCache_;
+        centredText(cr, "RECENT", {kSans, 6.5, 500, false, kTertiary}, {kMargin, a.y, 400, kRecentLabelH}, Align::Left);
+        centredText(cr, "Clear", {kSans, 7.5, 500}, clearRect(), Align::Right);
+        for (size_t i = 0; i < recents.size(); ++i) {
+            const Rect r = recents[i];
+            centredText(cr, recent_[i], {kSans, 9, 400}, {r.x + 60, r.y, r.w - 60, r.h}, Align::Left);
+            gray(cr, kTertiary);  // a small clock: run it again
+            cairo_set_line_width(cr, 3);
+            cairo_arc(cr, r.x + 20, r.y + r.h / 2.0, 16, 0, 2 * 3.14159265);
+            cairo_move_to(cr, r.x + 20, r.y + r.h / 2.0 - 9);
+            cairo_line_to(cr, r.x + 20, r.y + r.h / 2.0);
+            cairo_line_to(cr, r.x + 27, r.y + r.h / 2.0 + 5);
+            cairo_stroke(cr);
+            hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
+        }
+    }
     if (!searched_.empty()) {
         list_.draw(cr, areaCache_);
         if (list_.rows().empty())
@@ -119,7 +189,34 @@ void SearchScreen::onGesture(const Gesture& g, Nav& nav) {
         nav.redrawAll(Waveform::Quality);
         return;
     }
+    if (g.type == GestureType::Tap && scopeRect().contains(g.pos)) {  // ✕: the whole library
+        scopeKey_.clear();
+        scopeName_.clear();
+        if (!searched_.empty()) search(nav);
+        layout(nav);
+        nav.damage({0, 0, W(), H()}, Waveform::Quality);
+        return;
+    }
+    if (g.type == GestureType::Tap) {
+        const auto recents = recentRects();
+        if (!recents.empty() && clearRect().contains(g.pos)) {
+            nav.library().clearRecentSearches();
+            recent_.clear();
+            nav.damage(areaCache_, Waveform::Quality);
+            return;
+        }
+        for (size_t i = 0; i < recents.size(); ++i)
+            if (recents[i].contains(g.pos)) {
+                const std::string q = recent_[i];
+                field_.setText(q);
+                nav.library().rememberSearch(q);
+                search(nav);
+                nav.damage(fieldRect(), Waveform::Quality);
+                return;
+            }
+    }
     list_.onGesture(g, areaCache_, nav, [&](const ItemRow& r) {
+        nav.library().rememberSearch(searched_);
         nav.keyboard().hide();
         if (openItem_) openItem_(r);
     });

@@ -69,6 +69,7 @@ public:
     const std::vector<Line>& page() const { return page_; }
     int64_t total() const { return pager_.total(); }
     static Rect backRect();
+    static Rect searchRect();  // the header's search icon: search in this collection
     Rect lineRect(size_t i) const { return lineRects().at(i); }
     std::optional<std::string> pinSheetLabel() const { return sheet_ ? std::optional(sheet_->label()) : std::nullopt; }
     static Rect pinButtonRect() { return PinSheet::buttonRect(); }

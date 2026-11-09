@@ -37,7 +37,7 @@ void drawButton(cairo_t*, Rect, const std::string& label, bool primary);
 void drawPageIndicator(cairo_t*, Rect, int page /* 0-based */, int pages);  // "3 / 41"
 
 // Screen header: large title, or "‹" + title for pushed screens; the back target is backRect().
-void drawHeader(cairo_t*, const std::string& title, bool back);
+void drawHeader(cairo_t*, const std::string& title, bool back, int rightReserve = 0);  // px kept free on the right
 Rect headerBackRect();
 
 // A dark pill with a short message.

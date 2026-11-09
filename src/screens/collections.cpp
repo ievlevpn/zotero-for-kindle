@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "screens/collection_search.h"
+#include "screens/search.h"
 
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -149,6 +150,7 @@ CollectionScreen::CollectionScreen(CollectionEntry entry, std::function<void(con
     : entry_(std::move(entry)), openItem_(std::move(openItem)), status_(std::move(status)) {}
 
 Rect CollectionScreen::backRect() { return headerBackRect(); }
+Rect CollectionScreen::searchRect() { return CollectionsScreen::searchRect(); }
 
 // Subcollections take kLineH, items kRowH; a page is filled greedily in that order.
 void CollectionScreen::load(Library& lib) {
@@ -196,7 +198,9 @@ std::vector<Rect> CollectionScreen::lineRects() const {
 void CollectionScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, W(), H()}, 255);
-    drawHeader(cr, entry_.collection.name, true);
+    drawHeader(cr, entry_.collection.name, true, searchRect().w + 20);
+    const Rect s = searchRect();
+    searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
     auto rects = lineRects();
     for (size_t i = 0; i < page_.size(); ++i) {
         if (page_[i].isCollection)
@@ -233,6 +237,10 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && backRect().contains(g.pos)) {
         nav.pop();
+        return;
+    }
+    if (g.type == GestureType::Tap && searchRect().contains(g.pos)) {
+        nav.push(std::make_unique<SearchScreen>(openItem_, status_, entry_.collection.key, entry_.collection.name));
         return;
     }
     if (turnPage(g, pager_)) {

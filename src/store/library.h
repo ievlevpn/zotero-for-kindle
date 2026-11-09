@@ -198,7 +198,13 @@ public:
     // Screens (spec §6): paged lists, counts, collections, notes, reading state, downloads.
     std::vector<ItemRow> rows(const ListQuery&);
     int64_t countRows(const ListQuery&);
-    std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit);
+    // collectionKey: only items in that collection or its subcollections (any depth).
+    std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit, const std::string& collectionKey = "");
+    // Searches made on the Kindle, newest first (kRecentSearches at most; kept here only).
+    static constexpr size_t kRecentSearches = 8;
+    std::vector<std::string> recentSearches();
+    void rememberSearch(const std::string& query);  // moves it to the front if it was there
+    void clearRecentSearches();
     std::optional<ItemRow> rowFor(const std::string& itemKey);
     std::optional<ItemDetails> details(const std::string& itemKey);
     std::optional<ItemRecord> item(const std::string& key);

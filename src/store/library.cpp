@@ -778,15 +778,43 @@ int64_t Library::countRows(const ListQuery& q) {
     });
 }
 
-std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, int limit) {
+std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, int limit, const std::string& collectionKey) {
     const std::string fts = ftsQuery(query);
     if (fts.empty()) return {};
     return guarded([&] {
+        // In a collection: its items and those of its subcollections, at any depth.
+        const std::string inCollection =
+            collectionKey.empty()
+                ? ""
+                : " AND i.key IN (SELECT itemKey FROM item_collections WHERE collectionKey IN ("
+                  "WITH RECURSIVE sub(key) AS (SELECT ?4 UNION SELECT c.key FROM collections c JOIN sub ON c.parentKey = sub.key) "
+                  "SELECT key FROM sub))";
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM item_fts JOIN items i ON i.id = item_fts.rowid" +
-                              kRowJoins + " WHERE item_fts MATCH ? AND i.parentKey = '' ORDER BY rank LIMIT ? OFFSET ?");
+                              kRowJoins + " WHERE item_fts MATCH ?1 AND i.parentKey = ''" + inCollection +
+                              " ORDER BY rank LIMIT ?2 OFFSET ?3");
         st.bind(1, fts).bind(2, int64_t{limit}).bind(3, int64_t{offset});
+        if (!collectionKey.empty()) st.bind(4, collectionKey);
         return readRows(st, readTag());
     });
+}
+
+std::vector<std::string> Library::recentSearches() {
+    return guarded([&] { return strings(meta("recentSearches")); });
+}
+
+void Library::rememberSearch(const std::string& query) {
+    if (query.find_first_not_of(" \t") == std::string::npos) return;
+    guarded([&] {
+        std::vector<std::string> list = strings(meta("recentSearches"));
+        list.erase(std::remove(list.begin(), list.end(), query), list.end());
+        list.insert(list.begin(), query);
+        if (list.size() > kRecentSearches) list.resize(kRecentSearches);
+        setMeta("recentSearches", json(list).dump());
+    });
+}
+
+void Library::clearRecentSearches() {
+    guarded([&] { setMeta("recentSearches", "[]"); });
 }
 
 std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {

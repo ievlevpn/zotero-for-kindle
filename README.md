@@ -20,7 +20,7 @@ Highlights and notes sync both ways with Zotero.
 ## What it does
 
 - Syncs your library from zotero.org: items, collections, tags and annotations.
-- Library, collections and search, with offline use.
+- Library, collections and search (in the whole library or one collection, with recent searches), with offline use.
 - Downloads books on demand, from Zotero storage or your WebDAV server.
 - EPUB and PDF reader with fonts, sizes and margins, plus PDF margin trimming.
 - Fast reading fonts (bold word beginnings) for EPUBs: Fast Serif, Fast Sans and Fast Mono.
