@@ -1,0 +1,1 @@
+{"id":"other","name":"other","version":"1.0.0","api":0,"main":"main.js","minApp":"0.1.0","permissions":["library:read","net:*.example.org"]}

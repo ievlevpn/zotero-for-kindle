@@ -1,0 +1,1 @@
+{"id":"future-api","name":"future-api","version":"1.0.0","api":1,"main":"main.js","minApp":"0.1.0","permissions":["library:read","net:*.example.org"]}

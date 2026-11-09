@@ -129,6 +129,8 @@ update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], includ
 # Plugin runtime (JavaScript): grows file by file as the plugin tasks land.
 plugins_lib = static_library('zk-plugins',
   'src/plugins/js.cpp',
+  'src/plugins/manifest.cpp',
+  'src/plugins/state.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
   dependencies : [core_dep, quickjs_dep])
 plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, quickjs_dep],
