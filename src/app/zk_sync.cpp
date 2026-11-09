@@ -11,7 +11,8 @@
 //   those (and only those); `annotate-test-edit` makes one of them blue with an "edited" comment.
 //   They change the local library; `push` sends the changes.
 // Every request goes through the WriteGuard, which allows annotation writes, the reading positions
-// of the library's own files and the read tag of its items, and nothing else.
+// of the library's own files, the read tag of its items and pending plugin changes in their exact
+// shape, and nothing else.
 // Credentials are never printed.
 
 #include "docs/fonts.h"
@@ -154,7 +155,8 @@ int main(int argc, char** argv) {
         [&](const std::string& key) -> std::optional<std::vector<std::string>> {  // the read tag
             if (auto item = lib.zoteroItem(key)) return item->tags;  // as Zotero has them
             return std::nullopt;
-        });
+        },
+        pluginChangeShapes(lib));  // plugin changes, each in its pending shape
     ZoteroApi api(http, cfg->userId, cfg->apiKey);
     api.setOnWait([](const UserError& e) { std::printf("%s\n", e.message.c_str()); });
 

@@ -155,7 +155,8 @@ void SyncService::run() {
             [lib](const std::string& key) -> std::optional<std::vector<std::string>> {   // the read tag
                 if (auto item = lib->zoteroItem(key)) return item->tags;  // as Zotero has them
                 return std::nullopt;
-            });
+            },
+            pluginChangeShapes(*lib));  // plugin changes, each in its pending shape
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);

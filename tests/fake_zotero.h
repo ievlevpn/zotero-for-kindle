@@ -1,7 +1,7 @@
 #pragma once
 // An in-memory Zotero Web API v3 server for one user library (id 1), enough for sync tests:
-// version listings, keyed fetches, /deleted, POST /items, PATCH /items/<key> and DELETE /items?itemKey= with
-// If-Unmodified-Since-Version (and per-object `version` checks on POST).
+// version listings, keyed fetches, /deleted, POST /items, PATCH /items/<key>, DELETE /items/<key> and
+// DELETE /items?itemKey= with If-Unmodified-Since-Version (and per-object `version` checks on POST).
 
 #include "net/http.h"
 
@@ -26,7 +26,7 @@ public:
     std::function<bool(const HttpRequest&)> failWhen;  // true -> connection timeout
     bool loseNextWriteResponse = false;  // apply the next POST, then answer with a timeout
     int created = 0;
-    std::map<std::string, int> failObjects;  // POST: these keys fail with this code
+    std::map<std::string, int> failObjects;  // POST: these keys fail with this code; PATCH, DELETE of one: answered so
     std::map<std::string, json> settings;    // key -> {value, version}
 
     // A setting changed elsewhere (the desktop's reader): bumps the library version.
@@ -205,6 +205,10 @@ public:
         if (req.method == "PATCH" && path.rfind("items/", 0) == 0) {
             const std::string key = path.substr(6);
             if (!items.count(key)) return status(r, 404);
+            if (failObjects.count(key)) {
+                r.body = "refused";
+                return status(r, failObjects[key]);
+            }
             int64_t ius = -1;
             for (const auto& [k, v] : req.headers)
                 if (k == "If-Unmodified-Since-Version") ius = std::stoll(v);
@@ -213,6 +217,22 @@ public:
             const json body = json::parse(req.body);
             for (const auto& [k, v] : body.items()) data[k] = v;
             put(data);
+            r.headers["last-modified-version"] = std::to_string(libraryVersion);
+            return status(r, 204);
+        }
+        // DELETE /items/<key>: against the object's own version
+        if (req.method == "DELETE" && path.rfind("items/", 0) == 0) {
+            const std::string key = path.substr(6);
+            if (!items.count(key)) return status(r, 404);
+            if (failObjects.count(key)) {
+                r.body = "refused";
+                return status(r, failObjects[key]);
+            }
+            int64_t ius = -1;
+            for (const auto& [k, v] : req.headers)
+                if (k == "If-Unmodified-Since-Version") ius = std::stoll(v);
+            if (ius != items[key]["version"].get<int64_t>()) return status(r, 412);
+            remove(key);
             r.headers["last-modified-version"] = std::to_string(libraryVersion);
             return status(r, 204);
         }

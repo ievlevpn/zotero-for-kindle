@@ -3,6 +3,9 @@
 #include "fake_http.h"
 #include "net/write_guard.h"
 
+#include <nlohmann/json.hpp>
+
+#include <map>
 #include <set>
 
 using namespace zk;
@@ -190,4 +193,213 @@ TEST_CASE("write guard: a reading position needs a version and a page or a CFI")
     CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":-1,"version":3}})"));
     CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":"chapter 3","version":3}})"));  // not a CFI
     CHECK(post(R"({"lastPageIndex_u_ATTKEY01":{"value":"/)" + std::string(3000, '4') + R"(","version":3}})"));
+}
+
+// ---- Plugin changes: one narrow rule per kind ----------------------------------------------
+
+namespace {
+
+using Kind = PluginChange::Kind;
+
+PluginChange pending(Kind kind, const std::string& key, const std::string& value = "", const std::string& parent = "",
+                     const std::string& plugin = "p") {
+    PluginChange c;
+    c.id = "CHANGE" + key;
+    c.pluginId = plugin;
+    c.kind = kind;
+    c.itemKey = key;
+    c.value = value;
+    c.parentKey = parent;
+    return c;
+}
+
+// BOOK0001 in NATURE01 tagged "birds" (Zotero's copy); NEWITEM1 a pending create; NOTE0001 a pending
+// note on BOOK0001; NOTE0002 a note plugin "p" added, NOTE0003 one pulled from Zotero, both with a
+// pending DeleteNote of "p"; BOOK0002 with a pending trash.
+struct PluginRig {
+    FakeHttp inner;
+    std::map<std::string, PluginChangeShape> shapes;
+    std::map<std::string, std::vector<std::string>> tags{{"BOOK0001", {"birds"}}, {"BOOK0002", {}}};
+    WriteGuard guard{inner, [](const std::string&) { return false; }, [](const std::string&) { return false; },
+                     [this](const std::string& k) -> std::optional<std::vector<std::string>> {
+                         if (tags.count(k)) return tags[k];
+                         return std::nullopt;
+                     },
+                     [this](const std::string& k) -> std::optional<PluginChangeShape> {
+                         auto it = shapes.find(k);
+                         if (it == shapes.end() || it->second.pending.empty()) return std::nullopt;
+                         return it->second;
+                     }};
+    nlohmann::json created = {{"itemType", "preprint"},
+                              {"title", "Fields"},
+                              {"creators", nlohmann::json::array({{{"creatorType", "author"},
+                                                                   {"firstName", "Ada"},
+                                                                   {"lastName", "Lovelace"}}})},
+                              {"date", "2024"},
+                              {"abstractNote", "About"},
+                              {"archiveID", "arXiv:2401.00001"},
+                              {"collections", {"NATURE01"}},
+                              {"tags", nlohmann::json::array({{{"tag", "new"}}})}};
+
+    PluginRig() {
+        PluginChangeShape book;
+        book.item = true;
+        book.collections = {"NATURE01"};
+        book.data = R"({"itemType":"book","title":"Owls","collections":["NATURE01"],"tags":[{"tag":"birds"}]})";
+        book.pending = {pending(Kind::AddToCollection, "BOOK0001", "MATHS001"),
+                        pending(Kind::RemoveFromCollection, "BOOK0001", "NATURE01")};
+        shapes["BOOK0001"] = book;
+        PluginChangeShape trash;
+        trash.item = true;
+        trash.data = R"({"itemType":"book","title":"Graphs"})";
+        trash.pending = {pending(Kind::Trash, "BOOK0002")};
+        shapes["BOOK0002"] = trash;
+        PluginChangeShape item;
+        item.item = true;
+        item.data = created.dump();
+        item.collections = {"NATURE01"};
+        item.pending = {pending(Kind::CreateItem, "NEWITEM1", "{}")};
+        shapes["NEWITEM1"] = item;
+        PluginChangeShape note;
+        note.note = true;
+        note.createdBy = "p";
+        note.data = R"({"itemType":"note","parentItem":"BOOK0001","note":"<p>hi</p>"})";
+        note.pending = {pending(Kind::AddNote, "NOTE0001", "<p>hi</p>", "BOOK0001")};
+        shapes["NOTE0001"] = note;
+        PluginChangeShape mine;
+        mine.note = true;
+        mine.createdBy = "p";
+        mine.pending = {pending(Kind::DeleteNote, "NOTE0002")};
+        shapes["NOTE0002"] = mine;
+        PluginChangeShape pulled;
+        pulled.note = true;
+        pulled.pending = {pending(Kind::DeleteNote, "NOTE0003")};
+        shapes["NOTE0003"] = pulled;
+        PluginChangeShape others;
+        others.note = true;
+        others.createdBy = "q";
+        others.pending = {pending(Kind::DeleteNote, "NOTE0004")};
+        shapes["NOTE0004"] = others;
+    }
+    HttpResponse send(const std::string& method, const std::string& path, const std::string& body,
+                      bool versioned = true) {
+        HttpRequest r;
+        r.method = method;
+        r.url = "https://api.zotero.org/users/1/" + path;
+        r.body = body;
+        if (versioned) r.headers = {{"If-Unmodified-Since-Version", "7"}};
+        inner.expect(method, r.url, FakeHttp::status(method == "POST" ? 200 : 204));
+        HttpResponse out = guard.send(r);
+        if (blocked(out)) inner.queue.clear();
+        return out;
+    }
+    HttpResponse post(const nlohmann::json& objects) { return send("POST", "items", objects.dump()); }
+    nlohmann::json withKey(nlohmann::json o, const std::string& key) {
+        o["key"] = key;
+        return o;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("guard: a plugin's changes go out in exactly their pending shape") {
+    PluginRig rig;
+    // CreateItem: its data, under its key, without a version or at version 0.
+    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({rig.withKey(rig.created, "NEWITEM1")}))));
+    nlohmann::json v0 = rig.withKey(rig.created, "NEWITEM1");
+    v0["version"] = 0;
+    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({v0}))));
+    // AddNote: a child note on its parent, with its HTML.
+    nlohmann::json note = {{"key", "NOTE0001"}, {"itemType", "note"}, {"parentItem", "BOOK0001"}, {"note", "<p>hi</p>"}};
+    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({note}))));
+    CHECK_FALSE(blocked(rig.post(nlohmann::json::array({rig.withKey(rig.created, "NEWITEM1"), note}))));  // a batch
+    // AddToCollection / RemoveFromCollection: one key more or less than Zotero's copy.
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","MATHS001"]})")));
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":[]})")));
+    // Trash.
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":1})")));
+    // DeleteNote of a note the same plugin added, against its version.
+    CHECK_FALSE(blocked(rig.send("DELETE", "items/NOTE0002", "")));
+    // Plugin tags go by the read-tag rule: one tag more or less.
+    CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"plugin"}]})")));
+    CHECK(rig.inner.sent.size() == 9);
+}
+
+TEST_CASE("guard: a plugin PATCH that changes a title, two tags, or deletes an item the plugin didn't create is refused") {
+    PluginRig rig;
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"title":"Hawks"})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","MATHS001"],"title":"Hawks"})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[{"tag":"a"},{"tag":"b"},{"tag":"birds"}]})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"tags":[]})")) == false);  // one tag off: the read-tag rule
+    // Collections: two keys at once, a key nothing pending asks for, the wrong way round, unversioned.
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["MATHS001"]})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","OTHER001"]})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0002", R"({"collections":["NATURE01"]})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","MATHS001"]})", false)));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"collections":["NATURE01","MATHS001","MATHS001"]})")));
+    // Trash: only {"deleted": 1}, only with a pending trash, only versioned.
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0001", R"({"deleted":1})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":1,"title":"x"})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":0})")));
+    CHECK(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":1})", false)));
+    CHECK(blocked(rig.send("PUT", "items/BOOK0002", R"({"deleted":1})")));
+    // Hard deletes: never an item; a note only if the plugin deleting it added it, versioned, one key.
+    CHECK(blocked(rig.send("DELETE", "items/BOOK0002", "")));
+    CHECK(blocked(rig.send("DELETE", "items/NOTE0003", "")));  // pulled from Zotero
+    CHECK(blocked(rig.send("DELETE", "items/NOTE0004", "")));  // another plugin's
+    CHECK(blocked(rig.send("DELETE", "items/NOTE0001", "")));  // being added, no DeleteNote
+    CHECK(blocked(rig.send("DELETE", "items/NOTE0002", "", false)));
+    CHECK(blocked(rig.send("DELETE", "items?itemKey=NOTE0002", "")));
+    CHECK(rig.inner.sent.size() == 1);
+}
+
+TEST_CASE("guard: a POST with deleted or an unknown field is refused") {
+    PluginRig rig;
+    auto with = [&](const std::string& field, const nlohmann::json& value) {
+        nlohmann::json o = rig.withKey(rig.created, "NEWITEM1");
+        o[field] = value;
+        return rig.post(nlohmann::json::array({o}));
+    };
+    CHECK(blocked(with("deleted", 1)));
+    CHECK(blocked(with("relations", nlohmann::json::object())));
+    CHECK(blocked(with("parentItem", "BOOK0001")));
+    CHECK(blocked(with("linkMode", "imported_url")));
+    CHECK(blocked(with("dateAdded", "2020-01-01T00:00:00Z")));
+    CHECK(blocked(with("shortTitle", "F")));  // a real field, but not what the change holds
+    CHECK(blocked(with("title", "Other")));   // its content, changed
+    CHECK(blocked(with("version", 3)));       // an existing item's version: an overwrite
+    nlohmann::json other = rig.withKey(rig.created, "NOTPEND1");
+    CHECK(blocked(rig.post(nlohmann::json::array({other}))));  // no create pending under that key
+    nlohmann::json noKey = rig.created;
+    CHECK(blocked(rig.post(nlohmann::json::array({noKey}))));
+    nlohmann::json attachment = rig.withKey(rig.created, "NEWITEM1");
+    attachment["itemType"] = "attachment";
+    CHECK(blocked(rig.post(nlohmann::json::array({attachment}))));
+    // Notes: only its pending parent and HTML, nothing more.
+    nlohmann::json note = {{"key", "NOTE0001"}, {"itemType", "note"}, {"parentItem", "BOOK0001"}, {"note", "<p>hi</p>"}};
+    nlohmann::json wrong = note;
+    wrong["parentItem"] = "BOOK0002";
+    CHECK(blocked(rig.post(nlohmann::json::array({wrong}))));
+    wrong = note;
+    wrong["note"] = "<p>else</p>";
+    CHECK(blocked(rig.post(nlohmann::json::array({wrong}))));
+    wrong = note;
+    wrong["deleted"] = 1;
+    CHECK(blocked(rig.post(nlohmann::json::array({wrong}))));
+    wrong = note;
+    wrong.erase("parentItem");
+    CHECK(blocked(rig.post(nlohmann::json::array({wrong}))));
+    // One bad object refuses the whole request.
+    CHECK(blocked(rig.post(nlohmann::json::array({note, other}))));
+    // Unversioned.
+    CHECK(blocked(rig.send("POST", "items", nlohmann::json::array({note}).dump(), false)));
+    CHECK(rig.inner.sent.empty());
+}
+
+TEST_CASE("guard: without a plugin lookup no plugin write goes out") {
+    Rig rig;  // annotations only
+    nlohmann::json note = {{"key", "NOTE0001"}, {"itemType", "note"}, {"parentItem", "BOOK0001"}, {"note", "x"}};
+    CHECK(blocked(rig.send("POST", "https://api.zotero.org/users/1/items", nlohmann::json::array({note}).dump())));
+    CHECK(blocked(rig.send("PATCH", "https://api.zotero.org/users/1/items/BOOK0001", R"({"deleted":1})")));
+    CHECK(rig.inner.sent.empty());
 }

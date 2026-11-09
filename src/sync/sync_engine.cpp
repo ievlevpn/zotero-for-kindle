@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "zotero/parse.h"
 
+#include <chrono>
 #include <random>
 
 namespace zk {
@@ -41,7 +42,40 @@ json annotationJson(const AnnotationRecord& a) {
     return j;
 }
 
+int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+bool deletedIn(const json& data) {
+    if (!data.is_object() || !data.contains("deleted")) return false;
+    const json& v = data["deleted"];
+    return (v.is_boolean() && v.get<bool>()) || (v.is_number() && v.get<double>() != 0);
+}
+
+constexpr const char* kDeletedInZotero = "It was deleted in Zotero.";
+constexpr const char* kNotAllowed = "The app doesn't allow this change.";
+
 }  // namespace
+
+WriteGuard::PluginChanges pluginChangeShapes(Library& lib) {
+    return [&lib](const std::string& key) -> std::optional<PluginChangeShape> {
+        PluginChangeShape shape;
+        for (auto& c : lib.pendingPluginChanges())
+            if (c.itemKey == key) shape.pending.push_back(std::move(c));
+        if (shape.pending.empty()) return std::nullopt;
+        if (auto item = lib.zoteroItem(key)) {  // as Zotero has it, without pending changes
+            shape.item = true;
+            shape.data = item->json;
+            shape.collections = item->collections;
+        } else if (auto note = lib.zoteroNote(key)) {  // one being deleted too
+            shape.note = true;
+            shape.data = note->json;
+            shape.createdBy = note->createdBy;
+        }
+        return shape;
+    };
+}
 
 SyncEngine::SyncEngine(ZoteroApi& api, Library& lib) : api_(api), lib_(lib) {}
 
@@ -428,6 +462,8 @@ SyncReport SyncEngine::push() {
         }
         // Read marks, on their own too: each item against its own version.
         if (!rep.error) pushReadMarks(rep);
+        // Plugin changes, after the Kindle's own: each refused one on its own.
+        if (!rep.error) pushPluginChanges(rep);
         // Reading positions, on their own: a refused one never holds annotations back.
         if (!rep.error && !pushPositions(rep, precondition) && precondition && !rep.error) {
             SyncReport pulled = pull(nullptr);  // the computer moved: the reader will ask
@@ -446,7 +482,8 @@ SyncReport SyncEngine::push() {
 int SyncEngine::pendingChanges() {
     int n = static_cast<int>(lib_.pendingDeletions().size());
     for (const auto& a : lib_.dirtyAnnotations()) n += !a.conflict && !a.localOnly;
-    return n + static_cast<int>(sendablePositions().size() + lib_.readMarks().size());
+    return n + static_cast<int>(sendablePositions().size() + lib_.readMarks().size() +
+                                lib_.pendingPluginChanges().size());
 }
 
 // Each mark adds the read tag to its item or takes it off, sending the item's whole tag list
@@ -477,7 +514,7 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
             if (mark.read) next.push_back({{"tag", mark.tag}});
             UserError err;
             auto res = api_.patchItem(mark.itemKey, {{"tags", next}}, item->version, &err);
-            if (!res) {
+            if (!res || !res->failed.empty()) {
                 rep.error = err;
                 return false;
             }
@@ -516,6 +553,303 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
         }
     }
     return true;
+}
+
+// Plugin changes in dependency order. New items go first (≤50 per POST, against the library
+// version), then new notes (one may go on an item made just before), then each edit on its own
+// against its object's version. A change waiting on one not sent yet waits for the next sync.
+bool SyncEngine::pushPluginChanges(SyncReport& rep) {
+    using K = PluginChange::Kind;
+    using S = PluginChange::State;
+    const std::vector<PluginChange> initial = lib_.pendingPluginChanges();
+    if (initial.empty()) return true;
+    auto ready = [&](const PluginChange& c) {  // what it targets is in Zotero (or never will be)
+        if (c.dependsOn.empty()) return true;
+        auto d = lib_.pluginChange(c.dependsOn);
+        return !d || d->state != S::Pending;
+    };
+    auto creates = [&](K kind) {
+        std::vector<PluginChange> out;
+        for (auto& c : lib_.pendingPluginChanges())
+            if (c.kind == kind && ready(c)) out.push_back(std::move(c));
+        return out;
+    };
+    bool ok = true;
+    for (K kind : {K::CreateItem, K::AddNote}) {
+        bool precondition = false;
+        if (!pushPluginCreates(rep, creates(kind), precondition)) {
+            ok = false;
+            break;
+        }
+        if (!precondition) continue;
+        // The library changed on the server since our version: pull, then once more.
+        SyncReport pulled = pull(nullptr);
+        rep.conflicts += pulled.conflicts;
+        if (pulled.error) {
+            rep.error = pulled.error;
+            ok = false;
+            break;
+        }
+        if (!pushPluginCreates(rep, creates(kind), precondition)) {
+            ok = false;
+            break;
+        }
+        if (precondition) log(LogLevel::Warn, "sync: plugin changes: Zotero kept changing (412 twice); next time");
+    }
+    if (ok)
+        for (const auto& c : lib_.pendingPluginChanges()) {
+            if (c.kind == K::CreateItem || c.kind == K::AddNote || !ready(c)) continue;
+            auto now = lib_.pluginChange(c.id);  // an earlier one may have ended it (its item went)
+            if (!now || now->state != S::Pending) continue;
+            if (!pushPluginEdit(rep, *now)) {
+                ok = false;
+                break;
+            }
+        }
+    for (const auto& c : initial) {
+        auto now = lib_.pluginChange(c.id);
+        if (now && now->state == S::Sent) ++rep.pluginSent;
+        if (now && now->state == S::Refused) ++rep.pluginRefused;
+    }
+    log(LogLevel::Info, "sync: plugin changes: %d sent, %d refused, %d waiting", rep.pluginSent, rep.pluginRefused,
+        static_cast<int>(lib_.pendingPluginChanges().size()));
+    return ok;
+}
+
+// New items or notes, under the keys they have here (made here, like the Kindle's annotations: a
+// lost answer can't make a second copy). False only if the connection failed.
+bool SyncEngine::pushPluginCreates(SyncReport& rep, std::vector<PluginChange> changes, bool& preconditionFailed) {
+    using K = PluginChange::Kind;
+    preconditionFailed = false;
+    std::vector<PluginChange> toSend;
+    std::vector<json> objects;
+    {
+        auto tx = lib_.begin();
+        for (const auto& c : changes) {
+            if (lib_.objectVersion(c.itemKey) > 0) {  // in Zotero already: an earlier answer was lost
+                lib_.markPluginChange(c.id, PluginChange::State::Sent, "", nowMs());
+                continue;
+            }
+            std::string data;
+            if (c.kind == K::CreateItem) {
+                if (auto item = lib_.zoteroItem(c.itemKey)) data = item->json;
+            } else if (auto note = lib_.zoteroNote(c.itemKey)) {
+                data = note->json;
+            }
+            json obj = json::parse(data, nullptr, false);
+            if (!obj.is_object()) {
+                lib_.markPluginChange(c.id, PluginChange::State::Refused, "It is not in the library any more.");
+                continue;
+            }
+            obj["key"] = c.itemKey;
+            obj.erase("version");  // new
+            toSend.push_back(c);
+            objects.push_back(std::move(obj));
+        }
+        tx.commit();
+    }
+    // One request per batch; if the guard refuses a batch, each of its objects is tried alone, so
+    // a wrong one is refused without holding the others back.
+    std::function<bool(size_t, size_t)> send = [&](size_t from, size_t to) -> bool {
+        json batch = json::array();
+        for (size_t j = from; j < to; ++j) batch.push_back(objects[j]);
+        UserError err;
+        auto res = api_.createItems(batch, lib_.libraryVersion(), &err);
+        if (!res && err.kind == ErrorKind::Blocked) {
+            if (to - from > 1) {
+                for (size_t j = from; j < to; ++j)
+                    if (!send(j, j + 1)) return false;
+                return true;
+            }
+            lib_.markPluginChange(toSend[from].id, PluginChange::State::Refused, kNotAllowed);
+            return true;
+        }
+        if (!res) {
+            rep.error = err;
+            return false;
+        }
+        if (res->preconditionFailed) {
+            preconditionFailed = true;
+            return true;
+        }
+        std::vector<std::string> lookUp;  // refused as already there: Zotero may have it from an earlier send
+        {
+            auto tx = lib_.begin();
+            for (const auto& [index, key] : res->successKeys) {
+                if (index < 0 || static_cast<size_t>(index) >= to - from) continue;
+                const PluginChange& c = toSend[from + index];
+                if (auto it = res->successful.find(index); it != res->successful.end() && it->second.value("key", "") == c.itemKey) {
+                    apply(it->second, rep);  // Zotero's copy, at its version
+                } else {
+                    lib_.setObjectVersion(c.itemKey, res->libraryVersion);
+                }
+                lib_.markPluginChange(c.id, PluginChange::State::Sent, "", nowMs());
+            }
+            lib_.setLibraryVersion(res->libraryVersion);  // our write was the only change since (else 412)
+            for (const auto& [index, message] : res->failed) {
+                if (index < 0 || static_cast<size_t>(index) >= to - from) continue;
+                const PluginChange& c = toSend[from + index];
+                auto code = res->failedCodes.find(index);
+                if (code != res->failedCodes.end() && (code->second == 412 || code->second == 428)) {
+                    lookUp.push_back(c.itemKey);
+                    continue;
+                }
+                lib_.markPluginChange(c.id, PluginChange::State::Refused, message);
+            }
+            tx.commit();
+        }
+        if (!lookUp.empty()) {
+            UserError err2;
+            auto there = api_.fetch("items", lookUp, &err2);
+            if (!there) {
+                rep.error = err2;
+                return false;
+            }
+            auto tx = lib_.begin();
+            for (const auto& obj : *there) {
+                const std::string key = obj.value("key", "");
+                for (size_t j = from; j < to; ++j)
+                    if (toSend[j].itemKey == key) {
+                        apply(obj, rep);
+                        lib_.markPluginChange(toSend[j].id, PluginChange::State::Sent, "", nowMs());
+                    }
+            }
+            tx.commit();  // one not there: left pending, tried again next time
+        }
+        return true;
+    };
+    for (size_t i = 0; i < objects.size() && !preconditionFailed; i += kBatch)
+        if (!send(i, std::min(objects.size(), i + kBatch))) return false;
+    return true;
+}
+
+// One tag, collection, trash or note deletion, against its object's version; made again on
+// Zotero's fresh copy after a 412, once. False only if the connection failed.
+bool SyncEngine::pushPluginEdit(SyncReport& rep, const PluginChange& c) {
+    using K = PluginChange::Kind;
+    using S = PluginChange::State;
+    auto end = [&](S state, const std::string& message) {
+        lib_.markPluginChange(c.id, state, message, state == S::Sent ? nowMs() : 0);
+        return true;
+    };
+    for (int attempt = 0;; ++attempt) {
+        std::optional<ItemRecord> item;
+        json data, body;
+        std::optional<WriteResult> res;
+        UserError err;
+        if (c.kind == K::DeleteNote) {
+            auto note = lib_.zoteroNote(c.itemKey);
+            if (!note) return end(S::Refused, kDeletedInZotero);
+            // Only a note the same plugin added (the guard checks it too).
+            if (note->createdBy.empty() || note->createdBy != c.pluginId)
+                return end(S::Refused, "Only a note the plugin added can be deleted.");
+            const int64_t version = note->version > 0 ? note->version : lib_.objectVersion(c.itemKey);
+            if (version <= 0) return true;  // not in Zotero yet: next time
+            res = api_.deleteItem(c.itemKey, version, &err);
+        } else {
+            item = lib_.zoteroItem(c.itemKey);  // Zotero's copy, without pending changes
+            if (!item) return end(S::Refused, kDeletedInZotero);
+            if (item->version <= 0) return true;  // not in Zotero yet: next time
+            data = json::parse(item->json, nullptr, false);
+            if (!data.is_object()) data = json::object();
+            // The lists the guard checks against, should the data lack them.
+            if (!data.contains("collections") || !data["collections"].is_array()) data["collections"] = item->collections;
+            if (!data.contains("tags") || !data["tags"].is_array()) {
+                data["tags"] = json::array();
+                for (const auto& t : item->tags) data["tags"].push_back({{"tag", t}});
+            }
+            bool already = false;
+            switch (c.kind) {
+                case K::Trash:
+                    already = deletedIn(data);
+                    body = {{"deleted", 1}};
+                    break;
+                case K::AddTag:
+                case K::RemoveTag: {
+                    const bool add = c.kind == K::AddTag;
+                    json next = json::array();
+                    bool has = false;
+                    if (data.contains("tags") && data["tags"].is_array())
+                        for (const auto& t : data["tags"]) {
+                            const bool same = t.is_object() && t.value("tag", "") == c.value;
+                            has = has || same;
+                            if (!same) next.push_back(t);
+                        }
+                    already = has == add;
+                    if (add) next.push_back({{"tag", c.value}});
+                    body = {{"tags", next}};
+                    break;
+                }
+                default: {  // a collection
+                    const bool add = c.kind == K::AddToCollection;
+                    json next = json::array();
+                    bool has = false;
+                    if (data.contains("collections") && data["collections"].is_array())
+                        for (const auto& k : data["collections"]) {
+                            const bool same = k.is_string() && k.get<std::string>() == c.value;
+                            has = has || same;
+                            if (!same) next.push_back(k);
+                        }
+                    already = has == add;
+                    if (add) next.push_back(c.value);
+                    body = {{"collections", next}};
+                    break;
+                }
+            }
+            if (already) return end(S::Sent, "");  // so in Zotero already: nothing to send
+            res = api_.patchItem(c.itemKey, body, item->version, &err);
+        }
+        if (!res && err.kind == ErrorKind::Blocked) return end(S::Refused, kNotAllowed);
+        if (!res) {
+            rep.error = err;
+            return false;
+        }
+        if (res->gone) return end(S::Refused, kDeletedInZotero);
+        if (!res->failed.empty()) return end(S::Refused, res->failed.begin()->second);
+        if (res->preconditionFailed) {
+            if (attempt > 0) {
+                log(LogLevel::Warn, "sync: plugin change %s on %s refused twice (412); next time", c.id.c_str(),
+                    c.itemKey.c_str());
+                lib_.markPluginChange(c.id, S::Pending, "Changed in Zotero meanwhile; it will be sent at the next sync.");
+                return true;
+            }
+            UserError err2;
+            auto objects = api_.fetch("items", {c.itemKey}, &err2);
+            if (!objects) {
+                rep.error = err2;
+                return false;
+            }
+            if (objects->empty()) return end(S::Refused, kDeletedInZotero);
+            auto tx = lib_.begin();
+            for (const auto& obj : *objects) {
+                // Trashed in Zotero already: what the change asked for.
+                if (c.kind == K::Trash && trashed(obj)) lib_.markPluginChange(c.id, S::Sent, "", nowMs());
+                apply(obj, rep);
+            }
+            tx.commit();
+            auto now = lib_.pluginChange(c.id);
+            if (!now || now->state != S::Pending) return true;
+            continue;
+        }
+        auto tx = lib_.begin();
+        if (c.kind != K::DeleteNote && c.kind != K::Trash) {
+            // Zotero's copy is the one sent now (its version: the library's after our write).
+            for (const auto& [field, value] : body.items()) data[field] = value;
+            item->json = data.dump();
+            item->collections.clear();
+            for (const auto& k : data["collections"])
+                if (k.is_string()) item->collections.push_back(k.get<std::string>());
+            item->tags.clear();
+            for (const auto& t : data["tags"])
+                if (t.is_object()) item->tags.push_back(t.value("tag", ""));
+            item->version = res->libraryVersion;
+            lib_.upsertItem(*item);
+        }
+        lib_.setObjectVersion(c.itemKey, res->libraryVersion);
+        lib_.markPluginChange(c.id, S::Sent, "", nowMs());  // a trashed item or deleted note goes here too
+        tx.commit();
+        return true;
+    }
 }
 
 // Reading positions to send: of the library's files, and well-formed.

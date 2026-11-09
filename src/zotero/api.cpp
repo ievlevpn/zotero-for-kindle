@@ -208,6 +208,9 @@ std::optional<WriteResult> ZoteroApi::createItems(const json& array, int64_t ifU
     if (j.contains("success") && j["success"].is_object())
         for (auto it = j["success"].begin(); it != j["success"].end(); ++it)
             if (it.value().is_string()) out.successKeys[index(it.key())] = it.value().get<std::string>();
+    if (j.contains("successful") && j["successful"].is_object())
+        for (auto it = j["successful"].begin(); it != j["successful"].end(); ++it)
+            if (it.value().is_object()) out.successful[index(it.key())] = it.value();
     if (j.contains("failed") && j["failed"].is_object())
         for (auto it = j["failed"].begin(); it != j["failed"].end(); ++it)
         {
@@ -267,6 +270,36 @@ std::optional<WriteResult> ZoteroApi::patchItem(const std::string& key, const js
     }
     if (r.curlCode == 0 && r.status == 404) {
         out.gone = true;
+        return out;
+    }
+    if (r.curlCode == 0 && (r.status == 400 || r.status == 413)) {  // what was sent is refused, not the connection
+        out.failed[0] = r.body.empty() ? "HTTP " + std::to_string(r.status) : r.body;
+        out.failedCodes[0] = static_cast<int>(r.status);
+        return out;
+    }
+    if (r.curlCode || r.status != 204) return std::nullopt;
+    return out;
+}
+
+std::optional<WriteResult> ZoteroApi::deleteItem(const std::string& key, int64_t itemVersion, UserError* err) {
+    HttpRequest req;
+    req.method = "DELETE";
+    req.url = userUrl("/items/" + key);
+    req.headers = {{"If-Unmodified-Since-Version", std::to_string(itemVersion)}};
+    HttpResponse r = send(req, err);
+    WriteResult out;
+    out.libraryVersion = libraryVersionOf(r);
+    if (r.curlCode == 0 && r.status == 412) {
+        out.preconditionFailed = true;
+        return out;
+    }
+    if (r.curlCode == 0 && r.status == 404) {
+        out.gone = true;
+        return out;
+    }
+    if (r.curlCode == 0 && r.status == 400) {
+        out.failed[0] = r.body.empty() ? "HTTP 400" : r.body;
+        out.failedCodes[0] = 400;
         return out;
     }
     if (r.curlCode || r.status != 204) return std::nullopt;

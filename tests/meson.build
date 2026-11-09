@@ -13,6 +13,7 @@ test_sources = files(
   'test_vendored.cpp',
   'test_http_fake.cpp',
   'test_write_guard.cpp',
+  'test_plugin_push.cpp',
   'test_mark_read.cpp',
   'test_search_scope.cpp',
   'test_notes_search.cpp',

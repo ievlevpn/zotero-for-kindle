@@ -31,7 +31,8 @@ struct Rig {
                      [this](const std::string& k) -> std::optional<std::vector<std::string>> {
                          if (auto i = lib.zoteroItem(k)) return i->tags;
                          return std::nullopt;
-                     }};
+                     },
+                     pluginChangeShapes(lib)};
     ZoteroApi api{guard, 1, "k3y"};
     SyncEngine engine{api, lib};
 
@@ -430,7 +431,7 @@ TEST_CASE("changes: a read mark is still sent while a plugin's tag waits") {
     REQUIRE_FALSE(rig.engine.push().error);
     std::vector<std::string> server;
     for (const auto& t : rig.server.items["BOOK0002"]["data"]["tags"]) server.push_back(t["tag"]);
-    CHECK(server == std::vector<std::string>{"read"});  // only the read tag: the plugin's is Task 12's
+    CHECK(server == std::vector<std::string>{"read", "plugin-tag"});  // the read tag first, then the plugin's
     CHECK(rig.lib.readMarks().empty());
     CHECK(rig.tags("BOOK0002") == std::vector<std::string>{"read", "plugin-tag"});
 }
@@ -440,9 +441,11 @@ TEST_CASE("changes: a read mark on an item a plugin is trashing is still sent") 
     const std::string trash = rig.queue("p", Kind::Trash, "BOOK0002");
     rig.lib.markRead("BOOK0002", true);
     REQUIRE_FALSE(rig.engine.push().error);
+    // The read tag first, then the trash, each against the version before it.
     CHECK(rig.server.items["BOOK0002"]["data"]["tags"] == json::array({{{"tag", "read"}}}));
-    CHECK(rig.lib.cancelPluginChange("p", trash));
-    CHECK(rig.lib.rowFor("BOOK0002")->read);
+    CHECK(rig.server.items["BOOK0002"]["data"]["deleted"] == 1);
+    CHECK(rig.stateOf(trash) == State::Sent);
+    CHECK(rig.lib.readMarks().empty());
 }
 
 TEST_CASE("changes: what Zotero deletes stays deleted, its pending removals ended") {
