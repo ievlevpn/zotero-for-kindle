@@ -123,7 +123,11 @@ test fixture and `sdk/check.sh` (the spec's API section already points to them).
    **`zk.storage.update<T>(key, fn)`**: `fn` gets the stored value (or `undefined`) and returns
    the new one; returning `undefined` deletes the key; it resolves with what was stored. A
    plugin's updates run strictly in order (a per-plugin queue in the app), and `fn` may be async.
-   It is documented as the way to do read-modify-write. Both stateful examples now use it, and
+   It is documented as the way to do read-modify-write. Rulings that followed (controller):
+   `set` and `delete` share the same per-plugin queue, so **all storage writes apply in the order
+   they were asked**; a storage write (`update`, `set` or `delete`, any key) called inside an
+   `update`'s `fn` **rejects at once** with an Error saying it can't be called there, instead of
+   waiting on itself until the budget runs out; `get` and `update` hand back fresh copies. Both stateful examples now use it, and
    `serially` is gone from both: nothing in them needed to sequence more than storage. The
    controller's ruling from review round 1 stands: a call stopped by a limit has its pending work
    cancelled and rejected with `zk.LimitError`, so the queue never hangs.

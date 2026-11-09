@@ -239,7 +239,8 @@ declare namespace zk {
     get<T = Json>(key: string): Promise<T | undefined>;
 
     /**
-     * Stores a JSON value under `key`, replacing what was there.
+     * Stores a JSON value under `key`, replacing what was there. Queued with the plugin's other
+     * storage writes, so writes apply in the order they were asked (see {@link update}).
      *
      * @example
      * await zk.storage.set("lastRun", new Date().toISOString());
@@ -251,15 +252,18 @@ declare namespace zk {
      * the stored value (`undefined` if there is none) and returns the new one; returning
      * `undefined` deletes the key. Resolves with what was stored.
      *
-     * A plugin's updates run strictly in order, one at a time (the app keeps a queue per plugin):
-     * an update's `fn` starts only when the previous update has finished, however its calls
+     * All of a plugin's storage writes — `set`, `delete` and `update` — go through one queue (the
+     * app keeps one per plugin) and apply in the order they were asked, one at a time: an
+     * update's `fn` starts only when the writes asked before it have finished, however calls
      * interleave. So two event handlers updating the same key can't lose each other's change.
-     * `fn` may be `async` and may await other calls (the library, files, `zk.zotero`) — the next
-     * update waits for it, so keep it short. If `fn` throws, or its call is stopped by a limit,
-     * nothing is stored, the update rejects, and the next one runs.
+     * `fn` may be `async` and may await other calls (the library, files, `zk.zotero`) — the
+     * writes after it wait, so keep it short. If `fn` throws, or its call is stopped by a limit,
+     * nothing is stored, the update rejects, and the next write runs.
      *
-     * `set` and `delete` aren't queued: don't mix them with `update` on the same key. Inside `fn`,
-     * don't call `update` (it would wait for itself until the call's time runs out).
+     * Inside `fn`, write only by returning: calling `update`, `set` or `delete` there (on any
+     * key) would wait for `fn` itself, so it rejects at once with an `Error`
+     * ("zk.storage.update can't be called inside another update's function", or `set` /
+     * `delete` for those). `get` and `keys` are fine.
      *
      * @example
      * // count, safely from any number of handlers at once
@@ -276,7 +280,8 @@ declare namespace zk {
     update<T = Json>(key: string, fn: (old: T | undefined) => T | undefined | Promise<T | undefined>): Promise<T | undefined>;
 
     /**
-     * Removes `key`. Resolves `true` if it was there.
+     * Removes `key`. Resolves `true` if it was there. Queued with the plugin's other storage
+     * writes (see {@link update}).
      *
      * @example
      * await zk.storage.delete("draft");
