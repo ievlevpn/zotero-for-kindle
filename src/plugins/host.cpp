@@ -1328,10 +1328,14 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
     }
     impl_->state.setEnabled(id, on);
     if (on) impl_->state.clearFailures(id);
-    impl_->post([id, on](Impl& h) {
+    // Developer mode (loadEagerly): a plugin turned on loads at once, as at start. Otherwise
+    // (the Kindle) it waits for its first event. Before start(), start() loads it.
+    const bool loadNow = on && impl_->started && impl_->deps.loadEagerly;
+    impl_->post([id, on, loadNow](Impl& h) {
         h.failedLoad.erase(id);
         h.setProblem(id, "");
         if (!on) h.unload(id);
+        else if (loadNow && !h.loaded.count(id)) h.reload(&id);
     });
 }
 

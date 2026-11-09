@@ -94,19 +94,14 @@ A plugin is off until you have read what it may do and turned it on — on the d
 2. The list shows **Hello**, with *New — not turned on yet*. Tap it.
 3. Its page lists what it can do: *Reads your library*. Tap **Turn on**.
 
-A plugin that was just turned on starts at its next event, or, in the desktop build, when its
-`main.js` changes. To start it now, build again in the first terminal:
-
-```sh
-npm run build
-```
-
-Within a second the app's terminal shows:
+In the desktop build a plugin starts as soon as it is turned on. The app's terminal shows:
 
 ```
-… INFO plugins: hello/main.js changed: reloading
 [plugin hello] 2026-11-09 22:59:41 hello 0.1.0 loaded
 ```
+
+If the page says *Incompatible: needs app 0.3.0* instead of offering **Turn on**, see `minApp` in
+step 7.
 
 The app remembers that it is on (in `dist/.state.json`), so from now on Hello starts with the app.
 
@@ -125,7 +120,8 @@ EOF
 npm run build
 ```
 
-The app reloads Hello (`hello 0.1.0 loaded` again). Now tap the sync button on Home (the round
+Within a second the app notices the new `main.js` and reloads Hello: the terminal shows
+`plugins: hello/main.js changed: reloading`, then `hello 0.1.0 loaded` again. Now tap the sync button on Home (the round
 arrows at the top right). When the sync ends, the terminal shows:
 
 ```
@@ -186,7 +182,9 @@ Edit `plugin.json`:
   writes `dist/<id>/`. A new id is a new plugin: turn it on again.
 - `name` (up to 40 characters), `description` and `author` are what people see in Settings → Plugins.
 - `api`: the plugin API it was written for; `0` is the current one, still unstable.
-- `minApp`: the oldest app version it runs on. Plugins arrived in 0.3.0.
+- `minApp`: the oldest app version it runs on. Plugins arrived in 0.3.0. It must not be newer than
+  the app you run (see Settings → About); if you build the app from a pre-release checkout, lower
+  `minApp` in your copy.
 - `permissions`: what it may do, shown before it is turned on. Ask for what you use and nothing
   more; calling something you didn't declare fails with an error naming the permission to add.
   See [Concepts](concepts.md#permissions).

@@ -98,7 +98,7 @@ The spec's "The API (v0)" section was updated to match after the review.
    to write, but a 30-second background run would hold up an event or an action. Both stateful
    examples needed the same helper, which is a smell. A middle way: a `zk.storage.update(key,
    fn)` that runs updates in order. Either way, a plugin-side queue is only safe if a stopped
-   call can't leave it waiting forever. **Ruled (controller, review round 1):** when a call is
+   call can't leave it waiting forever. **Decided during the API review:** when a call is
    stopped by a limit, the app cancels the work it started and every pending promise of that work
    rejects with `zk.LimitError`; now stated in `zk.d.ts` (`LimitError`, `zk.on`,
    `zk.background`). The examples also keep each queued job short (one book), so an event
@@ -123,15 +123,15 @@ test fixture and `sdk/check.sh` (the spec's API section already points to them).
    **`zk.storage.update<T>(key, fn)`**: `fn` gets the stored value (or `undefined`) and returns
    the new one; returning `undefined` deletes the key; it resolves with what was stored. A
    plugin's updates run strictly in order (a per-plugin queue in the app), and `fn` may be async.
-   It is documented as the way to do read-modify-write. Rulings that followed (controller):
+   It is documented as the way to do read-modify-write. Decided with it during the API review:
    `set` and `delete` share the same per-plugin queue, so **all storage writes apply in the order
    they were asked**; a storage write (`update`, `set` or `delete`, any key) called inside an
    `update`'s `fn` **rejects at once** with an Error saying it can't be called there, instead of
    waiting on itself until the budget runs out; `get` and `update` hand back fresh copies. Both stateful examples now use it, and
    `serially` is gone from both: nothing in them needed to sequence more than storage. The
-   controller's ruling from review round 1 stands: a call stopped by a limit has its pending work
+   earlier decision stands: a call stopped by a limit has its pending work
    cancelled and rejected with `zk.LimitError`, so the queue never hangs.
-2. **Handler budgets (open question 2): ruled by the controller.** A call's budget counts from
+2. **Handler budgets (open question 2): decided during the API review.** A call's budget counts from
    when it starts running; time queued behind other plugins' calls doesn't count, and neither does
    time waiting for the user's confirmation. Stated in the header of `zk.d.ts`, in `zk.on`,
    `zk.background`, the actions and `LimitError`.

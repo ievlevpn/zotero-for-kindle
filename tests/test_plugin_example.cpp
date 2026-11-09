@@ -214,6 +214,35 @@ TEST_CASE("example: with loadEagerly start() loads enabled plugins at once; by d
     }
 }
 
+TEST_CASE("example: turning a plugin on loads it at once in the eager mode (developer); by default it waits for an event") {
+    for (bool eager : {true, false}) {
+        FakePlugins fp;
+        fp.add("a", "console.log('a loaded');");
+        PluginHostDeps d = fp.deps();
+        d.loadEagerly = eager;
+        PluginHost host(d);
+        host.start();
+        host.waitIdle(3000);  // nothing is on: nothing loaded
+        CHECK(fp.log("a").empty());
+        host.setEnabled("a", true);  // Settings → Plugins → Turn on
+        host.waitIdle(3000);
+        if (eager) {
+            CHECK(logged(fp, "a", "a loaded"));
+            host.setEnabled("a", true);  // on again while loaded: not reloaded
+            host.waitIdle(3000);
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            const std::string log = fp.log("a");
+            size_t n = 0;
+            for (size_t at = log.find("a loaded"); at != std::string::npos; at = log.find("a loaded", at + 1)) ++n;
+            CHECK(n == 1);
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            CHECK(fp.log("a").empty());  // the Kindle: lazy, until its first event
+        }
+        host.stop();
+    }
+}
+
 TEST_CASE("example: reload(id) in the eager mode loads a folder created after start() that the state enables; not otherwise") {
     for (bool eager : {true, false}) {
         FakePlugins fp;
@@ -236,7 +265,7 @@ TEST_CASE("example: reload(id) in the eager mode loads a folder created after st
     }
 }
 
-TEST_CASE("example: reload(id) in the eager mode loads a listed, enabled plugin that wasn't loaded; not a disabled or a broken one") {
+TEST_CASE("example: in the eager mode a plugin turned on loads; reload(id) of a disabled or a broken one stays silent") {
     FakePlugins fp;
     fp.add("wasoff", "console.log('wasoff loaded');");
     fp.add("off", "console.log('off loaded');");
@@ -247,11 +276,7 @@ TEST_CASE("example: reload(id) in the eager mode loads a listed, enabled plugin 
     PluginHost host(d);
     host.start();
     host.waitIdle(3000);  // nothing is enabled: nothing loaded
-    host.setEnabled("wasoff", true);  // turning on doesn't load by itself
-    host.waitIdle(3000);
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    CHECK(fp.log("wasoff").empty());
-    host.reload("wasoff");
+    host.setEnabled("wasoff", true);  // turning on loads it (developer mode)
     host.reload("off");
     host.reload("broken");
     host.waitIdle(3000);

@@ -61,7 +61,7 @@ A folder whose `plugin.json` is broken is listed in Settings → Plugins with wh
 - **Off until turned on.** A plugin someone copied in is off until they open its page in
   Settings → Plugins, read its permissions and tap **Turn on**.
 - **Loaded when needed.** Plugins load after the app's first screen is shown, at the first event
-  or background run. (In the desktop build with `--plugins-dir`, at once.)
+  or background run. (In the desktop build with `--plugins-dir`, at once, and as soon as one is turned on.)
 - **`main.js` runs once.** Its top level registers what the plugin reacts to — `zk.on(…)`,
   `zk.background(…)` — and the module stays loaded while the plugin is on. Module-level variables
   last from one call to the next, but not across a restart of the app or of the plugin: keep what

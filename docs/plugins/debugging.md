@@ -30,7 +30,8 @@ cd "$ZK"   # the repo's top folder
 
 - `--plugins-dir <dir>` uses `<dir>` as the plugins folder: every folder in it that holds a
   `plugin.json` is a plugin. Point it at your plugin's `dist/`, or at a folder of several plugins.
-- Logs go to the terminal; the plugins that are on start with the app.
+- Logs go to the terminal; the plugins that are on start with the app, and a plugin starts as soon
+  as you turn it on.
 - When a plugin's `main.js` changes (`npm run build`), that plugin is reloaded within a second:
   `main.js` runs afresh; its storage and files stay. A folder that appears while the app runs is
   picked up the same way.
@@ -95,8 +96,8 @@ and try them in the desktop build against your own library.
 | `zk.zotero.deleteNote: only a note this plugin added can be deleted (…)` | Other notes can't be deleted by a plugin. | Check `note.createdBy === zk.plugin.id`. |
 | `settings.json isn't a JSON object; zk.settings is {}` | The user's `settings.json` didn't parse. | Fix the file; the plugin reads it when it loads. |
 | `Uncaught (in promise) …` (a warning) | A promise rejected and nothing awaited it. Not counted as a failure. | Await it, or catch. |
-| *Incompatible: needs app 0.3.0* in Settings → Plugins | The app is older than the plugin's `minApp`. | Update the app. |
+| *Incompatible: needs app 0.3.0* in Settings → Plugins | The app is older than the plugin's `minApp`. | Update the app. Building the app from a pre-release checkout, lower `minApp` in your copy. |
 | *Incompatible: written for plugin API 1* | The plugin was written for another API version. | Use a version of the plugin for this app's API (0). |
 | *Can't load: The id "…" in plugin.json must be the folder's name.* (or another problem with `plugin.json`) | The folder can't be loaded as it is. | Fix `plugin.json` or the folder's name. `node "$ZK/sdk/validate-manifest.mjs" plugin.json` checks a manifest against the schema (run `npm install` in `$ZK/sdk` once first). |
 | *New — not turned on yet*, and nothing in the log | The plugin is off. | Turn it on in Settings → Plugins. |
-| On, but nothing in the log | Plugins load at their first event (a sync will do). In the desktop build, a plugin just turned on loads when its `main.js` changes, or at the next start. | Sync, or `npm run build`. |
+| On, but nothing in the log | On the Kindle, plugins load at their first event (a sync will do). The desktop build with `--plugins-dir` loads a plugin as soon as it is turned on. | Sync. |
