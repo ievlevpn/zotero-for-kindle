@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
+#include <chrono>
 #include <ctime>
 #include <random>
 
@@ -18,7 +19,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 7;
+constexpr int64_t kSchemaVersion = 8;
 
 // The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
@@ -87,6 +88,26 @@ CREATE TRIGGER IF NOT EXISTS annotations_fts_update AFTER UPDATE ON annotations 
   INSERT INTO note_fts(rowid, text, comment, tags) VALUES (new.rowid, new.text, new.comment, new.tags);
 END;
 )sql";
+
+// Changes plugins asked for (Library::queuePluginChange). kind and state as plugin_changes.h names
+// them; seq is the order they were asked in.
+const char* kPluginChanges = R"sql(
+CREATE TABLE IF NOT EXISTS plugin_changes (id TEXT PRIMARY KEY, seq INTEGER NOT NULL, pluginId TEXT NOT NULL,
+  kind TEXT NOT NULL, itemKey TEXT NOT NULL DEFAULT '', parentKey TEXT NOT NULL DEFAULT '', value TEXT NOT NULL DEFAULT '',
+  dependsOn TEXT NOT NULL DEFAULT '', state TEXT NOT NULL DEFAULT 'pending', message TEXT NOT NULL DEFAULT '',
+  createdMs INTEGER NOT NULL DEFAULT 0, sentMs INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS plugin_changes_item ON plugin_changes(itemKey, state);
+CREATE INDEX IF NOT EXISTS plugin_changes_plugin ON plugin_changes(pluginId, seq);
+CREATE INDEX IF NOT EXISTS plugin_changes_state ON plugin_changes(state, seq);
+CREATE INDEX IF NOT EXISTS plugin_changes_depends ON plugin_changes(dependsOn) WHERE dependsOn != '';
+)sql";
+
+// Not in the trash by a plugin change still to be sent (the item is `alias`.key): such an item
+// is hidden from lists, search and details until the change is sent or withdrawn.
+std::string notTrashed(const std::string& keyColumn) {
+    return " AND NOT EXISTS (SELECT 1 FROM plugin_changes p WHERE p.itemKey = " + keyColumn +
+           " AND p.kind = 'trash' AND p.state = 'pending')";
+}
 
 // Version 6 on an older database: book search without highlight text (then kNoteSearch, filled).
 const char* kVersion6 = R"sql(
@@ -223,6 +244,37 @@ std::string ftsQuery(const std::string& input) {
     return out;
 }
 
+// Zotero's data JSON with its "tags" and "collections" filled from these if it has none (a record
+// made without Zotero's data): then the JSON always holds the base the pending changes apply to.
+std::string withBaseLists(const std::string& data, const std::vector<std::string>& tags,
+                          const std::vector<std::string>& collections) {
+    json d = json::parse(data, nullptr, false);
+    if (!d.is_object()) d = json::object();
+    if (d.contains("tags") && d["tags"].is_array() && d.contains("collections") && d["collections"].is_array())
+        return data;
+    if (!d.contains("tags") || !d["tags"].is_array()) {
+        d["tags"] = json::array();
+        for (const auto& t : tags) d["tags"].push_back({{"tag", t}});
+    }
+    if (!d.contains("collections") || !d["collections"].is_array()) d["collections"] = collections;
+    return d.dump();
+}
+
+// The tags and collections in Zotero's data JSON; false if it has none.
+bool baseLists(const std::string& data, std::vector<std::string>& tags, std::vector<std::string>& collections) {
+    json d = json::parse(data, nullptr, false);
+    if (!d.is_object() || !d.contains("tags") || !d["tags"].is_array() || !d.contains("collections") ||
+        !d["collections"].is_array())
+        return false;
+    tags.clear();
+    for (const auto& t : d["tags"])
+        if (t.is_object() && t.contains("tag") && t["tag"].is_string()) tags.push_back(t["tag"].get<std::string>());
+    collections.clear();
+    for (const auto& c : d["collections"])
+        if (c.is_string()) collections.push_back(c.get<std::string>());
+    return true;
+}
+
 }  // namespace
 
 Transaction::Transaction(Library& lib) : lib_(lib) {
@@ -271,8 +323,8 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 6) {
-            // Versions 2 to 6 may hold unsent Kindle work, so they are extended in place, never rebuilt.
+        if (version >= 2 && version <= 7) {
+            // Versions 2 to 7 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
                     "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
@@ -284,7 +336,7 @@ void Library::migrate() {
                 "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');");
             db_.exec(  // version 5: read marks
                 "CREATE TABLE IF NOT EXISTS read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);");
-            db_.exec(kVersion6);
+            if (version <= 6) db_.exec(kVersion6);
             db_.exec(  // version 7: Zotero notes
                 "CREATE TABLE IF NOT EXISTS notes (key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', html TEXT NOT "
                 "NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT "
@@ -299,13 +351,14 @@ void Library::migrate() {
                 st.bind(1, std::string(table));
                 return st.step();
             };
-            if (has("items"))
+            if (has("items") && version <= 6)  // kVersion6 emptied it
                 db_.exec("INSERT INTO item_fts(rowid, title, creators, publication, tags) "
                          "SELECT rowid, title, creatorsText, publication, tagsText FROM items;");
             if (!has("note_fts")) {
                 db_.exec(kNoteSearch);
                 db_.exec("INSERT INTO note_fts(rowid, text, comment, tags) SELECT rowid, text, comment, tags FROM annotations;");
             }
+            db_.exec(kPluginChanges);  // version 8: plugin changes
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -326,6 +379,7 @@ void Library::migrate() {
         }
         db_.exec(kSchema);
         db_.exec(kNoteSearch);
+        db_.exec(kPluginChanges);
         db_.setUserVersion(kSchemaVersion);
         db_.exec("COMMIT");
     } catch (...) {
@@ -392,8 +446,13 @@ void Library::upsertItem(const ItemRecord& r) {
             "sortCreator=excluded.sortCreator");
         st.bind(1, r.key).bind(2, r.version).bind(3, r.itemType).bind(4, r.title).bind(5, r.date);
         st.bind(6, r.publication).bind(7, r.parentKey).bind(8, creators.dump());
+        // Pending plugin changes on it are applied again below, to Zotero's lists (kept in its json).
+        Stmt pending = db_.prepare("SELECT 1 FROM plugin_changes WHERE itemKey = ? AND state = 'pending'");
+        pending.bind(1, r.key);
+        const bool overlaid = pending.step();
         st.bind(9, json(r.collections).dump()).bind(10, json(r.tags).dump()).bind(11, r.dateAdded);
-        st.bind(12, r.dateModified).bind(13, r.json).bind(14, creatorsText).bind(15, joined(r.tags));
+        st.bind(12, r.dateModified).bind(13, overlaid ? withBaseLists(r.json, r.tags, r.collections) : r.json);
+        st.bind(14, creatorsText).bind(15, joined(r.tags));
         std::string sortCreator = r.sortCreator;
         if (sortCreator.empty() && !r.creators.empty())
             sortCreator = r.creators[0].last.empty() ? r.creators[0].name : r.creators[0].last;
@@ -405,6 +464,7 @@ void Library::upsertItem(const ItemRecord& r) {
             Stmt add = db_.prepare("INSERT OR IGNORE INTO item_collections (itemKey, collectionKey) VALUES (?, ?)");
             add.bind(1, r.key).bind(2, c).step();
         }
+        if (overlaid) overlayPluginChanges(r.key);
         touch(r.key);
     });
 }
@@ -465,6 +525,10 @@ void Library::upsertNote(const NoteRecord& r) {
 
 namespace {
 const char* kNoteColumns = "key, parentKey, html, version, json, dateModified, createdBy";
+// Hidden while a plugin's deletion of it is still to be sent.
+const char* kNoteNotDeleted =
+    " AND NOT EXISTS (SELECT 1 FROM plugin_changes p WHERE p.itemKey = notes.key AND p.kind = 'deleteNote' "
+    "AND p.state = 'pending')";
 NoteRecord readNote(Stmt& st) {
     NoteRecord n;
     n.key = st.text(0);
@@ -480,7 +544,7 @@ NoteRecord readNote(Stmt& st) {
 
 std::optional<NoteRecord> Library::note(const std::string& key) {
     return guarded([&]() -> std::optional<NoteRecord> {
-        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE key = ?");
+        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE key = ?" + kNoteNotDeleted);
         st.bind(1, key);
         if (!st.step()) return std::nullopt;
         return readNote(st);
@@ -490,7 +554,8 @@ std::optional<NoteRecord> Library::note(const std::string& key) {
 std::vector<NoteRecord> Library::notes(const std::string& itemKey) {
     return guarded([&] {
         std::vector<NoteRecord> out;
-        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE parentKey = ? ORDER BY key");
+        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE parentKey = ?" + kNoteNotDeleted +
+                              " ORDER BY key");
         st.bind(1, itemKey);
         while (st.step()) out.push_back(readNote(st));
         return out;
@@ -642,7 +707,7 @@ LibraryStats Library::stats() {
 
 void Library::forEachItemData(const std::function<void(const std::string&, const std::string&)>& fn) {
     guarded([&] {
-        Stmt st = db_.prepare("SELECT key, json FROM items WHERE parentKey = ''");
+        Stmt st = db_.prepare("SELECT key, json FROM items WHERE parentKey = ''" + notTrashed("items.key"));
         while (st.step()) fn(st.text(0), st.text(1));
     });
 }
@@ -657,7 +722,8 @@ int64_t Library::dataVersion() {
 std::vector<ItemRecord> Library::recentItems(int limit) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns +
-                              " FROM items WHERE parentKey = '' ORDER BY dateAdded DESC LIMIT ?");
+                              " FROM items WHERE parentKey = ''" + notTrashed("items.key") +
+                              " ORDER BY dateAdded DESC LIMIT ?");
         st.bind(1, int64_t{limit});
         return readItems(st);
     });
@@ -666,8 +732,8 @@ std::vector<ItemRecord> Library::recentItems(int limit) {
 std::vector<ItemRecord> Library::itemsInCollection(const std::string& key) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns +
-                              " FROM item_collections c JOIN items ON items.key = c.itemKey WHERE c.collectionKey = ? "
-                              "ORDER BY items.title COLLATE NOCASE");
+                              " FROM item_collections c JOIN items ON items.key = c.itemKey WHERE c.collectionKey = ?" +
+                              notTrashed("items.key") + " ORDER BY items.title COLLATE NOCASE");
         st.bind(1, key);
         return readItems(st);
     });
@@ -687,8 +753,8 @@ std::vector<ItemRecord> Library::search(const std::string& query, int limit) {
     if (fts.empty()) return {};
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns +
-                              " FROM item_fts JOIN items ON items.rowid = item_fts.rowid WHERE item_fts MATCH ? "
-                              "ORDER BY rank LIMIT ?");
+                              " FROM item_fts JOIN items ON items.rowid = item_fts.rowid WHERE item_fts MATCH ?" +
+                              notTrashed("items.key") + " ORDER BY rank LIMIT ?");
         st.bind(1, fts).bind(2, int64_t{limit});
         return readItems(st);
     });
@@ -818,7 +884,7 @@ struct Where {
 };
 
 Where whereOf(const ListQuery& q, const std::string& readTag) {
-    Where w{" WHERE i.parentKey = ''", {}};
+    Where w{" WHERE i.parentKey = ''" + notTrashed("i.key"), {}};
     switch (q.filter) {
         case Filter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
         case Filter::Pdf: w.sql += " AND i.readableType = 'PDF'"; break;
@@ -899,7 +965,7 @@ std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, i
                   "WITH RECURSIVE sub(key) AS (SELECT ?4 UNION SELECT c.key FROM collections c JOIN sub ON c.parentKey = sub.key) "
                   "SELECT key FROM sub))";
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM item_fts JOIN items i ON i.id = item_fts.rowid" +
-                              kRowJoins + " WHERE item_fts MATCH ?1 AND i.parentKey = ''" + inCollection +
+                              kRowJoins + " WHERE item_fts MATCH ?1 AND i.parentKey = ''" + notTrashed("i.key") + inCollection +
                               " ORDER BY rank LIMIT ?2 OFFSET ?3");
         st.bind(1, fts).bind(2, int64_t{limit}).bind(3, int64_t{offset});
         if (!collectionKey.empty()) st.bind(4, collectionKey);
@@ -928,7 +994,8 @@ void Library::clearRecentSearches() {
 
 std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
     return guarded([&]() -> std::optional<ItemRow> {
-        Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + " WHERE i.key = ?");
+        Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + " WHERE i.key = ?" +
+                              notTrashed("i.key"));
         st.bind(1, itemKey);
         auto rows = readRows(st, readTag());
         if (rows.empty()) return std::nullopt;
@@ -1137,8 +1204,8 @@ void Library::removeDownload(const std::string& attachmentKey) {
 std::vector<std::pair<std::string, int64_t>> Library::topTags(int n) {
     return guarded([&] {
         Stmt st = db_.prepare(
-            "SELECT t.value, count(*) FROM items i, json_each(i.tags) t WHERE i.parentKey = '' "
-            "GROUP BY t.value ORDER BY 2 DESC, 1 LIMIT ?");
+            "SELECT t.value, count(*) FROM items i, json_each(i.tags) t WHERE i.parentKey = ''" + notTrashed("i.key") +
+            " GROUP BY t.value ORDER BY 2 DESC, 1 LIMIT ?");
         st.bind(1, int64_t{n});
         std::vector<std::pair<std::string, int64_t>> out;
         while (st.step()) out.emplace_back(st.text(0), st.integer(1));
@@ -1150,7 +1217,7 @@ std::vector<CollectionEntry> Library::childCollections(const std::string& parent
     return guarded([&] {
         Stmt st = db_.prepare(
             "SELECT c.key, c.name, c.parentKey, c.version, "
-            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key), "
+            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key" + notTrashed("ic.itemKey") + "), "
             "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
             "FROM collections c WHERE c.parentKey = ? ORDER BY c.name COLLATE NOCASE");
         st.bind(1, parentKey);
@@ -1205,7 +1272,7 @@ std::vector<CollectionEntry> Library::allCollections() {
     return guarded([&] {
         Stmt st = db_.prepare(
             "SELECT c.key, c.name, c.parentKey, c.version, "
-            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key), "
+            "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key" + notTrashed("ic.itemKey") + "), "
             "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
             "FROM collections c ORDER BY c.name COLLATE NOCASE");
         std::vector<CollectionEntry> out;
@@ -1342,10 +1409,21 @@ void Library::clearReadMark(const ReadMark& m) {
 
 std::optional<ItemRecord> Library::item(const std::string& key) {
     return guarded([&]() -> std::optional<ItemRecord> {
-        Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns + " FROM items WHERE key = ?");
+        Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns + " FROM items WHERE key = ?" + notTrashed("items.key"));
         st.bind(1, key);
         if (!st.step()) return std::nullopt;
         return readItem(st);
+    });
+}
+
+std::optional<ItemRecord> Library::zoteroItem(const std::string& key) {
+    return guarded([&]() -> std::optional<ItemRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns + " FROM items WHERE key = ?");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        ItemRecord r = readItem(st);
+        baseLists(r.json, r.tags, r.collections);  // without pending changes (when it holds them)
+        return r;
     });
 }
 
@@ -1492,6 +1570,464 @@ std::string Library::reapplyConflict(const std::string& key) {
     }
     tx.commit();
     return result;
+}
+
+// ---- Plugin changes ------------------------------------------------------------------------
+
+namespace {
+
+const char* kChangeColumns = "id, pluginId, kind, itemKey, value, parentKey, dependsOn, state, message, createdMs, sentMs";
+
+PluginChange readChange(const Stmt& st) {
+    PluginChange c;
+    c.id = st.text(0);
+    c.pluginId = st.text(1);
+    kindFromName(st.text(2), c.kind);
+    c.itemKey = st.text(3);
+    c.value = st.text(4);
+    c.parentKey = st.text(5);
+    c.dependsOn = st.text(6);
+    stateFromName(st.text(7), c.state);
+    c.message = st.text(8);
+    c.createdMs = st.integer(9);
+    c.sentMs = st.integer(10);
+    return c;
+}
+
+int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+std::string str(const json& o, const char* k) {
+    auto it = o.find(k);
+    return it != o.end() && it->is_string() ? it->get<std::string>() : std::string{};
+}
+
+std::string yearOfDate(const std::string& date) {
+    for (size_t i = 0; i + 4 <= date.size(); ++i) {
+        bool digits = true;
+        for (size_t j = i; j < i + 4 && digits; ++j) digits = std::isdigit(static_cast<unsigned char>(date[j])) != 0;
+        const bool alone = (i == 0 || !std::isdigit(static_cast<unsigned char>(date[i - 1]))) &&
+                           (i + 4 == date.size() || !std::isdigit(static_cast<unsigned char>(date[i + 4])));
+        if (digits && alone) return date.substr(i, 4);
+    }
+    return "";
+}
+
+bool among(const std::string& s, std::initializer_list<const char*> set) {
+    for (const char* x : set)
+        if (s == x) return true;
+    return false;
+}
+
+// zk.zotero.createItem's ItemFields (zk.d.ts) as Zotero item data, with its collections and tags.
+// A field Zotero has no place for in that item type goes into `extra`, as Zotero itself writes
+// such fields ("DOI: …", "arXiv: …"). nullopt if the type or title is missing.
+std::optional<json> zoteroDataOf(const json& fields, const std::vector<std::string>& collections,
+                                 const std::vector<std::string>& tags) {
+    if (!fields.is_object()) return std::nullopt;
+    const std::string type = str(fields, "type"), title = str(fields, "title");
+    if (type.empty() || title.empty()) return std::nullopt;
+    json d = json::object();
+    d["itemType"] = type;
+    d["title"] = title;
+    json creators = json::array();
+    if (auto it = fields.find("creators"); it != fields.end() && it->is_array())
+        for (const auto& c : *it) {
+            if (!c.is_object()) continue;
+            json z = {{"creatorType", str(c, "type").empty() ? std::string("author") : str(c, "type")}};
+            if (str(c, "first").empty() && str(c, "last").empty()) {
+                z["name"] = str(c, "name");
+            } else {
+                z["firstName"] = str(c, "first");
+                z["lastName"] = str(c, "last");
+            }
+            creators.push_back(std::move(z));
+        }
+    d["creators"] = std::move(creators);
+    std::string extra = str(fields, "extra");
+    auto extraLine = [&](const std::string& line) { extra += (extra.empty() ? "" : "\n") + line; };
+    if (const std::string v = str(fields, "date"); !v.empty()) d["date"] = v;
+    if (const std::string v = str(fields, "url"); !v.empty()) d["url"] = v;
+    if (const std::string v = str(fields, "abstract"); !v.empty()) d["abstractNote"] = v;
+    if (const std::string v = str(fields, "publication"); !v.empty()) {
+        static const std::map<std::string, const char*> field = {
+            {"journalArticle", "publicationTitle"}, {"magazineArticle", "publicationTitle"},
+            {"newspaperArticle", "publicationTitle"}, {"bookSection", "bookTitle"},
+            {"conferencePaper", "proceedingsTitle"}, {"webpage", "websiteTitle"}, {"blogPost", "blogTitle"},
+            {"preprint", "repository"}, {"encyclopediaArticle", "encyclopediaTitle"},
+            {"dictionaryEntry", "dictionaryTitle"}};
+        if (auto it = field.find(type); it != field.end()) d[it->second] = v;
+        else extraLine("Publication: " + v);
+    }
+    if (const std::string v = str(fields, "doi"); !v.empty()) {
+        if (among(type, {"journalArticle", "conferencePaper", "preprint", "dataset", "standard"})) d["DOI"] = v;
+        else extraLine("DOI: " + v);
+    }
+    if (const std::string v = str(fields, "isbn"); !v.empty()) {
+        if (among(type, {"book", "bookSection", "conferencePaper", "encyclopediaArticle", "dictionaryEntry"})) d["ISBN"] = v;
+        else extraLine("ISBN: " + v);
+    }
+    if (const std::string v = str(fields, "arxiv"); !v.empty()) {
+        if (type == "preprint") d["archiveID"] = "arXiv:" + v;
+        else extraLine("arXiv: " + v);
+    }
+    if (!extra.empty()) d["extra"] = extra;
+    d["collections"] = collections;
+    d["tags"] = json::array();
+    for (const auto& t : tags) d["tags"].push_back({{"tag", t}});
+    return d;
+}
+
+std::vector<std::string> uniqueStrings(const json& o, const char* key) {
+    std::vector<std::string> out;
+    if (auto it = o.find(key); it != o.end() && it->is_array())
+        for (const auto& v : *it)
+            if (v.is_string() && !v.get<std::string>().empty() &&
+                std::find(out.begin(), out.end(), v.get<std::string>()) == out.end())
+                out.push_back(v.get<std::string>());
+    return out;
+}
+
+bool isListChange(PluginChange::Kind k) {
+    using K = PluginChange::Kind;
+    return k == K::AddTag || k == K::RemoveTag || k == K::AddToCollection || k == K::RemoveFromCollection;
+}
+
+// One tag or collection change made to lists of tags and collections.
+void applyListChange(PluginChange::Kind k, const std::string& value, std::vector<std::string>& tags,
+                     std::vector<std::string>& collections) {
+    using K = PluginChange::Kind;
+    auto& list = k == K::AddTag || k == K::RemoveTag ? tags : collections;
+    const bool add = k == K::AddTag || k == K::AddToCollection;
+    const bool there = std::find(list.begin(), list.end(), value) != list.end();
+    if (add && !there) list.push_back(value);
+    if (!add) list.erase(std::remove(list.begin(), list.end(), value), list.end());
+}
+
+}  // namespace
+
+template <class F> void Library::atomically(F&& f) {
+    if (inTx_) return f();
+    auto tx = begin();
+    f();
+    tx.commit();
+}
+
+std::string Library::freshKey() {
+    for (;;) {
+        const std::string k = newLocalKey();
+        Stmt st = db_.prepare(
+            "SELECT EXISTS (SELECT 1 FROM items WHERE key = ?1) OR EXISTS (SELECT 1 FROM notes WHERE key = ?1) "
+            "OR EXISTS (SELECT 1 FROM attachments WHERE key = ?1) OR EXISTS (SELECT 1 FROM annotations WHERE key = ?1) "
+            "OR EXISTS (SELECT 1 FROM object_versions WHERE key = ?1)");
+        st.bind(1, k);
+        st.step();
+        if (st.integer(0) == 0) return k;
+    }
+}
+
+// The item's tags and collections as shown: Zotero's (in its json) with its pending changes made.
+void Library::overlayPluginChanges(const std::string& itemKey) {
+    Stmt row = db_.prepare("SELECT json, tags, collections FROM items WHERE key = ?");
+    row.bind(1, itemKey);
+    if (!row.step()) return;
+    std::vector<std::string> tags, collections;
+    if (!baseLists(row.text(0), tags, collections)) {
+        tags = strings(row.text(1));
+        collections = strings(row.text(2));
+    }
+    Stmt changes = db_.prepare("SELECT kind, value FROM plugin_changes WHERE itemKey = ? AND state = 'pending' ORDER BY seq");
+    changes.bind(1, itemKey);
+    while (changes.step()) {
+        PluginChange::Kind k;
+        if (kindFromName(changes.text(0), k) && isListChange(k)) applyListChange(k, changes.text(1), tags, collections);
+    }
+    Stmt set = db_.prepare("UPDATE items SET tags = ?, tagsText = ?, collections = ? WHERE key = ?");
+    set.bind(1, json(tags).dump()).bind(2, joined(tags)).bind(3, json(collections).dump()).bind(4, itemKey).step();
+    Stmt clear = db_.prepare("DELETE FROM item_collections WHERE itemKey = ?");
+    clear.bind(1, itemKey).step();
+    for (const auto& c : collections) {
+        Stmt add = db_.prepare("INSERT OR IGNORE INTO item_collections (itemKey, collectionKey) VALUES (?, ?)");
+        add.bind(1, itemKey).bind(2, c).step();
+    }
+    touch(itemKey);
+}
+
+std::string Library::queuePluginChange(PluginChange c) {
+    using K = PluginChange::Kind;
+    return guarded([&] {
+        std::string id;
+        atomically([&] {
+            auto exists = [&](const char* table, const std::string& key) {
+                Stmt st = db_.prepare(std::string("SELECT 1 FROM ") + table + " WHERE key = ?");
+                st.bind(1, key);
+                return st.step();
+            };
+            const bool pending = c.state == PluginChange::State::Pending;
+            std::optional<ItemRecord> created;
+            if (pending) {
+                c.dependsOn.clear();
+                switch (c.kind) {
+                    case K::CreateItem: {
+                        json v = json::parse(c.value, nullptr, false);
+                        if (!v.is_object()) return;
+                        const auto collections = uniqueStrings(v, "collections"), tags = uniqueStrings(v, "tags");
+                        auto data = zoteroDataOf(v.contains("fields") ? v["fields"] : json(), collections, tags);
+                        if (!data) return;
+                        const json& f = v["fields"];
+                        ItemRecord r;
+                        r.key = c.itemKey = freshKey();
+                        r.itemType = str(f, "type");
+                        r.title = str(f, "title");
+                        r.date = str(f, "date");
+                        r.year = yearOfDate(r.date);
+                        r.publication = str(f, "publication");
+                        for (const auto& z : (*data)["creators"])
+                            r.creators.push_back({str(z, "firstName"), str(z, "lastName"), str(z, "name"), str(z, "creatorType")});
+                        r.collections = collections;
+                        r.tags = tags;
+                        r.dateAdded = r.dateModified = nowUtc();
+                        r.json = data->dump();
+                        created = std::move(r);
+                        break;
+                    }
+                    case K::AddNote:
+                        if (!exists("items", c.parentKey)) return;
+                        c.itemKey = freshKey();
+                        break;
+                    case K::DeleteNote:
+                        if (!exists("notes", c.itemKey)) return;
+                        break;
+                    case K::Trash:
+                        if (!exists("items", c.itemKey)) return;
+                        break;
+                    default:  // a tag or collection
+                        if (c.value.empty() || !exists("items", c.itemKey)) return;
+                        break;
+                }
+                // Targets what a pending change creates: sent after it, withdrawn with it.
+                Stmt dep = db_.prepare(
+                    "SELECT id FROM plugin_changes WHERE itemKey = ? AND state = 'pending' "
+                    "AND kind IN ('createItem', 'addNote') ORDER BY seq DESC LIMIT 1");
+                dep.bind(1, c.kind == K::AddNote ? c.parentKey : c.itemKey);
+                if (c.kind != K::CreateItem && dep.step()) c.dependsOn = dep.text(0);
+            }
+            do c.id = newLocalKey() + newLocalKey().substr(0, 4);
+            while (pluginChange(c.id));
+            if (c.createdMs == 0) c.createdMs = nowMs();
+            Stmt ins = db_.prepare(
+                "INSERT INTO plugin_changes (id, seq, pluginId, kind, itemKey, value, parentKey, dependsOn, state, message, "
+                "createdMs, sentMs) VALUES (?1, (SELECT coalesce(max(seq), 0) + 1 FROM plugin_changes), ?2, ?3, ?4, ?5, ?6, "
+                "?7, ?8, ?9, ?10, ?11)");
+            ins.bind(1, c.id).bind(2, c.pluginId).bind(3, std::string(kindName(c.kind))).bind(4, c.itemKey);
+            ins.bind(5, c.value).bind(6, c.parentKey).bind(7, c.dependsOn).bind(8, std::string(stateName(c.state)));
+            ins.bind(9, c.message).bind(10, c.createdMs).bind(11, c.sentMs).step();
+            if (pending) {
+                switch (c.kind) {
+                    case K::CreateItem: upsertItem(*created); break;
+                    case K::AddNote: {
+                        NoteRecord n;
+                        n.key = c.itemKey;
+                        n.parentKey = c.parentKey;
+                        n.html = c.value;
+                        n.json = json{{"itemType", "note"}, {"parentItem", c.parentKey}, {"note", c.value}}.dump();
+                        n.dateModified = nowUtc();
+                        n.createdBy = c.pluginId;
+                        upsertNote(n);
+                        break;
+                    }
+                    case K::Trash:
+                    case K::DeleteNote: break;  // hidden while pending (read-time)
+                    default: {
+                        // Zotero's lists kept in its json first, so the change can be taken back.
+                        Stmt row = db_.prepare("SELECT json, tags, collections FROM items WHERE key = ?");
+                        row.bind(1, c.itemKey);
+                        if (row.step()) {
+                            const std::string seeded = withBaseLists(row.text(0), strings(row.text(1)), strings(row.text(2)));
+                            Stmt set = db_.prepare("UPDATE items SET json = ? WHERE key = ?");
+                            set.bind(1, seeded).bind(2, c.itemKey).step();
+                        }
+                        overlayPluginChanges(c.itemKey);
+                    }
+                }
+            }
+            prunePluginLog(c.pluginId);
+            id = c.id;
+        });
+        return id;
+    });
+}
+
+std::optional<PluginChange> Library::pluginChange(const std::string& id) {
+    return guarded([&]() -> std::optional<PluginChange> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns + " FROM plugin_changes WHERE id = ?");
+        st.bind(1, id);
+        if (!st.step()) return std::nullopt;
+        return readChange(st);
+    });
+}
+
+// Ends a pending change (and first what depends on it) and puts the local copy back.
+void Library::withdrawPluginChange(const PluginChange& c, PluginChange::State state, const std::string& message) {
+    using K = PluginChange::Kind;
+    std::vector<PluginChange> dependents;
+    {
+        Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns +
+                              " FROM plugin_changes WHERE dependsOn = ? AND state = 'pending' ORDER BY seq DESC");
+        st.bind(1, c.id);
+        while (st.step()) dependents.push_back(readChange(st));
+    }
+    const bool refused = state == PluginChange::State::Refused;
+    for (const auto& d : dependents)
+        withdrawPluginChange(d, refused ? PluginChange::State::Refused : PluginChange::State::Cancelled,
+                             refused ? "Refused with what it was for." : "Withdrawn with what it was for.");
+    Stmt set = db_.prepare("UPDATE plugin_changes SET state = ?, message = ? WHERE id = ?");
+    set.bind(1, std::string(stateName(state))).bind(2, message).bind(3, c.id).step();
+    switch (c.kind) {
+        case K::CreateItem: removeObject("item", c.itemKey); break;
+        case K::AddNote: removeObject("note", c.itemKey); break;
+        case K::Trash:
+        case K::DeleteNote: break;  // shown again: no longer pending
+        default: overlayPluginChanges(c.itemKey);
+    }
+}
+
+void Library::prunePluginLog(const std::string& pluginId) {
+    Stmt st = db_.prepare(
+        "DELETE FROM plugin_changes WHERE pluginId = ?1 AND state != 'pending' AND seq NOT IN (SELECT seq FROM "
+        "plugin_changes WHERE pluginId = ?1 AND state != 'pending' ORDER BY seq DESC LIMIT ?2)");
+    st.bind(1, pluginId).bind(2, int64_t{kPluginChangeLog}).step();
+}
+
+bool Library::cancelPluginChange(const std::string& pluginId, const std::string& changeId) {
+    return guarded([&] {
+        bool done = false;
+        atomically([&] {
+            auto c = pluginChange(changeId);
+            if (!c || c->pluginId != pluginId || c->state != PluginChange::State::Pending) return;
+            withdrawPluginChange(*c, PluginChange::State::Cancelled, "");
+            prunePluginLog(pluginId);
+            done = true;
+        });
+        return done;
+    });
+}
+
+std::vector<PluginChange> Library::pendingPluginChanges(const std::string& pluginId) {
+    return guarded([&] {
+        std::vector<PluginChange> all;
+        Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns + " FROM plugin_changes WHERE state = 'pending'" +
+                              (pluginId.empty() ? "" : " AND pluginId = ?") + " ORDER BY seq");
+        if (!pluginId.empty()) st.bind(1, pluginId);
+        while (st.step()) all.push_back(readChange(st));
+        // Creation order already puts a change after what it depends on (that existed first);
+        // kept so explicitly, should a dependency ever be queued later.
+        std::vector<PluginChange> out;
+        std::set<std::string> placed, visiting;
+        std::map<std::string, size_t> at;
+        for (size_t i = 0; i < all.size(); ++i) at[all[i].id] = i;
+        std::function<void(size_t)> place = [&](size_t i) {
+            const PluginChange& c = all[i];
+            if (placed.count(c.id) || !visiting.insert(c.id).second) return;
+            if (auto d = at.find(c.dependsOn); !c.dependsOn.empty() && d != at.end()) place(d->second);
+            placed.insert(c.id);
+            out.push_back(c);
+        };
+        for (size_t i = 0; i < all.size(); ++i) place(i);
+        return out;
+    });
+}
+
+std::vector<PluginChange> Library::pluginChangeLog(const std::string& pluginId, int limit) {
+    return guarded([&] {
+        std::vector<PluginChange> out;
+        Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns +
+                              " FROM plugin_changes WHERE pluginId = ? ORDER BY seq DESC LIMIT ?");
+        st.bind(1, pluginId).bind(2, int64_t{limit});
+        while (st.step()) out.push_back(readChange(st));
+        return out;
+    });
+}
+
+void Library::markPluginChange(const std::string& id, PluginChange::State state, const std::string& message,
+                               int64_t sentMs) {
+    using K = PluginChange::Kind;
+    using S = PluginChange::State;
+    guarded([&] {
+        atomically([&] {
+            auto c = pluginChange(id);
+            if (!c || c->state != S::Pending) return;
+            switch (state) {
+                case S::Pending: {
+                    Stmt st = db_.prepare("UPDATE plugin_changes SET message = ? WHERE id = ?");
+                    st.bind(1, message).bind(2, id).step();
+                    return;
+                }
+                case S::Sent: {
+                    Stmt st = db_.prepare("UPDATE plugin_changes SET state = 'sent', message = ?, sentMs = ? WHERE id = ?");
+                    st.bind(1, message).bind(2, sentMs).bind(3, id).step();
+                    if (isListChange(c->kind)) {
+                        // Zotero has it now: part of its copy here (until its own copy comes in).
+                        Stmt row = db_.prepare("SELECT json, tags, collections FROM items WHERE key = ?");
+                        row.bind(1, c->itemKey);
+                        if (row.step()) {
+                            json d = json::parse(withBaseLists(row.text(0), strings(row.text(1)), strings(row.text(2))));
+                            std::vector<std::string> tags, collections;
+                            baseLists(d.dump(), tags, collections);
+                            applyListChange(c->kind, c->value, tags, collections);
+                            json zt = json::array();
+                            for (const auto& t : tags) {  // keeps each tag's other fields (type)
+                                json entry = {{"tag", t}};
+                                for (const auto& old : d["tags"])
+                                    if (old.is_object() && old.value("tag", "") == t) entry = old;
+                                zt.push_back(entry);
+                            }
+                            d["tags"] = zt;
+                            d["collections"] = collections;
+                            Stmt set = db_.prepare("UPDATE items SET json = ? WHERE key = ?");
+                            set.bind(1, d.dump()).bind(2, c->itemKey).step();
+                        }
+                        overlayPluginChanges(c->itemKey);
+                    } else if (c->kind == K::Trash) {
+                        removeObject("item", c->itemKey);  // in Zotero's trash: gone here, as a pull would
+                    } else if (c->kind == K::DeleteNote) {
+                        removeObject("note", c->itemKey);
+                    }
+                    break;
+                }
+                case S::Refused:
+                case S::Cancelled:
+                case S::Declined: withdrawPluginChange(*c, state, message); break;
+            }
+            prunePluginLog(c->pluginId);
+        });
+    });
+}
+
+int Library::discardPluginChanges(const std::string& pluginId) {
+    return guarded([&] {
+        int n = 0;
+        atomically([&] {
+            for (;;) {  // newest first; one at a time, as a withdrawal may take dependents with it
+                Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns +
+                                      " FROM plugin_changes WHERE pluginId = ? AND state = 'pending' ORDER BY seq DESC LIMIT 1");
+                st.bind(1, pluginId);
+                if (!st.step()) break;
+                const PluginChange c = readChange(st);
+                Stmt before = db_.prepare("SELECT count(*) FROM plugin_changes WHERE state = 'pending'");
+                before.step();
+                const int64_t was = before.integer(0);
+                withdrawPluginChange(c, PluginChange::State::Cancelled, "");
+                Stmt after = db_.prepare("SELECT count(*) FROM plugin_changes WHERE state = 'pending'");
+                after.step();
+                n += static_cast<int>(was - after.integer(0));
+            }
+            prunePluginLog(pluginId);
+        });
+        return n;
+    });
 }
 
 }  // namespace zk

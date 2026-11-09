@@ -4,6 +4,7 @@
 
 #include "net/errors.h"
 #include "store/db.h"
+#include "store/plugin_changes.h"
 #include "store/records.h"
 
 #include <functional>
@@ -219,7 +220,11 @@ public:
     void clearRecentSearches();
     std::optional<ItemRow> rowFor(const std::string& itemKey);
     std::optional<ItemDetails> details(const std::string& itemKey);
+    // The item as the library shows it: with plugin changes not sent yet applied (tags, collections),
+    // and nullopt while a pending plugin change trashes it. zoteroItem: as Zotero has it (as last
+    // pulled or sent; a pending-trashed item too) — what the sync engine sends changes against.
     std::optional<ItemRecord> item(const std::string& key);
+    std::optional<ItemRecord> zoteroItem(const std::string& key);
 
     // Read (spec: mark as read): an item is read when it has the read tag. Marking it on the
     // Kindle is kept as a ReadMark until SyncEngine::push has changed the tag in Zotero.
@@ -273,6 +278,30 @@ public:
     void setFileState(const std::string& attachmentKey, AttachmentRecord::State, const std::string& localPath);
     std::vector<AttachmentRecord> downloadedAttachments();
 
+    // Plugin changes (zk.zotero.*), kept until SyncEngine::push has sent them and applied to the
+    // local copy at once: CreateItem inserts the item under a fresh local key, AddNote a note
+    // (createdBy = the plugin), Trash and DeleteNote hide the item or note, the others change the
+    // item's tags or collections. Items' json stays Zotero's data (the base); their tags and
+    // collections are the base with pending changes applied, again after every upsertItem (a pull).
+    // Queues one (a state other than Pending only records it in the log, e.g. a Declined removal);
+    // returns its id, or "" if its item, note or fields aren't there (nothing is kept).
+    std::string queuePluginChange(PluginChange);
+    std::optional<PluginChange> pluginChange(const std::string& id);
+    // Withdraws a Pending change of that plugin, and whatever pending depends on it (of any plugin),
+    // putting the local copy back; it becomes Cancelled. False if not pending or not the plugin's.
+    bool cancelPluginChange(const std::string& pluginId, const std::string& changeId);
+    // Pending changes ("" every plugin's), in creation order with each after what it depends on.
+    std::vector<PluginChange> pendingPluginChanges(const std::string& pluginId = "");
+    // A plugin's changes, every state, newest first; finished ones beyond kPluginChangeLog are dropped.
+    static constexpr int kPluginChangeLog = 500;
+    std::vector<PluginChange> pluginChangeLog(const std::string& pluginId, int limit);
+    // Moves a Pending change on (a finished one stays as it is). Sent: its effect becomes part of
+    // Zotero's copy here (a trashed item or deleted note goes). Refused, Cancelled, Declined: the
+    // local copy is put back, and its pending dependents are withdrawn too (Refused stays Refused).
+    void markPluginChange(const std::string& id, PluginChange::State, const std::string& message, int64_t sentMs = 0);
+    // Every pending change of the plugin becomes Cancelled, put back; returns how many were withdrawn.
+    int discardPluginChanges(const std::string& pluginId);
+
     Transaction begin();
 
     // The last storage failure, in Pavel's words (DiskFull when the disk ran out).
@@ -286,6 +315,11 @@ private:
     void reindex(const std::string& itemKey);
     std::string itemOfAttachment(const std::string& attachmentKey);
     std::string meta(const std::string& key);
+    template <class F> void atomically(F&& f);  // in this transaction, or a new one
+    std::string freshKey();
+    void overlayPluginChanges(const std::string& itemKey);
+    void withdrawPluginChange(const PluginChange&, PluginChange::State, const std::string& message);
+    void prunePluginLog(const std::string& pluginId);
     void setMeta(const std::string& key, const std::string& value);
 
     Db& db_;

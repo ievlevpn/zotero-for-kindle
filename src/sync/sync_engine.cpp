@@ -455,7 +455,7 @@ int SyncEngine::pendingChanges() {
 bool SyncEngine::pushReadMarks(SyncReport& rep) {
     for (const ReadMark& mark : lib_.readMarks()) {
         for (int attempt = 0;; ++attempt) {
-            auto item = lib_.item(mark.itemKey);
+            auto item = lib_.zoteroItem(mark.itemKey);  // a plugin's pending changes aren't sent here
             if (!item) {  // gone from Zotero: nothing to tag
                 lib_.clearReadMark(mark);
                 break;

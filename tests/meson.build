@@ -94,6 +94,7 @@ test_sources = files(
   'test_plugin_fetch.cpp',
   'test_plugin_library.cpp',
   'test_fulltext.cpp',
+  'test_plugin_changes.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
