@@ -445,6 +445,101 @@ TEST_CASE("changes: a read mark on an item a plugin is trashing is still sent") 
     CHECK(rig.lib.rowFor("BOOK0002")->read);
 }
 
+TEST_CASE("changes: what Zotero deletes stays deleted when a pending removal of it is withdrawn") {
+    Rig rig;
+    rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>old</p>"));
+    rig.pull();
+    REQUIRE(rig.lib.note("NOTE0001"));
+    const std::string delNote = rig.queue("p", Kind::DeleteNote, "NOTE0001");
+    const std::string trash = rig.queue("p", Kind::Trash, "BOOK0002");
+    REQUIRE(!delNote.empty());
+    REQUIRE(!trash.empty());
+    rig.server.remove("NOTE0001");
+    rig.server.remove("BOOK0002");
+    rig.pull();
+    CHECK(rig.lib.cancelPluginChange("p", delNote));
+    CHECK(rig.lib.cancelPluginChange("p", trash));
+    CHECK_FALSE(rig.lib.note("NOTE0001"));
+    CHECK_FALSE(rig.lib.zoteroNote("NOTE0001"));
+    CHECK(rig.lib.notes("BOOK0001").empty());
+    CHECK_FALSE(rig.lib.item("BOOK0002"));
+    CHECK_FALSE(rig.listed("BOOK0002"));
+}
+
+TEST_CASE("changes: a plugin's note keeps its author when Zotero's copy comes in") {
+    Rig rig;
+    const std::string add = rig.queue("p", Kind::AddNote, "", "<p>mine</p>", "BOOK0001");
+    const std::string key = rig.keyOf(add);
+    rig.lib.markPluginChange(add, State::Sent, "", 1);
+    rig.server.put(FakeZotero::note(key, "BOOK0001", "<p>mine</p>"));  // what the sync sent, pulled back
+    rig.pull();
+    REQUIRE(rig.lib.note(key));
+    CHECK(rig.lib.note(key)->createdBy == "p");
+    CHECK(rig.lib.note(key)->version > 0);
+}
+
+TEST_CASE("changes: obviously wrong changes are refused up front") {
+    Rig rig;
+    std::string why;
+    auto queue = [&](Kind kind, const std::string& key, const std::string& value = "", const std::string& parent = "") {
+        PluginChange c;
+        c.pluginId = "p";
+        c.kind = kind;
+        c.itemKey = key;
+        c.value = value;
+        c.parentKey = parent;
+        why.clear();
+        return rig.lib.queuePluginChange(c, &why);
+    };
+    SUBCASE("anything on an item being trashed, a second trash too") {
+        const std::string trash = queue(Kind::Trash, "BOOK0002");
+        REQUIRE(!trash.empty());
+        for (auto [kind, value, parent] : {std::tuple{Kind::AddTag, "x", ""}, std::tuple{Kind::RemoveTag, "x", ""},
+                                           std::tuple{Kind::AddToCollection, "MATHS001", ""},
+                                           std::tuple{Kind::RemoveFromCollection, "NATURE01", ""},
+                                           std::tuple{Kind::Trash, "", ""}}) {
+            CHECK(queue(kind, "BOOK0002", value, parent).empty());
+            CHECK(why.find("trash") != std::string::npos);
+        }
+        CHECK(queue(Kind::AddNote, "", "<p>n</p>", "BOOK0002").empty());
+        CHECK(why.find("trash") != std::string::npos);
+        rig.queue("q", Kind::Trash, "BOOK0001");  // another plugin's trash counts too
+        CHECK(queue(Kind::AddTag, "BOOK0001", "x").empty());
+        CHECK(rig.lib.pendingPluginChanges("p").size() == 1);
+        CHECK(rig.lib.cancelPluginChange("p", trash));  // cancel still works
+        CHECK_FALSE(queue(Kind::AddTag, "BOOK0002", "x").empty());
+    }
+    SUBCASE("a collection that isn't in the library") {
+        CHECK(queue(Kind::AddToCollection, "BOOK0001", "NOCOLL01").empty());
+        CHECK(why.find("NOCOLL01") != std::string::npos);
+        json v = {{"fields", {{"type", "book"}, {"title", "T"}}}, {"collections", {"NOCOLL01"}}};
+        CHECK(queue(Kind::CreateItem, "", v.dump()).empty());
+        CHECK(why.find("NOCOLL01") != std::string::npos);
+    }
+    SUBCASE("a note on something that isn't a regular item") {
+        rig.server.put(FakeZotero::standalone("LONEPDF1", "Lonely"));
+        rig.server.put(FakeZotero::attachment("EPUB0001", "BOOK0001"));
+        rig.pull();
+        REQUIRE(rig.lib.zoteroItem("LONEPDF1"));
+        CHECK(queue(Kind::AddNote, "", "<p>n</p>", "LONEPDF1").empty());
+        CHECK(why.find("regular") != std::string::npos);
+        CHECK(queue(Kind::AddNote, "", "<p>n</p>", "EPUB0001").empty());
+        CHECK_FALSE(queue(Kind::AddNote, "", "<p>n</p>", "BOOK0001").empty());
+    }
+    SUBCASE("the same change asked again is the first one") {
+        const std::string a = queue(Kind::AddTag, "BOOK0001", "x");
+        CHECK(queue(Kind::AddTag, "BOOK0001", "x") == a);
+        CHECK(queue(Kind::AddTag, "BOOK0002", "x") != a);
+        const std::string n = queue(Kind::AddNote, "", "<p>n</p>", "BOOK0001");
+        CHECK(queue(Kind::AddNote, "", "<p>n</p>", "BOOK0001") == n);
+        CHECK(rig.lib.notes("BOOK0001").size() == 1);
+        CHECK(rig.lib.pendingPluginChanges("p").size() == 3);
+        CHECK(rig.queue("q", Kind::AddTag, "BOOK0001", "x") != a);  // another plugin's is its own
+        rig.lib.markPluginChange(a, State::Sent, "", 1);
+        CHECK(queue(Kind::AddTag, "BOOK0001", "x") != a);  // once sent, asking again is a new change
+    }
+}
+
 TEST_CASE("changes: a schema 7 database gains the change table and keeps its library") {
     const auto path = std::filesystem::temp_directory_path() / "zk-test-changes-v7.db";
     std::filesystem::remove(path);

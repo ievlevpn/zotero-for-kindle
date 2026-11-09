@@ -140,7 +140,9 @@ public:
     // Zotero notes: pulled, never edited or pushed here. notes(itemKey) lists one item's notes
     // ("" lists the standalone ones).
     void upsertNote(const NoteRecord&);
+    // note() and notes() hide a note a plugin's pending DeleteNote removes; zoteroNote() doesn't (sync).
     std::optional<NoteRecord> note(const std::string& key);
+    std::optional<NoteRecord> zoteroNote(const std::string& key);
     std::vector<NoteRecord> notes(const std::string& itemKey);
     // type: "item", "attachment", "annotation", "note" or "collection".
     void removeObject(const std::string& type, const std::string& key);
@@ -284,8 +286,11 @@ public:
     // item's tags or collections. Items' json stays Zotero's data (the base); their tags and
     // collections are the base with pending changes applied, again after every upsertItem (a pull).
     // Queues one (a state other than Pending only records it in the log, e.g. a Declined removal);
-    // returns its id, or "" if its item, note or fields aren't there (nothing is kept).
-    std::string queuePluginChange(PluginChange);
+    // returns its id. The same pending change asked again by the same plugin (same kind, target and
+    // value) returns the first one's id, nothing new kept. Returns "" and keeps nothing, with the
+    // reason in *why, if its item, note, collection or fields aren't there, if its item is being
+    // trashed by a pending change (a second trash too), or if a note would go on an attachment.
+    std::string queuePluginChange(PluginChange, std::string* why = nullptr);
     std::optional<PluginChange> pluginChange(const std::string& id);
     // Withdraws a Pending change of that plugin, and whatever pending depends on it (of any plugin),
     // putting the local copy back; it becomes Cancelled. False if not pending or not the plugin's.

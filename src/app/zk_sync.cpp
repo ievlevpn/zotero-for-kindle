@@ -152,7 +152,7 @@ int main(int argc, char** argv) {
         curl, [&](const std::string& key) { return lib.annotation(key).has_value(); },
         [&](const std::string& key) { return lib.attachment(key).has_value(); },  // reading positions
         [&](const std::string& key) -> std::optional<std::vector<std::string>> {  // the read tag
-            if (auto item = lib.item(key)) return item->tags;
+            if (auto item = lib.zoteroItem(key)) return item->tags;  // as Zotero has them
             return std::nullopt;
         });
     ZoteroApi api(http, cfg->userId, cfg->apiKey);

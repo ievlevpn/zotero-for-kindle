@@ -102,7 +102,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         if (!listing) return void(rep.error = err);
         std::vector<std::string> missing;
         for (const auto& [key, version] : listing->versions) {
-            auto have = lib_.note(key);
+            auto have = lib_.zoteroNote(key);  // one a plugin is deleting too
             if (!have || have->version < version) missing.push_back(key);
         }
         if (!fetchAndApply("items", "notes", missing, rep, progress)) return;
@@ -408,7 +408,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         return;
     }
     const bool known = lib_.objectVersion(key) > 0;
-    if (lib_.note(key)) lib_.removeObject("note", key);
+    if (lib_.zoteroNote(key)) lib_.removeObject("note", key);  // also one a plugin is deleting
     if (known) ++rep.itemsRemoved;  // notes count too; they share the key space
     lib_.removeObject("item", key);
 }

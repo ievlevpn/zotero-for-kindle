@@ -516,7 +516,8 @@ void Library::upsertNote(const NoteRecord& r) {
         Stmt st = db_.prepare(
             "INSERT INTO notes (key, parentKey, html, version, json, dateModified, createdBy) VALUES (?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, html=excluded.html, version=excluded.version, "
-            "json=excluded.json, dateModified=excluded.dateModified, createdBy=excluded.createdBy");
+            "json=excluded.json, dateModified=excluded.dateModified, "
+            "createdBy=CASE WHEN excluded.createdBy = '' THEN notes.createdBy ELSE excluded.createdBy END");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.html).bind(4, r.version);
         st.bind(5, r.json.empty() ? "{}" : r.json).bind(6, r.dateModified).bind(7, r.createdBy);
         st.step();
@@ -545,6 +546,15 @@ NoteRecord readNote(Stmt& st) {
 std::optional<NoteRecord> Library::note(const std::string& key) {
     return guarded([&]() -> std::optional<NoteRecord> {
         Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE key = ?" + kNoteNotDeleted);
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return readNote(st);
+    });
+}
+
+std::optional<NoteRecord> Library::zoteroNote(const std::string& key) {
+    return guarded([&]() -> std::optional<NoteRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE key = ?");
         st.bind(1, key);
         if (!st.step()) return std::nullopt;
         return readNote(st);
@@ -1755,13 +1765,21 @@ void Library::overlayPluginChanges(const std::string& itemKey) {
     touch(itemKey);
 }
 
-std::string Library::queuePluginChange(PluginChange c) {
+std::string Library::queuePluginChange(PluginChange c, std::string* why) {
     using K = PluginChange::Kind;
     return guarded([&] {
         std::string id;
+        auto refuse = [&](const std::string& reason) {
+            if (why) *why = reason;
+        };
         atomically([&] {
             auto exists = [&](const char* table, const std::string& key) {
                 Stmt st = db_.prepare(std::string("SELECT 1 FROM ") + table + " WHERE key = ?");
+                st.bind(1, key);
+                return st.step();
+            };
+            auto trashPending = [&](const std::string& key) {
+                Stmt st = db_.prepare("SELECT 1 FROM plugin_changes WHERE itemKey = ? AND kind = 'trash' AND state = 'pending'");
                 st.bind(1, key);
                 return st.step();
             };
@@ -1769,13 +1787,31 @@ std::string Library::queuePluginChange(PluginChange c) {
             std::optional<ItemRecord> created;
             if (pending) {
                 c.dependsOn.clear();
+                const std::string target = c.kind == K::AddNote ? c.parentKey : c.itemKey;
+                if (c.kind != K::CreateItem && c.kind != K::DeleteNote && trashPending(target))
+                    return refuse("item " + target + " is being moved to the trash");
+                // The same change asked again while the first is unsent: that one is the answer.
+                {
+                    Stmt dup = db_.prepare(
+                        "SELECT id FROM plugin_changes WHERE pluginId = ?1 AND kind = ?2 AND state = 'pending' AND value = ?3 "
+                        "AND (?2 = 'createItem' OR (?2 = 'addNote' AND parentKey = ?5) OR (?2 NOT IN ('createItem', 'addNote') "
+                        "AND itemKey = ?4)) ORDER BY seq LIMIT 1");
+                    dup.bind(1, c.pluginId).bind(2, std::string(kindName(c.kind))).bind(3, c.value);
+                    dup.bind(4, c.itemKey).bind(5, c.parentKey);
+                    if (dup.step()) {
+                        id = dup.text(0);
+                        return;
+                    }
+                }
                 switch (c.kind) {
                     case K::CreateItem: {
                         json v = json::parse(c.value, nullptr, false);
-                        if (!v.is_object()) return;
+                        if (!v.is_object()) return refuse("the item's fields are not JSON");
                         const auto collections = uniqueStrings(v, "collections"), tags = uniqueStrings(v, "tags");
+                        for (const auto& k : collections)
+                            if (!exists("collections", k)) return refuse("no collection " + k);
                         auto data = zoteroDataOf(v.contains("fields") ? v["fields"] : json(), collections, tags);
-                        if (!data) return;
+                        if (!data) return refuse("an item needs a type and a title");
                         const json& f = v["fields"];
                         ItemRecord r;
                         r.key = c.itemKey = freshKey();
@@ -1793,18 +1829,27 @@ std::string Library::queuePluginChange(PluginChange c) {
                         created = std::move(r);
                         break;
                     }
-                    case K::AddNote:
-                        if (!exists("items", c.parentKey)) return;
+                    case K::AddNote: {
+                        Stmt st = db_.prepare("SELECT parentKey, itemType FROM items WHERE key = ?");
+                        st.bind(1, c.parentKey);
+                        if (!st.step()) return refuse("no item " + c.parentKey);
+                        if (!st.text(0).empty() || st.text(1) == "attachment" || st.text(1) == "note")
+                            return refuse("a note can only go on a regular item, not " + c.parentKey);
                         c.itemKey = freshKey();
                         break;
+                    }
                     case K::DeleteNote:
-                        if (!exists("notes", c.itemKey)) return;
+                        if (!exists("notes", c.itemKey)) return refuse("no note " + c.itemKey);
                         break;
                     case K::Trash:
-                        if (!exists("items", c.itemKey)) return;
+                        if (!exists("items", c.itemKey)) return refuse("no item " + c.itemKey);
                         break;
                     default:  // a tag or collection
-                        if (c.value.empty() || !exists("items", c.itemKey)) return;
+                        if (c.value.empty())
+                            return refuse(c.kind == K::AddTag || c.kind == K::RemoveTag ? "an empty tag" : "no collection given");
+                        if (!exists("items", c.itemKey)) return refuse("no item " + c.itemKey);
+                        if (c.kind == K::AddToCollection && !exists("collections", c.value))
+                            return refuse("no collection " + c.value);
                         break;
                 }
                 // Targets what a pending change creates: sent after it, withdrawn with it.
