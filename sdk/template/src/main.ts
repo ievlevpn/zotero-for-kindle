@@ -9,6 +9,10 @@
 // a copy of plugin.json. Copy dist/hello/ to /mnt/us/zotero/plugins/ on the Kindle, or run the
 // desktop build with --plugins-dir dist.
 
+// Code at the top level runs once, when the plugin loads. console.log writes to the plugin's
+// log: plugin.log in its folder, and the terminal of the desktop build.
+console.log(`${zk.plugin.id} ${zk.plugin.version} loaded`);
+
 // bookFinished fires when you turn past the last page of a book or paper on the Kindle. The
 // handler gets the item (title, creators, year…) and the file you read. Because it carries the
 // item, listening to it needs "library:read" in plugin.json; without it, this line would throw a

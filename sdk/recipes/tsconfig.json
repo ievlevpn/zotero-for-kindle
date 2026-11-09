@@ -1,0 +1,6 @@
+{
+  // The recipes in docs/plugins/recipes.md, type-checked by check.sh against zk.d.ts. Each file
+  // is the src/main.ts of a plugin of its own.
+  "extends": "../tsconfig.json",
+  "include": ["*.ts"]
+}

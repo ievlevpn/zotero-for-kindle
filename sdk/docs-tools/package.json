@@ -1,0 +1,11 @@
+{
+  "name": "zotero-for-kindle-sdk-docs-tools",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeDoc, pinned, for the API reference generated from types/zk.d.ts (see ../typedoc.json). Kept apart from ../package.json because TypeDoc needs TypeScript's JavaScript API (TypeScript 6), while the SDK type-checks with TypeScript 7.",
+  "devDependencies": {
+    "typedoc": "0.28.20",
+    "typedoc-plugin-markdown": "4.14.1",
+    "typescript": "6.0.3"
+  }
+}

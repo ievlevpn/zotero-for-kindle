@@ -31,6 +31,8 @@
  * declared rejects (or throws) with a {@link zk.PermissionError} that names what to add. Each
  * member below says which permission it needs.
  *
+ * @packageDocumentation
+ *
  * @example
  * // main.ts — log every book finished on the Kindle (needs "library:read")
  * zk.on("bookFinished", ({ item }) => {

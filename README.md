@@ -55,6 +55,16 @@ To do it yourself, see [INSTALL.md](INSTALL.md). It amounts to copying two folde
 **Updates:** from 0.2.0 on, use *Settings → Check for updates* on the Kindle. Releases are signed, and if a new
 version doesn't start, the app goes back to the previous one. To get from 0.1.0 to 0.2.0, install over USB once.
 
+## Plugins
+
+The app runs JavaScript plugins, for things that don't belong in the app itself: exports, feeds, small automations.
+A plugin is a folder you copy into `zotero/plugins/` on the Kindle. It is off until you have read what it may do in
+*Settings → Plugins* and turned it on, and it can't remove anything from your library without asking you each time.
+
+- [Using plugins](docs/plugins/using.md): installing, permissions, and turning plugins off if one gets in the way.
+- [Writing plugins](docs/plugins/getting-started.md): from an empty folder to a plugin on your Kindle, with TypeScript,
+  a desktop loop and an [API reference](docs/plugins/reference/README.md).
+
 ## Building from source
 
 The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built with Meson.

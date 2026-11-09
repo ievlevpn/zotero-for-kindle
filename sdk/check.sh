@@ -4,7 +4,10 @@
 # package-lock.json), type-checks it against zk.d.ts (its own tsconfig.json, extending the SDK's
 # tsconfig.json), validates its plugin.json against the manifest schema, and builds it with its
 # build.mjs. It then checks that the example snapshots committed under tests/data/plugins/examples/
-# equal a fresh build (they can't drift silently). Finally it checks that build.mjs bundles an npm package (test-fixtures/).
+# equal a fresh build (they can't drift silently), that build.mjs bundles an npm package
+# (test-fixtures/), that the recipes in recipes/ type-check and equal their copies in
+# docs/plugins/recipes.md, and that the API reference in docs/plugins/reference/ is what
+# reference.sh generates from zk.d.ts now.
 #
 #   sdk/check.sh
 set -eu
@@ -58,5 +61,19 @@ out=$(node --input-type=module -e "globalThis.zk = {};
   await import('$tmp/plugin/dist/bundles-a-package/main.js');")
 [ "$out" = "bundled hello, Kindle" ] || { echo "bundled plugin printed: $out" >&2; exit 1; }
 echo "$out"
+
+echo "== recipes type-check and match docs/plugins/recipes.md"
+"$BIN/tsc" -p recipes
+node recipes/embed.mjs
+
+echo "== the API reference is up to date with zk.d.ts"
+sh reference.sh "$tmp/reference"
+if ! diff -r "$tmp/reference" ../docs/plugins/reference >/dev/null; then
+  echo "docs/plugins/reference/ differs from what zk.d.ts generates:" >&2
+  diff -r "$tmp/reference" ../docs/plugins/reference >&2 || true
+  echo "  refresh: sh sdk/reference.sh, and commit docs/plugins/reference/" >&2
+  exit 1
+fi
+echo "reference: up to date"
 
 echo "sdk: all checks passed"

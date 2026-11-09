@@ -1,0 +1,18 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["types/zk.d.ts"],
+  "tsconfig": "tsconfig.json",
+  "plugin": ["./docs-tools/node_modules/typedoc-plugin-markdown/dist/index.js"],
+  "out": "../docs/plugins/reference",
+  "name": "Plugin API v0",
+  "readme": "none",
+  "router": "structure",
+  "disableSources": true,
+  "hidePageHeader": true,
+  "useCodeBlocks": true,
+  "parametersFormat": "table",
+  "interfacePropertiesFormat": "table",
+  "classPropertiesFormat": "table",
+  "typeDeclarationFormat": "table",
+  "treatWarningsAsErrors": true
+}
