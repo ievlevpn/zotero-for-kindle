@@ -71,6 +71,9 @@ npm run check
 plugin as the app sees it: `plugin.json` and `main.js`. `npm run check` type-checks; it prints
 nothing after its `tsc -p .` line when all is well.
 
+`npm install` may warn that install scripts weren't run (`npm warn install-scripts`). That is
+harmless here: esbuild works without them.
+
 ## 3. Run it in the desktop build
 
 Open a second terminal (keep the first for building) and start the app from the clone's top folder
@@ -86,13 +89,35 @@ cd "$ZK"
 prints every plugin's log to this terminal, reloads a plugin when its `main.js` changes, and starts
 the plugins that are on as soon as it starts.
 
+The first lines in the terminal say which app version runs, and what each plugin that won't run
+needs:
+
+```
+… INFO zotero 0.3.0 starting (backend=desktop)
+plugin hello: off — turn it on in Settings → Plugins, or start with --enable-plugin hello
+```
+
+**Check the version.** If it says `plugin hello: incompatible — needs app 0.3.0 (this app is
+0.2.9)`, your app is older than the `minApp` in `plugin.json`. That happens when you build the app
+from a pre-release checkout: lower `minApp` in your copy to the app's version (here
+`"minApp": "0.2.9"`), run `npm run build`, and start the app again.
+
 ## 4. Turn it on
 
 A plugin is off until you have read what it may do and turned it on — on the desktop too.
 
 1. On Home, tap the gear at the top right: **Settings**. Tap **Plugins**.
-2. The list shows **Hello**, with *New — not turned on yet*. Tap it.
+2. The list shows **Hello**, with *New — not turned on yet*. Tap it. (If it says *Incompatible:
+   needs app 0.3.0*, the app is older than the plugin's `minApp`: see *Check the version* above.)
 3. Its page lists what it can do: *Reads your library*. Tap **Turn on**.
+
+Or, as the plugin's author, turn it on from the command line: quit the app and start it with
+`--enable-plugin <id>` (repeat it for several plugins). It does what **Turn on** does, without
+the page, so use it only for your own plugins:
+
+```sh
+./build-desktop/zotero --device pw5 --plugins-dir ~/zk-plugins/hello/dist --enable-plugin hello
+```
 
 In the desktop build a plugin starts as soon as it is turned on. The app's terminal shows:
 
@@ -100,10 +125,9 @@ In the desktop build a plugin starts as soon as it is turned on. The app's termi
 [plugin hello] 2026-11-09 22:59:41 hello 0.1.0 loaded
 ```
 
-If the page says *Incompatible: needs app 0.3.0* instead of offering **Turn on**, see `minApp` in
-step 7.
-
-The app remembers that it is on (in `dist/.state.json`), so from now on Hello starts with the app.
+The app remembers that it is on (in `dist/.state.json`), so from now on Hello starts with the app,
+with or without `--enable-plugin`. Files in `dist/` whose names start with a dot (`.state.json`,
+`.starts`) are the app's own records.
 
 ## 5. Edit it and watch it reload
 
@@ -120,7 +144,7 @@ EOF
 npm run build
 ```
 
-Within a second the app notices the new `main.js` and reloads Hello: the terminal shows
+Within a couple of seconds the app notices the new `main.js` and reloads Hello: the terminal shows
 `plugins: hello/main.js changed: reloading`, then `hello 0.1.0 loaded` again. Now tap the sync button on Home (the round
 arrows at the top right). When the sync ends, the terminal shows:
 
@@ -137,7 +161,8 @@ the terminal and under *Last errors* on its page; see [Debugging and testing](de
 
 ## 6. On your Kindle
 
-1. On the Kindle, close Zotero (the × at the top right of Home).
+1. On the Kindle, close Zotero (the × at the top right of Home). The Kindle needs Zotero for
+   Kindle 0.3.0 or later, installed and run once (that makes its `zotero/` folder).
 2. Connect the Kindle by USB. It shows up as a drive, or, for newer Kindles on a Mac, open it in
    [OpenMTP](https://openmtp.ganeshrvel.com) (as in [INSTALL.md](../../INSTALL.md#2-copy-them-onto-the-kindle)).
 3. On the Kindle, make the folder `zotero/plugins/hello/` and copy `plugin.json` and `main.js` from
@@ -149,7 +174,9 @@ the terminal and under *Last errors* on its page; see [Debugging and testing](de
    cp ~/zk-plugins/hello/dist/hello/{plugin.json,main.js} /Volumes/Kindle/zotero/plugins/hello/
    ```
 
-   Over SSH (USBNetwork) the folder is `/mnt/us/zotero/plugins/hello/`.
+   If `/Volumes/Kindle/zotero` doesn't exist, Zotero for Kindle isn't installed there: install it
+   ([INSTALL.md](../../INSTALL.md)) and start it once first. Over SSH (USBNetwork) the folder is
+   `/mnt/us/zotero/plugins/hello/`.
 4. Eject the Kindle and start Zotero.
 5. **Settings → Plugins → Hello → Turn on**, as on the desktop.
 
@@ -183,13 +210,24 @@ Edit `plugin.json`:
 - `name` (up to 40 characters), `description` and `author` are what people see in Settings → Plugins.
 - `api`: the plugin API it was written for; `0` is the current one, still unstable.
 - `minApp`: the oldest app version it runs on. Plugins arrived in 0.3.0. It must not be newer than
-  the app you run (see Settings → About); if you build the app from a pre-release checkout, lower
-  `minApp` in your copy.
+  the app you run (the version line on the Settings screen, *Version 0.3.0 · …*, or the first line
+  the desktop app prints); if you build the app from a pre-release checkout, lower `minApp` in your copy.
 - `permissions`: what it may do, shown before it is turned on. Ask for what you use and nothing
   more; calling something you didn't declare fails with an error naming the permission to add.
   See [Concepts](concepts.md#permissions).
 
 The `name` in `package.json` is only for npm.
+
+## Sharing a plugin
+
+There is no catalog or store for plugins yet. To share one, share its folder: `plugin.json` and
+`main.js` (from `dist/<id>/`), plus a short README saying what it does, which permissions it asks
+for and why, and what goes in `settings.json` if it has settings. Others copy the folder to
+`/mnt/us/zotero/plugins/<id>/` (`zotero/plugins/<id>/` on the USB drive) and turn it on in
+Settings → Plugins after reading its permissions, as in [Using plugins](using.md). Don't share
+`plugin.log`, `storage.db` or `data/`: they are your own run's.
+
+An in-app catalog, with signed installs and updates, is planned.
 
 ## Next
 

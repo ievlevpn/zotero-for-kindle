@@ -7,6 +7,10 @@ do what it declares; anything that removes something from your library needs you
 Plugins are code written by other people. Install the ones you trust, and read what each may do
 before you turn it on.
 
+There is no catalog of plugins yet: authors share a plugin's folder (see
+[Sharing a plugin](getting-started.md#sharing-a-plugin)). An in-app catalog, with signed installs
+and updates, is planned.
+
 ## Installing a plugin
 
 1. Close Zotero on the Kindle (the × at the top right of Home).
@@ -77,8 +81,8 @@ what goes:
 
 Cancel is on the left, the change on the right. The plugin can't skip, dismiss or answer the box.
 It only answers to your finger (not the pen), and not in the first half second, so a tap meant
-for the page doesn't answer it. It never appears in the middle of a page turn, and only right
-after something you did. Items go to Zotero's trash, from where you can restore them in Zotero.
+for the page doesn't answer it. If you are turning a page, it waits for the turn to finish (up to
+3 seconds). It only comes right after something you did. Items go to Zotero's trash, from where you can restore them in Zotero.
 
 ## Turning plugins on and off
 
@@ -94,7 +98,7 @@ still sent (see *Discard unsent changes* below).
 
 - Its description, version and author, and what it may do.
 - Its badge, a short note it may set, such as *3 new*.
-- *Last errors*, if it has had any.
+- *Last errors*: its last three errors, if it has had any.
 - **What it changed ›**: every change it asked for in your library, newest first, and what became
   of it: *Pending* (not synced yet), *Sent*, *Refused* (Zotero said no, with why), *Cancelled* (the
   plugin withdrew it before it was sent) or *Declined* (you said no).

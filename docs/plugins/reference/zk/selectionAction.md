@@ -8,7 +8,7 @@ function selectionAction(action): void;
 
 Adds an action to the selection bar (what appears when the user selects text in a book).
 
-**Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear;
+**Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear;
 plugins written now keep working when it does.
 
 `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time

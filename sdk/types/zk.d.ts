@@ -911,12 +911,12 @@ declare namespace zk {
    */
   function setBadge(text: string | null): void;
 
-  // ───────────────────────────── Entry points (part 2: not shown yet) ─────────────────────────────
+  // ───────────────────────── Entry points (not shown in this version yet) ─────────────────────────
 
   /**
    * Adds an action to the selection bar (what appears when the user selects text in a book).
    *
-   * **Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear;
+   * **Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear;
    * plugins written now keep working when it does.
    *
    * `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
@@ -939,7 +939,7 @@ declare namespace zk {
   /**
    * Adds an action to an item's *More…* menu.
    *
-   * **Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear.
+   * **Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear.
    *
    * `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
    * waiting for the user's confirmation doesn't count.
@@ -958,7 +958,7 @@ declare namespace zk {
   /**
    * Registers a screen of the plugin's own.
    *
-   * **Part 2: not shown yet, and provisional.** Part 2 designs screens and the building blocks
+   * **Not shown in this version yet, and provisional.** A later version designs screens and the building blocks
    * they are made of; `render`'s argument and result will be typed then. In API v0 the screen is
    * recorded but can't be opened.
    *
@@ -974,7 +974,7 @@ declare namespace zk {
     /** What the user sees, short (one or two words). */
     title: string;
     /**
-     * Does the work. A returned string is shown to the user in the result pop-up (part 2);
+     * Does the work. A returned string is shown to the user in the result pop-up (not shown in this version yet);
      * a thrown error is shown as the plugin having failed.
      */
     run(target: T): ActionResult | Promise<ActionResult>;
@@ -995,10 +995,10 @@ declare namespace zk {
     pageLabel: string | null;
   }
 
-  /** **Provisional (part 2).** What a screen is opened with. */
+  /** **Provisional.** What a screen is opened with. */
   type ScreenParams = Readonly<Record<string, Json>>;
 
-  /** **Provisional (part 2)**: what `render` returns; part 2 defines it. */
+  /** **Provisional**: what `render` returns; defined when screens are. */
   type ScreenContent = unknown;
 
   // ───────────────────────────── Data ─────────────────────────────

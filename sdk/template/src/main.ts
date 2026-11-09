@@ -6,8 +6,9 @@
 // doc comment and an example for every member, are in sdk/types/zk.d.ts.
 //
 // `npm run build` bundles this file (and anything it imports) into dist/hello/main.js, next to
-// a copy of plugin.json. Copy dist/hello/ to /mnt/us/zotero/plugins/ on the Kindle, or run the
-// desktop build with --plugins-dir dist.
+// a copy of plugin.json. Run the desktop build with --plugins-dir dist, or copy plugin.json and
+// main.js from dist/hello/ to /mnt/us/zotero/plugins/hello/ on the Kindle (only those two: the
+// desktop run keeps its log and data next to them).
 
 // Code at the top level runs once, when the plugin loads. console.log writes to the plugin's
 // log: plugin.log in its folder, and the terminal of the desktop build.

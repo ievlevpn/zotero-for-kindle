@@ -1,6 +1,7 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
 //   zotero --plugins-dir DIR       (desktop) use DIR as the plugins folder; plugin logs go to stderr; a changed main.js reloads
+//          [--enable-plugin ID]... (desktop, with --plugins-dir) turn these plugins on in DIR
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
 //                                                  render a screen to a PNG and exit
 
@@ -13,6 +14,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 #include <thread>
 
 #include "app/app.h"
@@ -89,6 +91,7 @@ bool envFlag(const char* name) {
 // --plugins-dir (desktop): plugins are developed in a folder of the author's choosing; their logs
 // are also written to stderr, and a changed main.js reloads that plugin (PluginWatcher).
 bool gPluginDevLoop = false;
+std::vector<std::string> gEnablePlugins;  // --enable-plugin <id>, developer mode only
 
 // The plugin host's settings for this run (safe mode decides whether start() is called at all).
 PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& config) {
@@ -240,6 +243,14 @@ int main(int argc, char** argv) {
             paths.pluginsDir = argv[i + 1];
             gPluginDevLoop = true;
         }
+    // --enable-plugin <id> (repeatable, with --plugins-dir): the author turns a plugin on, as with
+    // Turn on in Settings → Plugins, without tapping through.
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--enable-plugin")) gEnablePlugins.push_back(argv[i + 1]);
+    if (!gEnablePlugins.empty() && !gPluginDevLoop) {
+        std::fprintf(stderr, "--enable-plugin needs --plugins-dir\n");
+        return 2;
+    }
 #endif
     if (argc > 1 && !std::strcmp(argv[1], "--reset-system-ink")) {  // the launcher, after a crash
         displayResetSystemInk();
@@ -348,6 +359,11 @@ int main(int argc, char** argv) {
     if (pluginsOff)
         log(LogLevel::Warn, "plugins: off (%s)", safeMode.automatic ? "the app stopped twice" : "OFF file or launcher");
     auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
+    if (gPluginDevLoop) {  // say what is on, and why each other plugin won't run
+        for (const auto& line : enablePluginsForDev(*plugins, gEnablePlugins)) std::fprintf(stderr, "%s\n", line.c_str());
+        for (const auto& line : devLoopNotes(plugins->status(), appVersion())) std::fprintf(stderr, "%s\n", line.c_str());
+        if (pluginsOff) std::fprintf(stderr, "plugins are off: %s\n", safeMode.automatic ? "the app stopped twice in a row" : "the OFF file or ZK_NO_PLUGINS");
+    }
     PluginEvents pluginEvents(plugins.get());
     // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
     // for JavaScript). Not while the host is stopped for an update's install.

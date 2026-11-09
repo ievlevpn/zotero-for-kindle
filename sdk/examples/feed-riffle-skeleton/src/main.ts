@@ -14,7 +14,7 @@
 //   undo ─▶ zk.zotero.cancel the last keep's changes (or ask, if they were already synced)
 //
 // The functions a screen would call (discard, skip, keep, keepRecent, replaceOld, undo) are
-// exported; the deck screen is a placeholder until part 2 brings screens.
+// exported; the deck screen is a placeholder until the app has plugin screens.
 
 import { filter, isElementNode, parse, type TNode } from "txml/txml";
 
@@ -260,7 +260,7 @@ export async function undo(): Promise<string> {
 
 // ───────────────────────────── The screen (placeholder) ─────────────────────────────
 
-// Part 2 designs screens and what they are made of; until then a screen is registered but can't
+// Plugin screens, and what they are made of, come later; until then a screen is registered but can't
 // be opened. This shows what the deck screen will be given.
 zk.screen("deck", async () => {
   const { deck } = await load();
@@ -338,7 +338,7 @@ function authorsOf(entry: TNode): string[] {
 
 /**
  * Markup out, crudely. (The desktop Feed Riffle renders feed HTML through a sanitizer and is
- * careful not to read `$1<p<\infty$` as a tag; part 2's screens will decide how much of that the
+ * careful not to read `$1<p<\infty$` as a tag; plugin screens will decide how much of that the
  * Kindle needs.)
  */
 function stripTags(html: string): string {

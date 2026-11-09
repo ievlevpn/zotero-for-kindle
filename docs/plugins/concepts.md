@@ -270,7 +270,7 @@ Both survive restarts and app updates. *Reset its data* in Settings → Plugins 
 |---|---|
 | Time, event handler (and loading `main.js`) | 5 s |
 | Time, background task | 30 s |
-| Time, actions (part 2) | at least 30 s |
+| Time, actions (not shown in this version yet) | at least 30 s |
 | Memory | 32 MB a plugin; 96 MB for all plugins together |
 | Stack | deep recursion is stopped |
 | `zk.fetch` | 10 MB a response, 30 s a request, 8 at once, 20 MB of request bodies |
@@ -294,7 +294,8 @@ that call; one that fires later runs as a call of its own, with 5 seconds.
 
 **Failures.** An uncaught error in a handler, the background task or `main.js`, and every limit
 stop, is logged with its stack and counted. Three in a row turn the plugin off, with the note
-*Turned off — it stopped working* in Settings → Plugins; a success resets the count. A plugin that
+*Turned off — it stopped working* in Settings → Plugins, where its page shows the last three
+errors; a success resets the count. A plugin that
 fails while loading isn't started again until it is reloaded or turned on again. A rejected
 promise nobody awaited is logged as a warning (`Uncaught (in promise) …`) and not counted.
 
@@ -306,5 +307,5 @@ plugin does needs a reinstall to undo; see [Using plugins](using.md#if-something
 ## Entry points for later
 
 `zk.selectionAction`, `zk.itemAction` and `zk.screen` are part of API v0 but nothing shows them
-yet: plugin screens, the selection bar and an item's *More…* come in the next part. Calling them
+in this version yet: plugin screens, the selection bar and an item's *More…* come later. Calling them
 now checks their arguments and records them, so a plugin written today keeps working.

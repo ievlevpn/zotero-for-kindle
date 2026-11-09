@@ -27,7 +27,7 @@ run(target):
 | Promise<ActionResult>;
 ```
 
-Does the work. A returned string is shown to the user in the result pop-up (part 2);
+Does the work. A returned string is shown to the user in the result pop-up (not shown in this version yet);
 a thrown error is shown as the plugin having failed.
 
 #### Parameters

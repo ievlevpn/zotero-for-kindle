@@ -2,6 +2,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <sstream>
 #include <vector>
@@ -284,5 +285,48 @@ TEST_CASE("example: in the eager mode a plugin turned on loads; reload(id) of a 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     CHECK(fp.log("off").empty());
     CHECK(fp.log("broken").empty());
+    host.stop();
+}
+
+TEST_CASE("example: --enable-plugin turns a plugin on in developer mode; the notes say why the others won't run") {
+    FakePlugins fp;
+    fp.add("hello", "console.log('hello loaded');");
+    fp.add("quiet", "console.log('quiet loaded');");
+    addPlugin(fp, "aged", "Aged", "\"library:read\"", ",\"minApp\":\"99.0.0\"");
+    fp.write("broken/plugin.json", "{ not json");
+    fp.write("broken/main.js", "");
+    PluginHostDeps d = fp.deps();
+    d.loadEagerly = true;
+    PluginHost host(d);
+
+    // Before: everything is off or can't load, and each line says what to do.
+    auto notes = devLoopNotes(host.status(), d.appVersion);
+    CHECK(std::count(notes.begin(), notes.end(),
+                     "plugin hello: off — turn it on in Settings → Plugins, or start with --enable-plugin hello") == 1);
+    CHECK(std::count(notes.begin(), notes.end(),
+                     "plugin aged: incompatible — needs app 99.0.0 (this app is 9.9.9); lower minApp in plugin.json to run it "
+                     "here") == 1);
+    bool brokenNoted = false;
+    for (const auto& n : notes) brokenNoted = brokenNoted || n.rfind("plugin broken: can't load — ", 0) == 0;
+    CHECK(brokenNoted);
+    CHECK(notes.size() == 4);
+
+    // The flag: hello is turned on (and remembered); an incompatible folder stays off; an unknown id is reported.
+    const auto unknown = enablePluginsForDev(host, {"hello", "aged", "nope"});
+    REQUIRE(unknown.size() == 1);
+    CHECK(unknown[0] == "plugin nope: --enable-plugin found no folder \"nope\" in the plugins folder");
+    CHECK(statusOf(host.status(), "hello")->enabled);
+    CHECK_FALSE(statusOf(host.status(), "aged")->enabled);
+    CHECK(fp.read(".state.json").find("\"hello\"") != std::string::npos);
+    notes = devLoopNotes(host.status(), d.appVersion);
+    CHECK(notes.size() == 3);  // hello is no longer noted; quiet, aged and broken are
+    CHECK(std::count(notes.begin(), notes.end(),
+                     "plugin quiet: off — turn it on in Settings → Plugins, or start with --enable-plugin quiet") == 1);
+
+    host.start();  // developer mode: what is on loads at once
+    host.waitIdle(3000);
+    CHECK(logged(fp, "hello", "hello loaded"));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(fp.log("quiet").empty());
     host.stop();
 }

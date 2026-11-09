@@ -1,5 +1,6 @@
 #include "app/plugin_watch.h"
 
+#include <algorithm>
 #include <filesystem>
 
 namespace zk {
@@ -28,6 +29,36 @@ void PluginWatcher::poll(int64_t nowMs) {
             reload_(id);
         }
     }
+}
+
+std::vector<std::string> enablePluginsForDev(PluginHost& host, const std::vector<std::string>& ids) {
+    std::vector<std::string> notes;
+    const auto plugins = host.status();
+    for (const auto& id : ids) {
+        const bool listed = std::any_of(plugins.begin(), plugins.end(), [&](const PluginStatus& s) { return s.folder.dir == id; });
+        if (listed) host.setEnabled(id, true);  // refused (stays off) for a folder that can't load
+        else notes.push_back("plugin " + id + ": --enable-plugin found no folder \"" + id + "\" in the plugins folder");
+    }
+    return notes;
+}
+
+std::vector<std::string> devLoopNotes(const std::vector<PluginStatus>& plugins, const Version& app) {
+    std::vector<std::string> notes;
+    for (const auto& s : plugins) {
+        const std::string& id = s.folder.dir;
+        const auto& f = s.folder;
+        if (f.incompatible && f.otherApi)
+            notes.push_back("plugin " + id + ": incompatible — written for plugin API " + std::to_string(f.otherApi) +
+                            " (this app runs API 0)");
+        else if (f.incompatible && f.manifest)
+            notes.push_back("plugin " + id + ": incompatible — needs app " + f.manifest->minApp.str() + " (this app is " +
+                            app.str() + "); lower minApp in plugin.json to run it here");
+        else if (!f.problem.empty())
+            notes.push_back("plugin " + id + ": can't load — " + f.problem);
+        else if (!s.enabled)
+            notes.push_back("plugin " + id + ": off — turn it on in Settings → Plugins, or start with --enable-plugin " + id);
+    }
+    return notes;
 }
 
 }  // namespace zk

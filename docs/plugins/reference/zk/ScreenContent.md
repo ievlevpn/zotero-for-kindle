@@ -6,4 +6,4 @@
 type ScreenContent = unknown;
 ```
 
-**Provisional (part 2)**: what `render` returns; part 2 defines it.
+**Provisional**: what `render` returns; defined when screens are.

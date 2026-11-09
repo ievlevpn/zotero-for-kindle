@@ -8,7 +8,7 @@ function itemAction(action): void;
 
 Adds an action to an item's *More…* menu.
 
-**Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear.
+**Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear.
 
 `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
 waiting for the user's confirmation doesn't count.

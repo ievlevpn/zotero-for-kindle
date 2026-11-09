@@ -3,7 +3,7 @@
 Select a passage in a book, choose **Explain** in the selection bar, and read Claude's plain
 explanation of it in a pop-up.
 
-Selection actions come with part 2: in plugin API v0 the action is recorded but not shown yet.
+Selection actions aren't shown in this version yet: in plugin API v0 the action is recorded but not shown yet.
 The plugin is complete; it starts working when the selection bar shows plugin actions.
 
 ## What it does

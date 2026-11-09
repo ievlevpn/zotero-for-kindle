@@ -15,7 +15,7 @@ own notes about the plugin: errors with their stack, limit stops, restarts, remo
 - **`plugin.log`** in the plugin's folder keeps it all, on the desktop and on the Kindle
   (`zotero/plugins/<id>/plugin.log` on the USB drive). At 256 KB it moves to `plugin.log.1` and a
   new one starts.
-- **Settings → Plugins → the plugin** shows its last errors (up to three) and, in the list, a
+- **Settings → Plugins → the plugin** shows its last three errors and, in the list, a
   note when it needs attention.
 
 The app's own log (the desktop terminal, `zotero/log/zotero.log` on the Kindle) has lines such as
@@ -32,12 +32,23 @@ cd "$ZK"   # the repo's top folder
   `plugin.json` is a plugin. Point it at your plugin's `dist/`, or at a folder of several plugins.
 - Logs go to the terminal; the plugins that are on start with the app, and a plugin starts as soon
   as you turn it on.
-- When a plugin's `main.js` changes (`npm run build`), that plugin is reloaded within a second:
+- At start, the terminal has one line for each plugin that won't run, and why:
+
+  ```
+  plugin hello: off — turn it on in Settings → Plugins, or start with --enable-plugin hello
+  plugin hello: incompatible — needs app 0.3.0 (this app is 0.2.9); lower minApp in plugin.json to run it here
+  plugin hello: can't load — The id "hi" in plugin.json must be the folder's name.
+  ```
+
+- `--enable-plugin <id>` (repeatable, only with `--plugins-dir`) turns a plugin on in that folder,
+  as **Turn on** in Settings → Plugins does, for your own plugins. It is remembered.
+- When a plugin's `main.js` changes (`npm run build`), that plugin is reloaded within a couple of seconds:
   `main.js` runs afresh; its storage and files stay. A folder that appears while the app runs is
   picked up the same way.
 - `--device` is `pw5`, `scribe` or `kt4`; add `--landscape` for landscape.
-- The plugins folder holds the app's records too: `.state.json` (which plugins are on, their
-  failures, badges and last background run) and, in each plugin's folder, `storage.db`, `data/`
+- The plugins folder holds the app's records too, in files whose names start with a dot:
+  `.state.json` (which plugins are on, their failures, badges and last background run), `.starts`
+  and `.running` and, in each plugin's folder, `storage.db`, `data/`
   and `plugin.log`. Delete `storage.db` and `data/` (with the app closed), or use *Reset its data*
   on the plugin's page, to start from nothing.
 
@@ -96,8 +107,8 @@ and try them in the desktop build against your own library.
 | `zk.zotero.deleteNote: only a note this plugin added can be deleted (…)` | Other notes can't be deleted by a plugin. | Check `note.createdBy === zk.plugin.id`. |
 | `settings.json isn't a JSON object; zk.settings is {}` | The user's `settings.json` didn't parse. | Fix the file; the plugin reads it when it loads. |
 | `Uncaught (in promise) …` (a warning) | A promise rejected and nothing awaited it. Not counted as a failure. | Await it, or catch. |
-| *Incompatible: needs app 0.3.0* in Settings → Plugins | The app is older than the plugin's `minApp`. | Update the app. Building the app from a pre-release checkout, lower `minApp` in your copy. |
+| *Incompatible: needs app 0.3.0* in Settings → Plugins | The app is older than the plugin's `minApp` (the app's version is on the Settings screen, and in the desktop app's first line). | Update the app. Building the app from a pre-release checkout, lower `minApp` in your copy. |
 | *Incompatible: written for plugin API 1* | The plugin was written for another API version. | Use a version of the plugin for this app's API (0). |
 | *Can't load: The id "…" in plugin.json must be the folder's name.* (or another problem with `plugin.json`) | The folder can't be loaded as it is. | Fix `plugin.json` or the folder's name. `node "$ZK/sdk/validate-manifest.mjs" plugin.json` checks a manifest against the schema (run `npm install` in `$ZK/sdk` once first). |
-| *New — not turned on yet*, and nothing in the log | The plugin is off. | Turn it on in Settings → Plugins. |
+| *New — not turned on yet*, and nothing in the log | The plugin is off. | Turn it on in Settings → Plugins (or, on the desktop, start with `--enable-plugin <id>`). |
 | On, but nothing in the log | On the Kindle, plugins load at their first event (a sync will do). The desktop build with `--plugins-dir` loads a plugin as soon as it is turned on. | Sync. |

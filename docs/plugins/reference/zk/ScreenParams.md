@@ -6,4 +6,4 @@
 type ScreenParams = Readonly<Record<string, Json>>;
 ```
 
-**Provisional (part 2).** What a screen is opened with.
+**Provisional.** What a screen is opened with.

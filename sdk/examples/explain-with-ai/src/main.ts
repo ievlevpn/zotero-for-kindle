@@ -4,7 +4,7 @@
 // the selected text, the item being read and the file; `run` asks Anthropic's Messages API and
 // returns the answer as text, which the app shows in its result pop-up.
 //
-// Selection actions arrive in part 2: in API v0 the action is checked and recorded but not shown
+// Selection actions aren't shown in this version yet: in API v0 the action is checked and recorded but not shown
 // yet, so this plugin type-checks and loads today and starts working when the selection bar
 // learns to show plugin actions.
 //

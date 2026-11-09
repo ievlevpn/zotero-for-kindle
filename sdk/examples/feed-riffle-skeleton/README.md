@@ -2,7 +2,7 @@
 
 The data flow of [Feed Riffle](https://github.com/ievlevpn/zotero-feed-riffle) for the Kindle,
 written to test the plugin API: if this needs a workaround, the API is wrong. **No screens yet**
-(part 2 designs them): the deck screen is a placeholder, and the functions it will call —
+(not in this version of the app): the deck screen is a placeholder, and the functions it will call —
 `discard`, `skip`, `keep`, `keepRecent`, `replaceOld`, `undo` — are exported from `src/main.ts`.
 
 ## What it does
