@@ -2,7 +2,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <pthread.h>
+
 #include <chrono>
+#include <optional>
+#include <functional>
 
 #include "plugins/js.h"
 
@@ -100,4 +104,96 @@ TEST_CASE("js: promise jobs run on runJobs()") {
     CHECK(p.promiseState() == PromiseState::Fulfilled);
     CHECK(cx.call(ns.get("read"), {}).toJson() == nlohmann::json(7));
     CHECK_FALSE(ns.get("read").isPromise());
+}
+
+TEST_CASE("js: a script throwing a look-alike out-of-memory error is not a limit stop") {
+    Runtime rt(16 << 20);
+    Context cx(rt);
+    Value ns = cx.evalModule(
+        "export function fake() { throw new Error('out of memory'); }\n"
+        "export function fakeStack() { throw new RangeError('Maximum call stack size exceeded'); }",
+        "m.js");
+    cx.call(ns.get("fake"), {});
+    auto err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK_FALSE(err->limit);
+    cx.call(ns.get("fakeStack"), {});
+    err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK_FALSE(err->limit);
+}
+
+TEST_CASE("js: a script that catches an out-of-memory error cannot hide that it was a limit stop") {
+    Runtime rt(4 << 20);
+    Context cx(rt);
+    Value ns = cx.evalModule(
+        "export function sneaky() { try { new Array(1e8).fill(1); } catch (e) {} throw new Error('later'); }", "m.js");
+    cx.call(ns.get("sneaky"), {});
+    auto err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK(err->limit);
+}
+
+TEST_CASE("js: after a deadline stop an ordinary throw is not a limit stop") {
+    Runtime rt(16 << 20);
+    Context cx(rt);
+    Value ns = cx.evalModule(
+        "export function spin() { while (true) {} }\n"
+        "export function bad() { throw new Error('plain'); }\n"
+        "queueMicrotask(() => { throw new Error('in a job'); });",
+        "m.js");
+    rt.setDeadline(Runtime::nowMs() + 50);
+    cx.call(ns.get("spin"), {});
+    auto err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK(err->limit);
+    // No setDeadline here: the old deadline stays in the past, the flag must not stick.
+    cx.call(ns.get("bad"), {});
+    err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK(err->message == "plain");
+    CHECK_FALSE(err->limit);
+    cx.runJobs();
+    err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK_FALSE(err->limit);
+    rt.setDeadline(0);
+}
+
+TEST_CASE("js: runaway recursion is a limit stop and does not crash") {
+    Runtime rt(16 << 20);
+    Context cx(rt);
+    Value ns = cx.evalModule("export function f() { return f() + 1; }", "m.js");
+    cx.call(ns.get("f"), {});
+    auto err = cx.takeError();
+    REQUIRE(err.has_value());
+    CHECK(err->limit);
+}
+
+TEST_CASE("js: recursion is caught when the runtime is used from another thread") {
+    Runtime rt(16 << 20);
+    std::optional<Context> cx;
+    cx.emplace(rt);
+    Value ns = cx->evalModule("export function f() { return f() + 1; }", "m.js");
+    Value fn = ns.get("f");
+    bool limit = false, got = false;
+    std::function<void()> work = [&] {
+        cx->call(fn, {});
+        auto err = cx->takeError();
+        got = err.has_value();
+        limit = got && err->limit;
+    };
+    // A thread with a 4 MB stack (the default of a secondary thread can be smaller than the engine's limit).
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 4 << 20);
+    pthread_t th;
+    REQUIRE(pthread_create(&th, &attr, [](void* p) -> void* { (*static_cast<std::function<void()>*>(p))(); return nullptr; }, &work) == 0);
+    pthread_join(th, nullptr);
+    pthread_attr_destroy(&attr);
+    CHECK(got);
+    CHECK(limit);
+    fn = Value();
+    ns = Value();
+    cx.reset();
 }

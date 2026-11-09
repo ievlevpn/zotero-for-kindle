@@ -39,13 +39,27 @@ public:
 
     static int64_t nowMs();  // the clock the deadline is compared with
     bool deadlineHit() const { return hit_; }
-    void clearDeadlineHit() { hit_ = false; }
+    bool memoryLimitHit() const { return oom_; }
+    // Forget the limit events seen so far (the Context does this at the start of each operation).
+    void clearLimitEvents() { hit_ = false; oom_ = false; }
+
+    // Re-anchors the stack-overflow check at the calling thread's stack. The host thread may
+    // differ from the one that created the runtime; the Context does this before each operation.
+    void anchorStack() { JS_UpdateStackTop(rt_); }
 
 private:
     static int interrupt(JSContext*, void* self);
-    JSRuntime* rt_;
+    static void* allocate(void* self, size_t size);
+    static void* allocateZeroed(void* self, size_t count, size_t size);
+    static void* reallocate(void* self, void* ptr, size_t size);
+    static void release(void* self, void* ptr);
+    bool admit(size_t grow);  // false (and records the event) if `grow` bytes would pass the limit
+    JSRuntime* rt_ = nullptr;
+    size_t limit_;
+    size_t used_ = 0;
     int64_t deadline_ = 0;
-    bool hit_ = false;
+    bool hit_ = false;  // the deadline interrupted a script
+    bool oom_ = false;  // an allocation was refused by the memory limit
 };
 
 // Owns one JSValue reference; copying duplicates it. Tied to the Context that made it.
@@ -96,6 +110,8 @@ public:
 
 private:
     void recordException();
+    bool isStackOverflow(JSValueConst ex, const JsError& e);
+    void begin();  // start of an operation: anchor the stack, forget old limit events
     Runtime& rt_;
     JSContext* cx_;
     std::optional<JsError> error_;

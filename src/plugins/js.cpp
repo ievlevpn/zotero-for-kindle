@@ -1,7 +1,14 @@
 #include "plugins/js.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <utility>
+
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#else
+#include <malloc.h>
+#endif
 
 namespace zk::js {
 
@@ -16,6 +23,16 @@ std::string toStd(JSContext* cx, JSValueConst v) {
     return out;
 }
 
+size_t usableSize(const void* p) {
+#if defined(__APPLE__)
+    return malloc_size(p);
+#else
+    return malloc_usable_size(const_cast<void*>(p));
+#endif
+}
+
+constexpr size_t kMaxStack = 512 * 1024;
+
 }  // namespace
 
 // ---- Runtime ----------------------------------------------------------------------------
@@ -25,8 +42,59 @@ int64_t Runtime::nowMs() {
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
 }
 
-Runtime::Runtime(size_t memoryLimit) : rt_(JS_NewRuntime()) {
-    if (memoryLimit) JS_SetMemoryLimit(rt_, memoryLimit);
+// The memory limit is enforced here rather than by JS_SetMemoryLimit, so a refused allocation is
+// observed as an event (oom_) and a script cannot fake it by throwing a look-alike error.
+bool Runtime::admit(size_t grow) {
+    if (limit_ != 0 && used_ + grow > limit_) {
+        oom_ = true;
+        return false;
+    }
+    return true;
+}
+
+void* Runtime::allocate(void* self, size_t size) {
+    auto* r = static_cast<Runtime*>(self);
+    if (!r->admit(size)) return nullptr;
+    void* p = std::malloc(size ? size : 1);
+    if (p) r->used_ += usableSize(p);
+    return p;
+}
+
+void* Runtime::allocateZeroed(void* self, size_t count, size_t size) {
+    auto* r = static_cast<Runtime*>(self);
+    if (size != 0 && count > SIZE_MAX / size) return nullptr;
+    if (!r->admit(count * size)) return nullptr;
+    void* p = std::calloc(count ? count : 1, size ? size : 1);
+    if (p) r->used_ += usableSize(p);
+    return p;
+}
+
+void Runtime::release(void* self, void* ptr) {
+    if (!ptr) return;
+    static_cast<Runtime*>(self)->used_ -= usableSize(ptr);
+    std::free(ptr);
+}
+
+void* Runtime::reallocate(void* self, void* ptr, size_t size) {
+    auto* r = static_cast<Runtime*>(self);
+    if (!ptr) return allocate(self, size);
+    if (size == 0) {
+        release(self, ptr);
+        return nullptr;
+    }
+    const size_t old = usableSize(ptr);
+    if (size > old && !r->admit(size - old)) return nullptr;
+    void* p = std::realloc(ptr, size);
+    if (!p) return nullptr;
+    r->used_ = r->used_ - old + usableSize(p);
+    return p;
+}
+
+Runtime::Runtime(size_t memoryLimit) : limit_(memoryLimit) {
+    static const JSMallocFunctions mf = {&Runtime::allocateZeroed, &Runtime::allocate, &Runtime::release,
+                                         &Runtime::reallocate, &usableSize};
+    rt_ = JS_NewRuntime2(&mf, this);
+    JS_SetMaxStackSize(rt_, kMaxStack);
     JS_SetInterruptHandler(rt_, &Runtime::interrupt, this);
 }
 
@@ -117,6 +185,23 @@ Context::~Context() {
     JS_FreeContext(cx_);
 }
 
+void Context::begin() {
+    rt_.anchorStack();
+    rt_.clearLimitEvents();
+}
+
+bool Context::isStackOverflow(JSValueConst ex, const JsError& e) {
+    if (e.message != "Maximum call stack size exceeded" || !JS_IsError(ex)) return false;
+    JSValue name = JS_GetPropertyStr(cx_, ex, "name");
+    const bool range = toStd(cx_, name) == "RangeError";
+    JS_FreeValue(cx_, name);
+    // The engine's own overflow is raised at depth, so its (capped) trace is full of frames; a
+    // look-alike thrown by hand from shallow code is not.
+    int frames = 0;
+    for (size_t at = e.stack.find("    at "); at != std::string::npos; at = e.stack.find("    at ", at + 1)) ++frames;
+    return range && frames >= 8;
+}
+
 void Context::recordException() {
     JSValue ex = JS_GetException(cx_);
     if (error_) {  // keep the first error; just release this one
@@ -134,15 +219,16 @@ void Context::recordException() {
     } else {
         e.message = toStd(cx_, ex);
     }
-    // Interrupts and out-of-memory are InternalErrors raised by the engine itself; a script
-    // can fake the message, but an interrupt is uncatchable and the deadline flag is ours.
-    e.limit = rt_.deadlineHit() || (JS_IsUncatchableError(ex) && e.message == "interrupted") ||
-              e.message == "out of memory";
+    // Limit stops are told from script throws by events the engine host observed: the deadline
+    // interrupt (uncatchable), a refused allocation, or a real stack overflow (the engine's
+    // RangeError, thrown while the call stack was deep).
+    e.limit = (rt_.deadlineHit() && JS_IsUncatchableError(ex)) || rt_.memoryLimitHit() || isStackOverflow(ex, e);
     JS_FreeValue(cx_, ex);
     error_ = std::move(e);
 }
 
 Value Context::evalModule(const std::string& source, const std::string& name) {
+    begin();
     JSValue fn = JS_Eval(cx_, source.c_str(), source.size(), name.c_str(),
                          JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
     if (JS_IsException(fn)) {
@@ -166,6 +252,7 @@ Value Context::evalModule(const std::string& source, const std::string& name) {
 }
 
 Value Context::call(const Value& fn, std::vector<Value> args) {
+    begin();
     std::vector<JSValue> raw;
     raw.reserve(args.size());
     for (const Value& a : args) raw.push_back(a.raw());
@@ -178,6 +265,7 @@ Value Context::call(const Value& fn, std::vector<Value> args) {
 }
 
 void Context::runJobs() {
+    begin();
     for (;;) {
         JSContext* jc = nullptr;
         int rc = JS_ExecutePendingJob(rt_.raw(), &jc);
