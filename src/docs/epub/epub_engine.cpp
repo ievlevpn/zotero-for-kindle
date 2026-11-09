@@ -54,6 +54,33 @@ void registerFonts(const std::vector<std::string>& dirs) {
     }
 }
 
+// crengine's document cache (one per process): its folder, "" if off.
+constexpr lvsize_t kDocCacheBytes = 64 * 1024 * 1024;
+std::string& docCacheDir() {
+    static std::string dir;
+    return dir;
+}
+
+// While one lives (crengineMutex held throughout), crengine's document cache is off: a text-only
+// document is parsed without the style sheet, so it must neither load the reader's cache entry nor
+// leave one (a swap or compaction would) that the reader could later pick up. Off and on again is
+// cheap and loses nothing: every change to the cache's index is written to disk at once, and
+// turning it on reads that index back (the reader's open documents keep their own cache files).
+class DocCacheOff {
+public:
+    explicit DocCacheOff(bool active) : off_(active && ldomDocCache::enabled()) {
+        if (off_) ldomDocCache::close();
+    }
+    ~DocCacheOff() {
+        if (off_) ldomDocCache::init(Utf8ToUnicode(lString8(docCacheDir().c_str())), kDocCacheBytes);
+    }
+    DocCacheOff(const DocCacheOff&) = delete;
+    DocCacheOff& operator=(const DocCacheOff&) = delete;
+
+private:
+    bool off_;
+};
+
 void initCrengine(const EngineEnv& env) {
     static std::once_flag once;
     std::call_once(once, [&] {
@@ -66,7 +93,7 @@ void initCrengine(const EngineEnv& env) {
         TextLangMan::setEmbeddedLangsEnabled(true);
         if (!env.cacheDir.empty()) {
             ::mkdir(env.cacheDir.c_str(), 0755);
-            ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), 64 * 1024 * 1024);
+            if (ldomDocCache::init(Utf8ToUnicode(lString8(env.cacheDir.c_str())), kDocCacheBytes)) docCacheDir() = env.cacheDir;
         }
     });
     registerFonts(env.fontDirs);
@@ -110,6 +137,7 @@ EpubEngine::EpubEngine(const EngineEnv& env) : env_(env) {
 
 EpubEngine::~EpubEngine() {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+    DocCacheOff cacheOff(textOnly_);
     dom_.reset();  // holds pointers into the view's document
     links_.clear();
     view_.reset();  // the document and its fonts go inside the lock, not after it
@@ -152,9 +180,14 @@ bool EpubEngine::open(const std::string& path, UserError* err) { return load(pat
 bool EpubEngine::openForText(const std::string& path, UserError* err) { return load(path, err, true); }
 
 // textOnly: just parse the book (no style sheet, layout, pagination or position index): for
-// fullText(), which must not keep the render worker out of crengine for long.
+// fullText(), which must not keep the render worker out of crengine for long. It bypasses the
+// document cache (DocCacheOff) in every crengine call it makes. The parse still holds the lock for
+// the whole book (a long EPUB can keep the reader waiting while a plugin reads it: accepted for
+// v1 — check page turns on the device while a plugin reads a long book).
 bool EpubEngine::load(const std::string& path, UserError* err, bool textOnly) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+    DocCacheOff cacheOff(textOnly_ || textOnly);  // also when a text-only engine's document goes
+    textOnly_ = textOnly;
     auto fail = [&](const char* msg, const char* detail) {
         view_.reset();
         if (err) *err = UserError{ErrorKind::Other, msg, detail};
@@ -625,6 +658,7 @@ bool EpubEngine::fullText(std::string& out, UserError* err) {
     ldomNode* holder = nullptr;
     {
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+        DocCacheOff cacheOff(textOnly_);
         if (!view_ || !view_->getDocument()) return fail();
         ldomNode* root = view_->getDocument()->getRootNode();
         // Chapters are DocFragment elements, children of <body>; with none, the whole document is one.
@@ -653,12 +687,14 @@ bool EpubEngine::fullText(std::string& out, UserError* err) {
     };
     if (!holder) {
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+        DocCacheOff cacheOff(textOnly_);
         take(view_->getDocument()->getRootNode());
         return true;
     }
     for (int i : fragments) {
         if (out.size() > kMaxFullTextBytes) break;
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
+        DocCacheOff cacheOff(textOnly_);
         if (!view_ || i >= (int)holder->getChildCount()) return fail();
         take(holder->getChildNode(i));
     }

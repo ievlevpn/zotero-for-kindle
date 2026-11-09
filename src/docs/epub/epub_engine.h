@@ -46,6 +46,7 @@ private:
     int spreadOf(int crPage) const { return crPage < 0 ? crPage : crPage / cols(); }
     void settle();
     bool load(const std::string& path, UserError*, bool textOnly);
+    bool textOnly_ = false;  // opened with openForText: crengine's document cache is never used
     // The current page's <a> links (cached for one page): their element, href, text and boxes.
     struct PageLink {
         ldomNode* anchor = nullptr;

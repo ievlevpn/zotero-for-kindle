@@ -1,5 +1,8 @@
 #include <doctest/doctest.h>
 
+#include <fcntl.h>
+#include <sys/stat.h>
+
 #include "docs/engine_factory.h"
 #include "golden.h"
 
@@ -7,6 +10,8 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <sstream>
 
 using namespace zk;
 using json = nlohmann::json;
@@ -165,4 +170,78 @@ TEST_CASE("engines: a missing file says it's missing, not damaged") {
     REQUIRE(pdf);
     CHECK_FALSE(pdf->open("/tmp/zk-no-such-paper.pdf", &e));
     CHECK(e.message == "This book's file is missing. Open it from the library to download it again.");
+}
+
+namespace {
+const char* const kCacheDirs[] = {"/tmp/zk-cre-cache", "/tmp/zk-cre-cache-fast", "/tmp/zk-cre-cache-plugin-lib"};
+
+// Every file in the crengine cache folders the tests use (whichever this process initialised
+// first): name -> its last access time and its bytes. Read with a raw read() after the access
+// time is taken.
+std::map<std::string, std::pair<long, std::string>> cacheSnapshot() {
+    std::map<std::string, std::pair<long, std::string>> out;
+    for (const char* dir : kCacheDirs) {
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            struct stat st {};
+            ::stat(it->path().c_str(), &st);
+            out[it->path().string()].first = static_cast<long>(st.st_atime);
+        }
+    }
+    for (auto& [name, entry] : out) {
+        std::ifstream in(name, std::ios::binary);
+        std::ostringstream ss;
+        ss << in.rdbuf();
+        entry.second = ss.str();
+    }
+    return out;
+}
+
+// Ages every cache file's access time (keeping its modification time), so that reading it shows:
+// with relatime (the default on macOS and Linux) a read then updates the access time.
+void ageCacheAccessTimes() {
+    for (const char* dir : kCacheDirs) {
+        std::error_code ec;
+        for (std::filesystem::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+            struct timespec times[2] = {{1000000, 0}, {0, UTIME_OMIT}};
+            ::utimensat(AT_FDCWD, it->path().c_str(), times, 0);
+        }
+    }
+}
+}  // namespace
+
+TEST_CASE("epub engine: a text-only open neither reads nor writes crengine's document cache") {
+    // Two books the reader opened (over 1 MB: crengine caches them), Moby-Dick the older entry.
+    for (const char* book : {"moby-dick-se.epub", "gibbon-footnotes.epub"}) {
+        auto e = openBook(book);
+        REQUIRE(e);
+        e->render(0);
+    }
+    ageCacheAccessTimes();
+    const auto before = cacheSnapshot();
+    REQUIRE_FALSE(before.empty());
+    ageCacheAccessTimes();  // the snapshot itself read them
+    {
+        UserError err;
+        auto e = loadEngine(DocType::Epub, env(), &err);
+        REQUIRE(e);
+        REQUIRE(e->openForText("tests/data/epub/moby-dick-se.epub", &err));
+        std::string text;
+        REQUIRE(e->fullText(text, &err));
+        CHECK(text.find("Call me Ishmael") != std::string::npos);
+    }
+    const auto after = cacheSnapshot();
+    CHECK(after.size() == before.size());
+    for (const auto& [name, entry] : before) {
+        CAPTURE(name);
+        auto it = after.find(name);
+        REQUIRE(it != after.end());
+        // No entry read (turning the cache back on reads its index, which stays the same).
+        if (name.size() > 4 && name.compare(name.size() - 4, 4, ".cr3") == 0) CHECK(it->second.first == entry.first);
+        CHECK(it->second.second == entry.second);  // nothing written
+    }
+    // The reader still opens from (and with) the cache afterwards.
+    auto again = openBook("moby-dick-se.epub");
+    REQUIRE(again);
+    CHECK(again->pageCount() > 100);
 }
