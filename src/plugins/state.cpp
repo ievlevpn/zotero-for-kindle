@@ -30,6 +30,8 @@ void PluginState::load() {
             Entry e;
             const json& v = it.value();
             e.enabled = v.value("enabled", false);
+            e.everEnabled = v.value("everEnabled", e.enabled);  // on before this was kept: turned on once
+            e.stopped = v.value("stopped", false);
             e.failures = v.value("failures", 0);
             e.badge = v.value("badge", std::string());
             e.lastBackgroundMs = v.value("lastBackgroundMs", (int64_t)0);
@@ -45,7 +47,8 @@ void PluginState::load() {
 void PluginState::save() {
     json plugins = json::object();
     for (const auto& [id, e] : entries_)
-        plugins[id] = {{"enabled", e.enabled}, {"failures", e.failures}, {"errors", e.errors},
+        plugins[id] = {{"enabled", e.enabled}, {"everEnabled", e.everEnabled}, {"stopped", e.stopped},
+                       {"failures", e.failures}, {"errors", e.errors},
                        {"badge", e.badge}, {"lastBackgroundMs", e.lastBackgroundMs}};
     static std::atomic<unsigned> counter{0};  // unique per write, so two states never share a temp file
     std::string tmp = file_ + "." + std::to_string(::getpid()) + "." + std::to_string(counter++) + ".tmp";
@@ -73,8 +76,32 @@ bool PluginState::enabled(const std::string& id) {
 }
 void PluginState::setEnabled(const std::string& id, bool on) {
     std::lock_guard<std::mutex> lock(mu_);
-    entries_[id].enabled = on;
+    Entry& e = entries_[id];
+    e.enabled = on;
+    e.everEnabled = e.everEnabled || on;
+    e.stopped = false;
     save();
+}
+bool PluginState::everEnabled(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = entries_.find(id);
+    return it != entries_.end() && it->second.everEnabled;
+}
+void PluginState::stop(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    Entry& e = entries_[id];
+    e.enabled = false;
+    e.stopped = true;
+    save();
+}
+bool PluginState::stopped(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    auto it = entries_.find(id);
+    return it != entries_.end() && it->second.stopped;
+}
+void PluginState::forget(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (entries_.erase(id)) save();
 }
 int PluginState::failures(const std::string& id) {
     std::lock_guard<std::mutex> lock(mu_);
@@ -122,3 +149,4 @@ void PluginState::setLastBackgroundMs(const std::string& id, int64_t ms) {
 }
 
 }  // namespace zk
+

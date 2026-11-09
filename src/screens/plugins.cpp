@@ -1,0 +1,199 @@
+#include "screens/plugins.h"
+
+#include <algorithm>
+
+#include <glib.h>
+
+#include "screens/plugin_page.h"
+#include "ui/metrics.h"
+#include "ui/paint.h"
+#include "ui/text.h"
+#include "ui/theme.h"
+#include "ui/widgets.h"
+
+namespace zk {
+
+using namespace theme;
+
+namespace {
+
+int W() { return metrics().width; }
+int H() { return metrics().height; }
+constexpr int kListRowH = 160;
+constexpr int kTop = kHeaderH + 10;
+
+std::string folded(const std::string& s) {
+    gchar* f = g_utf8_casefold(s.c_str(), -1);
+    std::string out = f ? f : s;
+    g_free(f);
+    return out;
+}
+
+bool canTurnOn(const PluginStatus& s) { return s.folder.manifest && s.folder.problem.empty(); }
+
+}  // namespace
+
+std::string pluginName(const PluginStatus& s) {
+    if (s.folder.manifest) {
+        std::string n = oneLine(s.folder.manifest->name);
+        if (!n.empty()) return n;
+    }
+    return oneLine(s.folder.dir);
+}
+
+std::string pluginNote(const PluginStatus& s) {
+    if (!s.folder.problem.empty()) {
+        if (s.folder.incompatible && s.folder.manifest) return "Incompatible: needs app " + s.folder.manifest->minApp.str();
+        return "Can't load: " + oneLine(s.folder.problem);
+    }
+    if (s.stopped) return "Turned off — it stopped working";
+    if (!s.problem.empty()) return "Can't load: " + oneLine(s.problem);
+    if (!s.enabled && !s.everEnabled) return "New — not turned on yet";
+    if (s.enabled && s.failures > 0 && !s.errors.empty()) return oneLine(s.errors.back());
+    if (s.enabled && !s.badge.empty()) return oneLine(s.badge);
+    return s.folder.manifest ? oneLine(s.folder.manifest->description) : "";
+}
+
+bool pluginNeedsAttention(const PluginStatus& s) {
+    return !s.folder.problem.empty() || s.stopped || !s.problem.empty() || (s.enabled && s.failures > 0);
+}
+
+std::string pluginsSummary(PluginHost* host) {
+    if (!host) return "Not available";
+    const auto all = host->status();
+    if (all.empty()) return "None installed";
+    int on = 0, attention = 0;
+    for (const auto& s : all) {
+        if (s.enabled && canTurnOn(s)) ++on;
+        if (pluginNeedsAttention(s)) ++attention;
+    }
+    std::string out = std::to_string(on) + " on";
+    if (attention > 0) out += " · " + std::to_string(attention) + (attention == 1 ? " needs attention" : " need attention");
+    return out;
+}
+
+PluginsScreen::PluginsScreen(PluginHostFn host) : host_(std::move(host)) {}
+
+int PluginsScreen::perPage() const { return std::max(1, (H() - kTop - kPageIndicatorH) / kListRowH); }
+
+void PluginsScreen::load() {
+    PluginHost* h = host_ ? host_() : nullptr;
+    plugins_ = h ? h->status() : std::vector<PluginStatus>{};
+    std::stable_sort(plugins_.begin(), plugins_.end(), [](const PluginStatus& a, const PluginStatus& b) {
+        return folded(pluginName(a)) < folded(pluginName(b));
+    });
+    const int64_t offset = pager_.offset();
+    pager_ = Pager(static_cast<int64_t>(plugins_.size()), perPage());
+    while (pager_.offset() < offset && pager_.next()) {
+    }
+}
+
+void PluginsScreen::onShow(Nav&) { load(); }
+
+const PluginStatus* PluginsScreen::at(int row) const {
+    const int64_t i = pager_.offset() + row;
+    if (row < 0 || i >= static_cast<int64_t>(plugins_.size())) return nullptr;
+    return &plugins_[static_cast<size_t>(i)];
+}
+
+std::vector<Rect> PluginsScreen::rowRects() const {
+    std::vector<Rect> out;
+    for (int i = 0; i < perPage() && at(i); ++i) out.push_back({kMargin, kTop + i * kListRowH, W() - 2 * kMargin, kListRowH});
+    return out;
+}
+
+Rect PluginsScreen::toggleRect(int row) const {
+    const PluginStatus* s = at(row);
+    if (!s || !canTurnOn(*s)) return {};
+    const Rect r{kMargin, kTop + row * kListRowH, W() - 2 * kMargin, kListRowH};
+    return {r.x + r.w - 140, r.y + (r.h - 80) / 2, 140, 80};
+}
+
+std::string PluginsScreen::note(int row) const {
+    const PluginStatus* s = at(row);
+    return s ? pluginNote(*s) : "";
+}
+
+Rect PluginsScreen::turnAllOffRect() const {
+    for (const auto& s : plugins_)
+        if (s.enabled) return {W() - kMargin - 440, 30, 440, 80};
+    return {};
+}
+
+void PluginsScreen::draw(Canvas& canvas) {
+    cairo_t* cr = canvas.cr();
+    fillRect(cr, {0, 0, W(), H()}, 255);
+    const Rect all = turnAllOffRect();
+    drawHeader(cr, "Plugins", true, all.empty() ? 0 : all.w + 20);
+    if (!all.empty()) drawButton(cr, all, "Turn all plugins off", false);
+    const TextStyle name{kSans, 9.5, 500}, version{kSans, 7, 400, false, kTertiary}, quiet{kSans, 7, 400, false, kSecondary},
+        loud{kSans, 7, 500};
+    const int w = W() - 2 * kMargin;
+    if (!host_ || !host_()) {
+        drawText(cr, "Plugins aren't available right now.", quiet, {kMargin, kTop + 20, w, 120}, 2);
+        return;
+    }
+    if (plugins_.empty()) {
+        drawText(cr, "No plugins installed. To add one, connect the Kindle by USB and copy the plugin's folder into "
+                     "zotero/plugins.",
+                 quiet, {kMargin, kTop + 20, w, 160}, 3);
+        return;
+    }
+    const auto rows = rowRects();
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const Rect r = rows[i];
+        const PluginStatus& s = *at(static_cast<int>(i));
+        const Rect toggle = toggleRect(static_cast<int>(i));
+        const int textW = r.w - 180;
+        const std::string n = pluginName(s);
+        const int nameW = drawText(cr, n, name, {r.x, r.y + 26, textW, 60}, 1).width;
+        if (s.folder.manifest && nameW + 30 < textW)
+            drawText(cr, oneLine(s.folder.manifest->version), version, {r.x + nameW + 20, r.y + 40, textW - nameW - 20, 44}, 1);
+        drawText(cr, pluginNote(s), pluginNeedsAttention(s) ? loud : quiet, {r.x, r.y + 92, textW, 46}, 1);
+        if (!toggle.empty()) drawToggle(cr, toggle, s.enabled);
+        hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
+    }
+    drawPageIndicator(cr, {0, H() - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
+}
+
+void PluginsScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (g.type == GestureType::Swipe && (g.dir == Direction::Up ? pager_.next() : g.dir == Direction::Down && pager_.prev())) {
+        nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
+        return;
+    }
+    if (g.type != GestureType::Tap) return;
+    if (headerBackRect().contains(g.pos)) {
+        nav.pop();
+        return;
+    }
+    PluginHost* host = host_ ? host_() : nullptr;
+    if (!host) return;
+    if (const Rect all = turnAllOffRect(); !all.empty() && all.contains(g.pos)) {
+        for (const auto& s : plugins_)
+            if (s.enabled) host->setEnabled(s.folder.dir, false);
+        load();
+        nav.damage({0, 0, W(), H()}, Waveform::Ui);
+        return;
+    }
+    const auto rows = rowRects();
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (!rows[i].contains(g.pos)) continue;
+        const PluginStatus& s = *at(static_cast<int>(i));
+        // The toggle, and a little around it: an e-ink finger is not precise.
+        const Rect t = toggleRect(static_cast<int>(i));
+        const bool onToggle = !t.empty() && g.pos.x >= t.x - 40;
+        if (onToggle && (s.enabled || s.everEnabled)) {
+            const bool hadAll = !turnAllOffRect().empty();
+            host->setEnabled(s.folder.dir, !s.enabled);  // `s` goes with the reload below
+            load();
+            nav.damage(rows[i], Waveform::Ui);
+            if (hadAll != !turnAllOffRect().empty()) nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);  // the top action
+            return;
+        }
+        // Never turned on (its permissions come first), can't be turned on, or the row itself.
+        nav.push(std::make_unique<PluginPageScreen>(s.folder.dir, host_));
+        return;
+    }
+}
+
+}  // namespace zk

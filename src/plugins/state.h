@@ -16,7 +16,13 @@ public:
     explicit PluginState(std::string file);
 
     bool enabled(const std::string& id);  // false for a plugin never seen
+    // The user's choice: on also marks it ever enabled; either clears stopped.
     void setEnabled(const std::string& id, bool on);
+    bool everEnabled(const std::string& id);
+    // The app turned it off (it kept failing, or the app stopped while it ran).
+    void stop(const std::string& id);
+    bool stopped(const std::string& id);
+    void forget(const std::string& id);  // everything about it (a removed plugin)
     int failures(const std::string& id);  // in a row
     void recordFailure(const std::string& id, std::string message);
     void clearFailures(const std::string& id);
@@ -28,7 +34,7 @@ public:
 
 private:
     struct Entry {
-        bool enabled = false;
+        bool enabled = false, everEnabled = false, stopped = false;
         int failures = 0;
         std::vector<std::string> errors;
         std::string badge;

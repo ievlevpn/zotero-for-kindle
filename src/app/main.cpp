@@ -412,7 +412,10 @@ int main(int argc, char** argv) {
     auto openSettings = [&] {
         app.push(std::make_unique<SettingsScreen>(
             *config, [&](Nav& nav) { nav.push(makeSetup(*config, false, true)); }, &updater, pushUpdateScreen,
-            pendingUpdate));
+            pendingUpdate,
+            // Settings → Plugins: the host of the moment (none while an update installs; a failed
+            // install makes a new one, so the screens ask each time instead of keeping a pointer).
+            [&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; }));
     };
     auto makeHome = [&]() {
         HomeActions home;

@@ -75,6 +75,11 @@ struct PluginEntry {
 struct PluginStatus {
     PluginFolder folder;
     bool enabled = false, loaded = false;
+    // everEnabled: turned on at some time (a copied plugin isn't until its permissions were shown).
+    // stopped: the app turned it off (three failures in a row, or the app stopped while it ran).
+    bool everEnabled = false, stopped = false;
+    int failures = 0;      // in a row, not cleared by a success yet
+    std::string problem;   // why it couldn't load this time ("" if none; also the last of errors)
     std::string badge;
     std::vector<std::string> errors;  // newest last: past failures, then a current problem
     std::vector<PluginEntry> entries;  // registered by the loaded plugin, in order; empty when not loaded
@@ -120,6 +125,10 @@ public:
     std::vector<PluginStatus> status() const;
     // Turning a plugin on clears its failures; turning it off unloads it.
     void setEnabled(const std::string& id, bool);
+    // Settings → Plugins → Remove: off at once and no longer listed by status(); then, on the plugin
+    // thread, unloaded and its folder deleted (data, settings and all). What it remembered goes
+    // too, so a copy put back is new again. Its changes for Zotero stay (pending ones are sent).
+    void remove(const std::string& id);
     // The WebDAV server changed (host or URL; "" for none): zk.fetch refuses the new one from the
     // next request on. Any thread.
     void setWebdavHost(std::string);

@@ -99,6 +99,36 @@ inline const PluginStatus* statusOf(const std::vector<PluginStatus>& all, const 
     return nullptr;
 }
 
+// A plugin folder with a whole manifest (version 1.2.0, an author, a description); `perms` is the
+// inside of the JSON array, `extra` more members (",\"minApp\":\"99.0.0\"").
+inline void addPlugin(FakePlugins& d, const std::string& id, const std::string& name, const std::string& perms,
+                      const std::string& extra = "", const std::string& js = "") {
+    d.write(id + "/plugin.json", "{\"id\":\"" + id + "\",\"name\":\"" + name +
+                                   "\",\"version\":\"1.2.0\",\"api\":0,\"main\":\"main.js\",\"author\":\"Ann Author\","
+                                   "\"description\":\"Sends new highlights to Readwise and tags what it sent.\","
+                                   "\"permissions\":[" + perms + "]" + extra + "}");
+    d.write(id + "/main.js", js);
+}
+
+// What the Settings → Plugins goldens show: two on (one with a badge and an old error), one the
+// app turned off, one new, one incompatible, one broken folder.
+inline void addShowcasePlugins(FakePlugins& d) {
+    addPlugin(d, "feed", "Feed Riffle",
+              "\"library:read\",\"annotations:read\",\"net:readwise.io\",\"net:*.example.org\",\"zotero:tags\",\"zotero:remove\","
+              "\"background\"");
+    addPlugin(d, "arxiv", "arXiv Watch", "\"library:read\",\"net:export.arxiv.org\",\"zotero:create-items\"");
+    addPlugin(d, "aged", "Citation Counts", "\"library:read\"", ",\"minApp\":\"99.0.0\"");
+    addPlugin(d, "tired", "Word Counter", "\"fulltext:read\"");
+    addPlugin(d, "fresh", "Reading Streaks", "\"annotations:read\"");
+    d.write("broken/readme.txt", "no manifest here");
+    d.write(".state.json",
+            R"J({"plugins":{"tired":{"enabled":false,"everEnabled":true,"stopped":true,"failures":3,
+                "errors":["TypeError: cannot read property 'length' of undefined (main.js:41)","Timed out after 5 s while handling highlightCreated","Timed out after 5 s while handling syncFinished"]},
+                "feed":{"enabled":true,"everEnabled":true,"badge":"12 highlights sent today",
+                "errors":["fetch to readwise.io failed: HTTP 502"]},
+                "arxiv":{"enabled":true,"everEnabled":true}}})J");
+}
+
 inline std::string joined(const std::vector<std::string>& v) {
     std::string out;
     for (const auto& s : v) out += s + "\n";

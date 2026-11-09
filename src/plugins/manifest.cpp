@@ -234,6 +234,7 @@ std::vector<PluginFolder> scanPlugins(const std::string& pluginsDir, Version app
                 f.problem = "Another plugin already has the id \"" + f.manifest->id + "\".";
             } else if (app < f.manifest->minApp) {
                 f.problem = "Needs app version " + f.manifest->minApp.str() + " or newer.";
+                f.incompatible = true;
             } else if (std::error_code mainEc; !fs::is_regular_file(d / f.manifest->main, mainEc)) {
                 f.problem = "The file " + f.manifest->main + " is missing.";
             }

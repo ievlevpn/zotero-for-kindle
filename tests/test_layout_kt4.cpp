@@ -5,6 +5,7 @@
 #include <doctest/doctest.h>
 
 #include "fake_display.h"
+#include "fake_plugins.h"
 #include "fake_nav.h"
 #include "fixture_library.h"
 #include "golden.h"
@@ -14,6 +15,7 @@
 #include "screens/home.h"
 #include "screens/library.h"
 #include "screens/notes.h"
+#include "screens/plugins.h"
 #include "screens/reader_menus.h"
 #include "screens/search.h"
 #include "screens/settings.h"
@@ -125,6 +127,27 @@ TEST_CASE("kt4 layout: Settings fits, down to the update button") {
     CHECK(inside(settings.flashPlusRect(), kKt4.height));
     CHECK(inside(settings.updateRect(), kKt4.height));
     CHECK(inside(settings.aboutTextRect(), kKt4.height));
+    CHECK(inside(settings.pluginsRect(), kKt4.height));
+    // Rows don't overlap: each ends above the next one's rule.
+    const Rect flash = settings.flashPlusRect(), plugins = settings.pluginsRect();
+    CHECK(settings.removeRect().y + settings.removeRect().h < flash.y);
+    CHECK(flash.y + flash.h < plugins.y);
+    CHECK(plugins.y + plugins.h <= settings.updateRect().y);
+}
+
+TEST_CASE("kt4 layout: the plugins list fits, above its page indicator") {
+    Rig rig;
+    ScopedMetrics s(kKt4);
+    FakePlugins dir;
+    for (int i = 0; i < 12; ++i) addPlugin(dir, "p" + std::to_string(10 + i), "Plugin " + std::to_string(i), "");
+    PluginHost host(dir.deps());
+    PluginsScreen list([&] { return &host; });
+    list.onShow(rig.nav);
+    CHECK(list.rowRects().size() >= 5);
+    for (int i = 0; i < static_cast<int>(list.rowRects().size()); ++i) {
+        CHECK(inside(list.rowRects()[i], kKt4.height - kPageIndicatorH));
+        CHECK(inside(list.toggleRect(i), kKt4.height - kPageIndicatorH));
+    }
 }
 
 TEST_CASE("kt4 layout: Setup's fields and Connect fit") {
@@ -171,10 +194,17 @@ TEST_CASE("kt4 goldens: what the screen shows") {
     withTabs(home, "tests/golden/home-kt4.png");
     LibraryScreen library(nullptr);
     withTabs(library, "tests/golden/library-kt4.png");
-    SettingsScreen settings(someone(), [](Nav&) {});
+    FakePlugins dir;
+    addShowcasePlugins(dir);
+    PluginHost host(dir.deps());
+    SettingsScreen settings(someone(), [](Nav&) {}, nullptr, nullptr, nullptr, [&] { return &host; });
     settings.onShow(rig.nav);
     settings.draw(c);
     checkShrunk(c, "tests/golden/settings-kt4.png");
+    PluginsScreen plugins([&] { return &host; });
+    plugins.onShow(rig.nav);
+    plugins.draw(c);
+    checkShrunk(c, "tests/golden/plugins-kt4.png");
     SetupScreen setup(Config{}, false, "/tmp/zk-setup-kt4", [](const Config&) { return UserError{}; }, [](const Config&, Nav&) {});
     setup.onShow(rig.nav);
     setup.draw(c);

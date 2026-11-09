@@ -23,14 +23,13 @@ int H() { return metrics().height; }
 const int kIntervals[] = {0, 5, 10, 30};
 const char* kIntervalLabels[] = {"Off", "5 min", "10 min", "30 min"};
 
-// Section rows, top to bottom.
 // Section rows, top to bottom; `rule`: the line above a section, this far above it. A window
 // shorter than the PW5's (the KT4's, 1337 at 300 ppi) takes the compact spacing.
 struct Rows {
-    int account, webDav, readTag, interval, highlights, storage, flash, about, rule;
+    int account, webDav, readTag, interval, highlights, storage, flash, plugins, about, rule;
 };
-constexpr Rows kRows{170, 320, 470, 620, 790, 1000, 1230, 1380, 30};
-constexpr Rows kCompactRows{150, 290, 410, 540, 710, 870, 1072, 1185, 20};
+constexpr Rows kRows{170, 320, 470, 620, 790, 1000, 1130, 1260, 1380, 30};
+constexpr Rows kCompactRows{150, 290, 410, 540, 710, 870, 985, 1100, 1185, 20};
 const Rows& rows() { return H() < 1500 ? kCompactRows : kRows; }
 
 std::string mb(int64_t bytes) {
@@ -42,9 +41,16 @@ std::string mb(int64_t bytes) {
 
 SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount, Updater* updater,
                                std::function<void(Nav&)> openUpdate,
-                               std::function<std::optional<std::string>()> pendingUpdate)
+                               std::function<std::optional<std::string>()> pendingUpdate, PluginHostFn plugins)
     : config_(std::move(c)), changeAccount_(std::move(changeAccount)), updater_(updater),
-      openUpdate_(std::move(openUpdate)), pendingUpdate_(std::move(pendingUpdate)) {}
+      openUpdate_(std::move(openUpdate)), pendingUpdate_(std::move(pendingUpdate)), plugins_(std::move(plugins)) {}
+
+// The band between the rules above and below (no buttons in it: the whole row opens the list).
+Rect SettingsScreen::pluginsRect() const {
+    return {kMargin, rows().plugins - rows().rule, W() - 2 * kMargin, rows().about - rows().plugins};
+}
+
+std::string SettingsScreen::pluginsLine() const { return pluginsSummary(plugins_ ? plugins_() : nullptr); }
 
 Rect SettingsScreen::accountRect() const { return {W() - kMargin - 240, rows().account + 20, 240, 80}; }
 Rect SettingsScreen::readTagRect() const { return {W() - kMargin - 240, rows().readTag + 20, 240, 80}; }
@@ -65,7 +71,7 @@ std::string SettingsScreen::updateLine() const {
     return "Version " + (updater_ ? updater_->current() : appVersion()).str() + " · open source (AGPL-3.0)";
 }
 
-Rect SettingsScreen::removeRect() const { return {kMargin, rows().storage + 80, W() - 2 * kMargin, 92}; }
+Rect SettingsScreen::removeRect() const { return {W() - kMargin - 420, rows().storage + 10, 420, 80}; }
 
 void SettingsScreen::load(Library& lib) {
     interval_ = loadSettings(lib).syncIntervalMinutes;
@@ -128,8 +134,8 @@ void SettingsScreen::draw(Canvas& canvas) {
     drawToggle(cr, toggleRect(), allOffline_);
     hRule(cr, rows().storage - rows().rule, kMargin, W() - kMargin);
 
-    drawText(cr, "Downloaded files: " + mb(downloadedBytes_), label, {kMargin, rows().storage, w, 50}, 1);
-    drawButton(cr, removeRect(), confirmRemove_ ? "Tap again to remove them" : "Remove downloaded files", false);
+    drawText(cr, "Downloaded files: " + mb(downloadedBytes_), label, {kMargin, rows().storage + 24, w - 460, 50}, 1);
+    drawButton(cr, removeRect(), confirmRemove_ ? "Tap again to remove" : "Remove all", false);
     hRule(cr, rows().flash - rows().rule, kMargin, W() - kMargin);
 
     drawText(cr, "Full refresh every", label, {kMargin, rows().flash + 24, w - 420, 50}, 1);
@@ -137,6 +143,13 @@ void SettingsScreen::draw(Canvas& canvas) {
     drawButton(cr, flashPlusRect(), "+", false);
     centredText(cr, std::to_string(flashEvery_) + (flashEvery_ == 1 ? " page" : " pages"), {kSans, 8, 400},
                 {flashMinusRect().x + 120, rows().flash + 10, flashPlusRect().x - flashMinusRect().x - 120, 80});
+    hRule(cr, rows().plugins - rows().rule, kMargin, W() - kMargin);
+
+    const Rect band = pluginsRect();
+    const bool canOpen = plugins_ && plugins_();
+    centredText(cr, "Plugins", label, {band.x, band.y, 300, band.h}, Align::Left);
+    centredText(cr, pluginsLine(), value, {band.x + 300, band.y, band.w - 300 - (canOpen ? 50 : 0), band.h}, Align::Right);
+    if (canOpen) centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {band.x + band.w - 30, band.y, 30, band.h}, Align::Right);
     hRule(cr, rows().about - rows().rule, kMargin, W() - kMargin);
 
     drawText(cr, "Zotero for Kindle", label, {kMargin, rows().about, w - 460, 50}, 1);
@@ -181,6 +194,10 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (readTagRect().contains(g.pos)) {
         nav.push(std::make_unique<ReadTagScreen>());
+        return;
+    }
+    if (pluginsRect().contains(g.pos)) {
+        if (plugins_ && plugins_()) nav.push(std::make_unique<PluginsScreen>(plugins_));
         return;
     }
     for (int i = 0; i < 4; ++i)

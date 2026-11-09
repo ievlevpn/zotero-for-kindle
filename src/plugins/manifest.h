@@ -39,6 +39,7 @@ struct PluginFolder {
     std::string dir;  // the folder's name (its path is <pluginsDir>/<dir>)
     std::optional<PluginManifest> manifest;
     std::string problem;  // "" if loadable
+    bool incompatible = false;  // the problem: it needs a newer app (manifest->minApp)
 };
 
 // Every plugin folder in pluginsDir, sorted by name. Names starting with "." and plain files are

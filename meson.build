@@ -215,11 +215,13 @@ screens_lib = static_library('zk-screens',
   'src/screens/book_notes.cpp',
   'src/screens/book_search.cpp',
   'src/screens/plugin_confirm.cpp',
+  'src/screens/plugins.cpp',
+  'src/screens/plugin_page.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
-  dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep])
+  dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep])
 
-screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep])
+screens_dep = declare_dependency(link_with : screens_lib, dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep])
 
 app_lib = static_library('zk-app',
   'src/app/stall_watchdog.cpp', 'src/app/app.cpp',

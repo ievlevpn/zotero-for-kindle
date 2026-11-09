@@ -4,6 +4,7 @@
 #include "app/startup.h"
 #include "fake_http.h"
 #include "fake_nav.h"
+#include "fake_plugins.h"
 #include "golden.h"
 #include "screens/settings.h"
 #include "screens/setup.h"
@@ -191,7 +192,10 @@ TEST_CASE("setup, setup error and settings match the reviewed goldens") {
     settle(imported, nav);
     imported.draw(c);
     test::checkGolden(c, "tests/golden/setup-error.png");
-    SettingsScreen settings(good(), [](Nav&) {});
+    FakePlugins plugins;
+    addShowcasePlugins(plugins);
+    PluginHost host(plugins.deps());
+    SettingsScreen settings(good(), [](Nav&) {}, nullptr, nullptr, nullptr, [&] { return &host; });
     settings.onShow(nav);
     settings.draw(c);
     test::checkGolden(c, "tests/golden/settings.png");

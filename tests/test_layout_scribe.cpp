@@ -4,6 +4,7 @@
 #include <doctest/doctest.h>
 
 #include "fake_nav.h"
+#include "fake_plugins.h"
 #include "fixture_library.h"
 #include "golden.h"
 #include "screens/collections.h"
@@ -125,7 +126,10 @@ TEST_CASE("scribe goldens: library screens") {
     withTabs(collections, "tests/golden/collections-scribe.png");
     NotesScreen notes;
     withTabs(notes, "tests/golden/notes-scribe.png");
-    SettingsScreen settings(someone(), [](Nav&) {});
+    FakePlugins dir;
+    addShowcasePlugins(dir);
+    PluginHost host(dir.deps());
+    SettingsScreen settings(someone(), [](Nav&) {}, nullptr, nullptr, nullptr, [&] { return &host; });
     settings.onShow(rig.nav);
     settings.draw(c);
     checkGolden(c, "tests/golden/settings-scribe.png");

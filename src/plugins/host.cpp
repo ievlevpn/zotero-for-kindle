@@ -338,7 +338,7 @@ struct PluginHost::Impl {
         const std::string name = nameOf(id);
         const std::string text = "The app stopped while " + name + " was running — turned off";
         state.recordFailure(id, text);
-        state.setEnabled(id, false);
+        state.stop(id);
         log(id, LogLevel::Error, text);
         postEvent({PluginHostEvent::Kind::Disabled, id, name, text, {}, 0, ""});
     }
@@ -549,7 +549,7 @@ struct PluginHost::Impl {
             turnOffs.erase(turnOffs.begin());
             restarts.erase(id);
             unload(id);
-            state.setEnabled(id, false);
+            state.stop(id);
             const std::string name = nameOf(id);
             log(id, LogLevel::Error, name + " stopped working — turned off after 3 failures in a row");
             postEvent({PluginHostEvent::Kind::Disabled, id, name, name + " stopped working — turned off", {}, 0, ""});
@@ -1301,11 +1301,17 @@ std::vector<PluginStatus> PluginHost::status() const {
         PluginStatus s;
         s.folder = f;
         s.enabled = h.state.enabled(f.dir);
+        s.everEnabled = h.state.everEnabled(f.dir);
+        s.stopped = h.state.stopped(f.dir);
+        s.failures = h.state.failures(f.dir);
         s.loaded = h.loadedIds.count(f.dir) > 0;
         s.badge = h.state.badge(f.dir);
         if (auto e = h.entryList.find(f.dir); e != h.entryList.end() && s.loaded) s.entries = e->second;
         s.errors = h.state.lastErrors(f.dir);
-        if (auto p = h.problems.find(f.dir); p != h.problems.end()) s.errors.push_back(p->second);
+        if (auto p = h.problems.find(f.dir); p != h.problems.end()) {
+            s.problem = p->second;
+            s.errors.push_back(p->second);
+        }
         out.push_back(std::move(s));
     }
     return out;
@@ -1321,6 +1327,29 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
     });
 }
 
+void PluginHost::remove(const std::string& id) {
+    Impl& h = *impl_;
+    {
+        std::lock_guard<std::mutex> lock(h.mu);
+        auto& fs_ = h.folders;
+        const auto before = fs_.size();
+        fs_.erase(std::remove_if(fs_.begin(), fs_.end(), [&](const PluginFolder& f) { return f.dir == id; }), fs_.end());
+        if (fs_.size() == before) return;  // not one of ours (and never a path)
+        h.problems.erase(id);
+    }
+    h.state.forget(id);
+    h.post([id](Impl& h) {
+        h.failedLoad.erase(id);
+        h.turnOffs.erase(id);
+        h.restarts.erase(id);
+        h.unload(id);
+        h.logs.erase(id);
+        std::error_code ec;
+        fs::remove_all(fs::path(h.deps.pluginsDir) / id, ec);  // what stays (it failed) is listed again by a rescan
+        h.state.forget(id);  // what a call ending meanwhile recorded
+    });
+}
+
 void PluginHost::setWebdavHost(std::string host) {
     std::lock_guard<std::mutex> lock(impl_->mu);
     impl_->webdavHost = std::move(host);
@@ -1333,3 +1362,4 @@ bool PluginHost::waitIdle(int timeoutMs) {
 }
 
 }  // namespace zk
+

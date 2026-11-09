@@ -1,11 +1,12 @@
 #pragma once
 // Settings (spec §7.7): account, WebDAV, the read tag, sync interval, "Keep all highlights
-// offline", downloaded files, about.
+// offline", downloaded files, full refresh, plugins, about.
 
 #include <functional>
 #include <optional>
 #include <string>
 
+#include "screens/plugins.h"
 #include "screens/screen.h"
 #include "sync/config.h"
 #include "update/updater.h"
@@ -16,10 +17,11 @@ class SettingsScreen final : public Screen {
 public:
     // `updater` (may be null): the About row's Check for updates; `openUpdate` pushes the update
     // screen when the check finds a newer release. `pendingUpdate`: a newer version the weekly
-    // check found (UpdateNotice), for the About row.
+    // check found (UpdateNotice), for the About row. `plugins` (may be null, or give null): the
+    // current plugin host, for the Plugins row.
     SettingsScreen(Config, std::function<void(Nav&)> changeAccount, Updater* updater = nullptr,
                    std::function<void(Nav&)> openUpdate = nullptr,
-                   std::function<std::optional<std::string>()> pendingUpdate = nullptr);
+                   std::function<std::optional<std::string>()> pendingUpdate = nullptr, PluginHostFn plugins = nullptr);
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
@@ -35,6 +37,8 @@ public:
     Rect flashMinusRect() const;  // "Full refresh every N pages" (reader), 1–12
     Rect flashPlusRect() const;
     Rect updateRect() const;
+    Rect pluginsRect() const;  // the whole Plugins row: opens the list
+    std::string pluginsLine() const;  // "3 on · 1 needs attention"
     Rect aboutTextRect() const;  // the About row's second line (two lines at most)
     std::string updateLine() const;  // the About row's second line: version, or the last check's result
 
@@ -45,6 +49,7 @@ private:
     Updater* updater_ = nullptr;
     std::function<void(Nav&)> openUpdate_;
     std::function<std::optional<std::string>()> pendingUpdate_;
+    PluginHostFn plugins_;
     bool checking_ = false;
     std::string updateResult_;
     int interval_ = 10;
