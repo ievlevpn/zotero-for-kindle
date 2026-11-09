@@ -54,7 +54,23 @@ void drawItemRow(cairo_t* cr, Rect row, const ItemRow& item, const std::string& 
     TextResult tr = drawText(cr, title, titleStyle, {tx, titleY, tw, bottom - line2H - 6 - titleY}, 2);
     const int y2 = titleY + tr.height + 6;
     drawText(cr, line2, line2Style, {tx, y2, line2W, bottom - y2}, status.empty() ? 1 : 2);
-    if (status.empty()) {
+    if (status.empty() && item.read) {  // "✓ Read" instead of the progress, the tick drawn (fonts may lack ✓)
+        const TextStyle readStyle{kSans, 6.5, 700, false, kInk};
+        const int textW = measureText("Read", readStyle, metaW, 1).width;
+        const int right = row.x + row.w;
+        drawText(cr, "Read", readStyle, {right - textW, y2, textW, 50}, 1, Align::Right);
+        const double cx = right - textW - 30, cy = y2 + 21;
+        cairo_save(cr);
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 4);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_move_to(cr, cx - 11, cy);
+        cairo_line_to(cr, cx - 3, cy + 8);
+        cairo_line_to(cr, cx + 12, cy - 9);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    } else if (status.empty()) {
         const std::string meta = metaOf(item);
         drawText(cr, meta, metaStyle, {row.x + row.w - metaW, y2, metaW, 50}, 1, Align::Right);
     }

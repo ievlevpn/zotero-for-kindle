@@ -433,6 +433,10 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     linkId_ = 0;
     commitInk();
     const int target = page_ + delta;
+    if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !endPrompt_ && !nav.library().isRead(row_.key)) {
+        endPrompt_ = true;
+        nav.damage(endPromptRect(), Waveform::Ui);
+    }
     if (target < 0 || (pageCount_ > 0 && target >= pageCount_)) return;
     if (!back_.empty() && ++turnsSinceJump_ >= kBackTurns) back_.clear();  // read on: no way back
     // Reading on answers Zotero's position: the Kindle's place it is.
@@ -483,6 +487,7 @@ void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
 void ReaderScreen::onResize(Nav& nav) {
     commitInk();  // its points belong to the old layout
     linkPopup_.reset();  // its target is counted in the old layout's pages
+    endPrompt_ = false;
     linkId_ = 0;
     fitLayout(layout_, type_, twoColumnsSetting_);
     bar_.reset();  // anchored to the old page
@@ -537,6 +542,17 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (menus_) {
         menus_->onGesture(g, nav);
+        return;
+    }
+    if (endPrompt_) {  // any gesture closes it; its button marks the book read
+        const bool mark = g.type == GestureType::Tap && endPromptButtonRect().contains(g.pos);
+        nav.damage(endPromptRect(), Waveform::Quality);  // the page under it, without ghosts
+        endPrompt_ = false;
+        if (mark) {
+            nav.library().markRead(row_.key, true);
+            nav.sync().pushSoon();
+            nav.toast("Marked as read.");
+        }
         return;
     }
     if (linkPopup_) {  // any gesture closes it; its button follows the link
@@ -891,6 +907,15 @@ void ReaderScreen::draw(Canvas& canvas) {
         drawButton(cr, go, "Go", true);
         drawButton(cr, positionStayRect(), "Stay", false);
     }
+    if (endPrompt_ && !menus_) {
+        const Rect p = endPromptRect();
+        fillRect(cr, p, 255);
+        fillRect(cr, {p.x, p.y, p.w, 3}, kInk);
+        drawText(cr, "The end", {kSans, 7, 500, false, kSecondary}, {kMargin, p.y + 34, p.w - 2 * kMargin, 44}, 1);
+        drawText(cr, row_.title.empty() ? "Untitled" : row_.title, {kSerif, 9, 700},
+                 {kMargin, p.y + 88, p.w - 2 * kMargin, 60}, 1);
+        drawButton(cr, endPromptButtonRect(), "Mark as read", true);
+    }
     if (linkPopup_ && !menus_) {
         const Rect p = linkPopupRect();
         fillRect(cr, p, 255);
@@ -1059,6 +1084,19 @@ Rect ReaderScreen::linkPopupRect() const {
 std::string ReaderScreen::linkButtonLabel() const {
     if (!linkPopup_) return "";
     return linkPopup_->kind == LinkInfo::Kind::Note ? "Go to note" : "Go to page " + std::to_string(shownPage(linkPopup_->targetPage));
+}
+
+Rect ReaderScreen::endPromptRect() const {
+    if (!endPrompt_) return {};
+    const Rect page = pageArea();
+    const int h = 40 + 54 + 60 + 40 + 90 + 40;
+    return {0, page.y + page.h - h, page.w, h};
+}
+
+Rect ReaderScreen::endPromptButtonRect() const {
+    if (!endPrompt_) return {};
+    const Rect p = endPromptRect();
+    return {kMargin, p.y + p.h - 40 - 90, 420, 90};
 }
 
 Rect ReaderScreen::linkButtonRect() const {

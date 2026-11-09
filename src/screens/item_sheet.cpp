@@ -15,7 +15,7 @@ using namespace theme;
 
 namespace {
 
-constexpr int kPad = 40, kButtonH = 100, kNarrowButtonW = 260, kAbstractLines = 4;
+constexpr int kPad = 40, kButtonH = 100, kButtonGap = 24, kNarrowButtonW = 260, kAbstractLines = 4;
 const TextStyle kTitle{theme::kSerif, 12, 700}, kMeta{theme::kSans, 7.5, 400, false, theme::kSecondary},
     kBody{theme::kSerif, 8, 400};
 
@@ -85,7 +85,7 @@ int ItemSheet::contentHeight(int width) const {
     int h = kPad + measureText(details_.item.title.empty() ? "Untitled" : details_.item.title, kTitle, w, 2).height + 14;
     h += 3 * 52 + 18;
     if (!details_.abstract.empty()) h += measureText(details_.abstract, kBody, w, kAbstractLines).height + 30;
-    return h + kButtonH + kPad;
+    return h + kButtonH + kButtonGap + kButtonH + kPad;
 }
 
 Rect ItemSheet::sheetRect(Rect area) const {
@@ -107,6 +107,11 @@ Rect ItemSheet::removeRect(Rect area) const {
 Rect ItemSheet::moreRect(Rect area) const {
     const Rect s = sheetRect(area);
     return {s.x + s.w - kMargin - kNarrowButtonW, s.y + s.h - kPad - kButtonH, kNarrowButtonW, kButtonH};
+}
+
+Rect ItemSheet::readRect(Rect area) const {
+    const Rect o = openRect(area), m = moreRect(area);
+    return {o.x, o.y - kButtonGap - kButtonH, m.x + m.w - o.x, kButtonH};
 }
 
 void ItemSheet::draw(cairo_t* cr, Rect area) const {
@@ -138,10 +143,11 @@ void ItemSheet::draw(cairo_t* cr, Rect area) const {
     const ItemDetails::File* f = file();
     drawText(cr, f ? fileLine(*f, details_.progress) : "No file", meta, {x, y, w, 50}, 1);
     y += 52 + 18;
-    const int abstractBottom = openRect(area).y - 30;
+    const int abstractBottom = readRect(area).y - 30;
     if (!details_.abstract.empty() && abstractBottom - y > 60)
         drawText(cr, details_.abstract, body, {x, y, w, abstractBottom - y}, kAbstractLines);
 
+    drawButton(cr, readRect(area), row_.read ? "Mark as unread" : "Mark as read", false);
     drawButton(cr, openRect(area), "Open", true);
     if (!f) {  // nothing to open: greyed out
         const Rect o = openRect(area);
@@ -161,6 +167,13 @@ ItemSheet::Action ItemSheet::onGesture(const Gesture& g, Rect area, Nav& nav) {
     const ItemDetails::File* f = file();
     if (openRect(area).contains(g.pos)) return f ? Action::Open : Action::None;
     if (moreRect(area).contains(g.pos)) return Action::More;
+    if (readRect(area).contains(g.pos)) {
+        nav.library().markRead(row_.key, !row_.read);
+        nav.sync().pushSoon();
+        if (auto fresh = nav.library().rowFor(row_.key)) row_ = std::move(*fresh);
+        confirmRemove_ = false;
+        return Action::Changed;
+    }
     if (f && f->onKindle && removeRect(area).contains(g.pos)) {
         if (!confirmRemove_) {
             confirmRemove_ = true;
@@ -171,7 +184,7 @@ ItemSheet::Action ItemSheet::onGesture(const Gesture& g, Rect area, Nav& nav) {
         nav.library().removeDownload(f->attachment.key);
         if (auto fresh = nav.library().details(row_.key)) details_ = std::move(*fresh);
         if (auto fresh = nav.library().rowFor(row_.key)) row_ = std::move(*fresh);
-        return Action::Removed;
+        return Action::Changed;
     }
     if (confirmRemove_) {  // anywhere else on the sheet: never mind
         confirmRemove_ = false;

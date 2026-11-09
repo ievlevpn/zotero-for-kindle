@@ -20,7 +20,7 @@ constexpr int kRowH = 186;
 constexpr int kRowsPerPage = 6;
 constexpr int kPageIndicatorH = 60;
 
-// Badge, Bookerly title (2 lines), byline, and on the right progress ("71%", "new", "opened")
+// Badge, Bookerly title (2 lines), byline, and on the right "✓ Read" or the progress ("71%", "new", "opened")
 // unless `status` is set ("Downloading 42%", or an error message, shown in place of the byline).
 void drawItemRow(cairo_t*, Rect, const ItemRow&, const std::string& status);
 

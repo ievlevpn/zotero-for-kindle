@@ -90,7 +90,7 @@ HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
             continue;
         }
         if (r.curlCode != 0 || r.status < 200 || r.status >= 300) {
-            if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE"))) {
+            if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE" || req.method == "PATCH"))) {
                 UserError e = classify(r, r.curlCode ? probeNetState() : NetState{}, kHost, false, req.method);
                 log(LogLevel::Warn, "zotero: %s %s -> %s (%s)", req.method.c_str(), req.url.c_str(), e.message.c_str(),
                     e.details.c_str());
@@ -244,6 +244,29 @@ std::optional<WriteResult> ZoteroApi::writeSettings(const json& body, UserError*
     out.libraryVersion = libraryVersionOf(r);
     if (r.curlCode == 0 && r.status == 412) {
         out.preconditionFailed = true;
+        return out;
+    }
+    if (r.curlCode || r.status != 204) return std::nullopt;
+    return out;
+}
+
+std::optional<WriteResult> ZoteroApi::patchItem(const std::string& key, const json& data, int64_t itemVersion,
+                                                UserError* err) {
+    HttpRequest req;
+    req.method = "PATCH";
+    req.url = userUrl("/items/" + key);
+    req.body = data.dump();
+    req.headers = {{"Content-Type", "application/json"},
+                   {"If-Unmodified-Since-Version", std::to_string(itemVersion)}};
+    HttpResponse r = send(req, err);
+    WriteResult out;
+    out.libraryVersion = libraryVersionOf(r);
+    if (r.curlCode == 0 && r.status == 412) {
+        out.preconditionFailed = true;
+        return out;
+    }
+    if (r.curlCode == 0 && r.status == 404) {
+        out.gone = true;
         return out;
     }
     if (r.curlCode || r.status != 204) return std::nullopt;

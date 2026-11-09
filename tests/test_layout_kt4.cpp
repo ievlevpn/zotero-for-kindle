@@ -120,6 +120,7 @@ TEST_CASE("kt4 layout: Settings fits, down to the update button") {
     CHECK(inside(settings.toggleRect(), kKt4.height));
     CHECK(inside(settings.removeRect(), kKt4.height));
     CHECK(inside(settings.accountRect(), kKt4.height));
+    CHECK(inside(settings.readTagRect(), kKt4.height));
     CHECK(inside(settings.flashMinusRect(), kKt4.height));
     CHECK(inside(settings.flashPlusRect(), kKt4.height));
     CHECK(inside(settings.updateRect(), kKt4.height));

@@ -1,6 +1,6 @@
 #pragma once
 // An in-memory Zotero Web API v3 server for one user library (id 1), enough for sync tests:
-// version listings, keyed fetches, /deleted, POST /items and DELETE /items?itemKey= with
+// version listings, keyed fetches, /deleted, POST /items, PATCH /items/<key> and DELETE /items?itemKey= with
 // If-Unmodified-Since-Version (and per-object `version` checks on POST).
 
 #include "net/http.h"
@@ -193,6 +193,21 @@ public:
             }
             return ok(r, json{{"success", success}, {"successful", successful}, {"unchanged", json::object()},
                               {"failed", failed}});
+        }
+        // PATCH /items/<key>: the given fields, against the item's own version
+        if (req.method == "PATCH" && path.rfind("items/", 0) == 0) {
+            const std::string key = path.substr(6);
+            if (!items.count(key)) return status(r, 404);
+            int64_t ius = -1;
+            for (const auto& [k, v] : req.headers)
+                if (k == "If-Unmodified-Since-Version") ius = std::stoll(v);
+            if (ius != items[key]["version"].get<int64_t>()) return status(r, 412);
+            json data = items[key]["data"];
+            const json body = json::parse(req.body);
+            for (const auto& [k, v] : body.items()) data[k] = v;
+            put(data);
+            r.headers["last-modified-version"] = std::to_string(libraryVersion);
+            return status(r, 204);
         }
         if (req.method == "DELETE" && path == "items" && q.count("itemKey")) {
             int64_t ius = -1;

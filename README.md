@@ -26,6 +26,8 @@ Highlights and notes sync both ways with Zotero.
 - Fast reading fonts (bold word beginnings) for EPUBs: Fast Serif, Fast Sans and Fast Mono.
 - Footnotes in a pop-up, Back after a jump, bookmarks and Go to page.
 - Collections pinned to the top with a long press.
+- Mark as read: a Zotero tag (`read`, or one you choose) shown as "✓ Read" in lists, set from an item's long press or at
+  the end of a book.
 - Highlights and notes that show up in Zotero desktop, and the other way round.
 - Optional landscape mode, with two columns on big screens.
 - A native app with a Kindle-like look, made for e-ink.

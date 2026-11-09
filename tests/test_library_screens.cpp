@@ -135,7 +135,9 @@ TEST_CASE("library rows: unread and reading state") {
     CHECK_FALSE(rig.lib.lastOpened());
     rig.lib.markOpened("IT000003", "EP000003", 1000);
     rig.lib.markOpened("IT000006", "EP000006", 2000);
-    CHECK(rig.lib.countRows(q) == before - 2);
+    CHECK(rig.lib.countRows(q) == before);  // opened isn't read: only the read tag is
+    rig.lib.markRead("IT000003", true);
+    CHECK(rig.lib.countRows(q) == before - 1);
     auto last = rig.lib.lastOpened();
     REQUIRE(last);
     CHECK(last->itemKey == "IT000006");
@@ -229,7 +231,7 @@ TEST_CASE("library: a version-1 database is rebuilt at the current version") {
     {
         Db db = Db::open(path);
         Library lib(db);
-        CHECK(db.userVersion() == 4);
+        CHECK(db.userVersion() == 5);
         CHECK(lib.recentItems(10).empty());
         CHECK(lib.libraryVersion() == 0);
     }

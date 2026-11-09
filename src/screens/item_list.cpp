@@ -86,8 +86,8 @@ bool ItemList::onGesture(const Gesture& g, Rect area, Nav& nav, const std::funct
                 if (open) open(row);
                 break;
             }
-            case ItemSheet::Action::Removed:
-                load(nav.library());  // the row now says it's in Zotero
+            case ItemSheet::Action::Changed:
+                load(nav.library());  // the row changed: in Zotero now, or read
                 nav.damage(area, Waveform::Ui);
                 break;
             case ItemSheet::Action::More: {

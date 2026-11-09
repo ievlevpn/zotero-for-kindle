@@ -18,9 +18,9 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 4;
+constexpr int64_t kSchemaVersion = 5;
 
-// Schema version 3 (PRAGMA user_version). Text-heavy columns default to '' so reads never see NULL.
+// The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
 // readableKey/readableType: the item's file to open (EPUB preferred), kept by reindex().
 const char* kSchema = R"sql(
@@ -64,6 +64,7 @@ CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE TABLE reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL DEFAULT '',
   remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER NOT NULL DEFAULT 0,
   remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');
+CREATE TABLE read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);
 CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags, notes,
   tokenize='unicode61 remove_diacritics 2');
 )sql";
@@ -243,8 +244,8 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version == 2 || version == 3) {
-            // Versions 2 and 3 may hold unsent Kindle work, so they are extended in place, never rebuilt.
+        if (version >= 2 && version <= 4) {
+            // Versions 2 to 4 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
                     "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
@@ -254,6 +255,8 @@ void Library::migrate() {
                 "CREATE TABLE IF NOT EXISTS reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL "
                 "DEFAULT '', remoteVersion INTEGER NOT NULL DEFAULT 0, local TEXT NOT NULL DEFAULT '', dirty INTEGER "
                 "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');");
+            db_.exec(  // version 5: read marks
+                "CREATE TABLE IF NOT EXISTS read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);");
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -663,11 +666,19 @@ namespace {
 
 const char* kRowColumns =
     "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
-    "coalesce(rs.progress, -1), i.itemType";
+    "coalesce(rs.progress, -1), i.itemType, i.tags, coalesce(m.read, -1), coalesce(m.tag, '')";
 const char* kRowJoins =
-    " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key ";
+    " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key "
+    "LEFT JOIN read_marks m ON m.itemKey = i.key ";
 
-std::vector<ItemRow> readRows(Stmt& st) {
+// Read: a mark made on the Kindle for the read tag (still to be sent) wins over the item's tags.
+bool isReadNow(const std::vector<std::string>& tags, bool marked, bool markRead, const std::string& markTag,
+               const std::string& readTag) {
+    if (marked && markTag == readTag) return markRead;
+    return std::find(tags.begin(), tags.end(), readTag) != tags.end();
+}
+
+std::vector<ItemRow> readRows(Stmt& st, const std::string& readTag) {
     std::vector<ItemRow> out;
     while (st.step()) {
         ItemRecord rec;
@@ -685,6 +696,7 @@ std::vector<ItemRow> readRows(Stmt& st) {
         r.fileState = static_cast<AttachmentRecord::State>(st.integer(6));
         r.progress = st.real(7);
         r.itemType = st.text(8);
+        r.read = isReadNow(strings(st.text(9)), st.integer(10) >= 0, st.integer(10) == 1, st.text(11), readTag);
         out.push_back(std::move(r));
     }
     return out;
@@ -696,12 +708,17 @@ struct Where {
     std::vector<std::string> args;
 };
 
-Where whereOf(const ListQuery& q) {
+Where whereOf(const ListQuery& q, const std::string& readTag) {
     Where w{" WHERE i.parentKey = ''", {}};
     switch (q.filter) {
         case Filter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
         case Filter::Pdf: w.sql += " AND i.readableType = 'PDF'"; break;
-        case Filter::Unread: w.sql += " AND NOT EXISTS (SELECT 1 FROM reading_state r WHERE r.itemKey = i.key)"; break;
+        case Filter::Unread:  // not read: as isReadNow()
+            w.sql += " AND NOT coalesce((SELECT r.read FROM read_marks r WHERE r.itemKey = i.key AND r.tag = ?), "
+                     "EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?))";
+            w.args.push_back(readTag);
+            w.args.push_back(readTag);
+            break;
         case Filter::All: break;
     }
     if (!q.tag.empty()) {
@@ -739,20 +756,20 @@ std::string byline(const ItemRecord& r) {
 
 std::vector<ItemRow> Library::rows(const ListQuery& q) {
     return guarded([&] {
-        Where w = whereOf(q);
+        Where w = whereOf(q, readTag());
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + w.sql + orderOf(q.sort) +
                               " LIMIT ? OFFSET ?");
         int n = 1;
         for (const auto& a : w.args) st.bind(n++, a);
         st.bind(n, int64_t{q.limit});
         st.bind(n + 1, int64_t{q.offset});
-        return readRows(st);
+        return readRows(st, readTag());
     });
 }
 
 int64_t Library::countRows(const ListQuery& q) {
     return guarded([&] {
-        Where w = whereOf(q);
+        Where w = whereOf(q, readTag());
         Stmt st = db_.prepare("SELECT count(*) FROM items i" + w.sql);
         int n = 1;
         for (const auto& a : w.args) st.bind(n++, a);
@@ -768,7 +785,7 @@ std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, i
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM item_fts JOIN items i ON i.id = item_fts.rowid" +
                               kRowJoins + " WHERE item_fts MATCH ? AND i.parentKey = '' ORDER BY rank LIMIT ? OFFSET ?");
         st.bind(1, fts).bind(2, int64_t{limit}).bind(3, int64_t{offset});
-        return readRows(st);
+        return readRows(st, readTag());
     });
 }
 
@@ -776,19 +793,14 @@ std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
     return guarded([&]() -> std::optional<ItemRow> {
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + " WHERE i.key = ?");
         st.bind(1, itemKey);
-        auto rows = readRows(st);
+        auto rows = readRows(st, readTag());
         if (rows.empty()) return std::nullopt;
         return rows[0];
     });
 }
 
 std::optional<ItemDetails> Library::details(const std::string& itemKey) {
-    std::optional<ItemRecord> item = guarded([&]() -> std::optional<ItemRecord> {
-        Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns + " FROM items WHERE key = ?");
-        st.bind(1, itemKey);
-        if (!st.step()) return std::nullopt;
-        return readItem(st);
-    });
+    std::optional<ItemRecord> item = this->item(itemKey);
     if (!item) return std::nullopt;
     ItemDetails d;
     d.item = std::move(*item);
@@ -826,6 +838,7 @@ std::optional<ItemDetails> Library::details(const std::string& itemKey) {
         d.files.push_back(std::move(f));
     }
     if (auto rs = readingState(itemKey); rs && rs->openedMs > 0) d.progress = rs->progress;
+    d.read = isRead(itemKey);
     return d;
 }
 
@@ -1128,6 +1141,63 @@ std::optional<ReadingState> Library::lastOpened() {
             "ORDER BY openedMs DESC LIMIT 1");
         if (!st.step()) return std::nullopt;
         return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
+    });
+}
+
+std::string Library::readTag() {
+    return guarded([&] {
+        const std::string t = meta("readTag");
+        return t.empty() ? std::string(kDefaultReadTag) : t;
+    });
+}
+
+void Library::setReadTag(const std::string& tag) {
+    guarded([&] { setMeta("readTag", tag.empty() ? std::string(kDefaultReadTag) : tag); });
+}
+
+bool Library::isRead(const std::string& itemKey) {
+    return guarded([&] {
+        const std::string tag = readTag();
+        Stmt st = db_.prepare(
+            "SELECT i.tags, coalesce(m.read, -1), coalesce(m.tag, '') FROM items i "
+            "LEFT JOIN read_marks m ON m.itemKey = i.key WHERE i.key = ?");
+        st.bind(1, itemKey);
+        if (!st.step()) return false;
+        return isReadNow(strings(st.text(0)), st.integer(1) >= 0, st.integer(1) == 1, st.text(2), tag);
+    });
+}
+
+void Library::markRead(const std::string& itemKey, bool read) {
+    guarded([&] {
+        Stmt st = db_.prepare(
+            "INSERT INTO read_marks (itemKey, read, tag) VALUES (?, ?, ?) ON CONFLICT(itemKey) DO UPDATE "
+            "SET read = excluded.read, tag = excluded.tag");
+        st.bind(1, itemKey).bind(2, int64_t{read}).bind(3, readTag()).step();
+    });
+}
+
+std::vector<ReadMark> Library::readMarks() {
+    return guarded([&] {
+        std::vector<ReadMark> out;
+        Stmt st = db_.prepare("SELECT itemKey, read, tag FROM read_marks ORDER BY itemKey");
+        while (st.step()) out.push_back({st.text(0), st.integer(1) != 0, st.text(2)});
+        return out;
+    });
+}
+
+void Library::clearReadMark(const ReadMark& m) {
+    guarded([&] {
+        Stmt st = db_.prepare("DELETE FROM read_marks WHERE itemKey = ? AND read = ? AND tag = ?");
+        st.bind(1, m.itemKey).bind(2, int64_t{m.read}).bind(3, m.tag).step();
+    });
+}
+
+std::optional<ItemRecord> Library::item(const std::string& key) {
+    return guarded([&]() -> std::optional<ItemRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns + " FROM items WHERE key = ?");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return readItem(st);
     });
 }
 

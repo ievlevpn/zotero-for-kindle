@@ -150,7 +150,7 @@ TEST_CASE("item sheet: Open, Remove from Kindle (two taps) and More…") {
     CHECK(sheet.onGesture(tapAt(sheet.removeRect(area).center()), area, rig.nav) == ItemSheet::Action::None);
     CHECK(sheet.confirmingRemove());
     CHECK(fs::exists(rig.files / "PRIDEEPB" / "pride.epub"));
-    CHECK(sheet.onGesture(tapAt(sheet.removeRect(area).center()), area, rig.nav) == ItemSheet::Action::Removed);
+    CHECK(sheet.onGesture(tapAt(sheet.removeRect(area).center()), area, rig.nav) == ItemSheet::Action::Changed);
     CHECK_FALSE(fs::exists(rig.files / "PRIDEEPB" / "pride.epub"));
     CHECK_FALSE(sheet.details().files[0].onKindle);  // the sheet now says "in Zotero"
     CHECK(sheet.onGesture(tapAt(sheet.moreRect(area).center()), area, rig.nav) == ItemSheet::Action::More);

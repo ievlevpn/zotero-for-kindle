@@ -151,7 +151,11 @@ void SyncService::run() {
         Library* lib = w.lib.get();
         w.guard = std::make_unique<WriteGuard>(
             *w.cancellable, [lib](const std::string& key) { return lib->annotation(key).has_value(); },
-            [lib](const std::string& key) { return lib->attachment(key).has_value(); });  // reading positions
+            [lib](const std::string& key) { return lib->attachment(key).has_value(); },  // reading positions
+            [lib](const std::string& key) -> std::optional<std::vector<std::string>> {   // the read tag
+                if (auto item = lib->item(key)) return item->tags;
+                return std::nullopt;
+            });
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);

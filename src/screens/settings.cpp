@@ -4,6 +4,7 @@
 #include <filesystem>
 
 #include "app/settings_store.h"
+#include "screens/read_tag.h"
 #include "net/errors.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -26,10 +27,10 @@ const char* kIntervalLabels[] = {"Off", "5 min", "10 min", "30 min"};
 // Section rows, top to bottom; `rule`: the line above a section, this far above it. A window
 // shorter than the PW5's (the KT4's, 1337 at 300 ppi) takes the compact spacing.
 struct Rows {
-    int account, webDav, interval, highlights, storage, flash, about, rule;
+    int account, webDav, readTag, interval, highlights, storage, flash, about, rule;
 };
-constexpr Rows kRows{170, 320, 470, 640, 850, 1080, 1230, 30};
-constexpr Rows kCompactRows{150, 290, 430, 600, 800, 1005, 1125, 20};
+constexpr Rows kRows{170, 320, 470, 620, 790, 1000, 1230, 1380, 30};
+constexpr Rows kCompactRows{150, 290, 410, 540, 710, 870, 1072, 1185, 20};
 const Rows& rows() { return H() < 1500 ? kCompactRows : kRows; }
 
 std::string mb(int64_t bytes) {
@@ -46,11 +47,12 @@ SettingsScreen::SettingsScreen(Config c, std::function<void(Nav&)> changeAccount
       openUpdate_(std::move(openUpdate)), pendingUpdate_(std::move(pendingUpdate)) {}
 
 Rect SettingsScreen::accountRect() const { return {W() - kMargin - 240, rows().account + 20, 240, 80}; }
+Rect SettingsScreen::readTagRect() const { return {W() - kMargin - 240, rows().readTag + 20, 240, 80}; }
 Rect SettingsScreen::intervalRect(int i) const {
     const int w = std::min(259, (W() - 2 * kMargin - 3 * 20) / 4);  // four in a row on a narrow window
     return {kMargin + i * (w + 20), rows().interval + 60, w, 80};
 }
-Rect SettingsScreen::aboutTextRect() const { return {kMargin, rows().about + 54, W() - 2 * kMargin - 460, 100}; }
+Rect SettingsScreen::aboutTextRect() const { return {kMargin, rows().about + 54, W() - 2 * kMargin - 460, 96}; }
 Rect SettingsScreen::toggleRect() const { return {W() - kMargin - 140, rows().highlights, 140, 80}; }
 Rect SettingsScreen::flashMinusRect() const { return {W() - kMargin - 460, rows().flash + 10, 120, 80}; }
 Rect SettingsScreen::flashPlusRect() const { return {W() - kMargin - 120, rows().flash + 10, 120, 80}; }
@@ -69,6 +71,7 @@ void SettingsScreen::load(Library& lib) {
     interval_ = loadSettings(lib).syncIntervalMinutes;
     flashEvery_ = loadSettings(lib).flashEvery;
     allOffline_ = lib.allAnnotationsOffline();
+    readTag_ = lib.readTag();
     downloadedBytes_ = 0;
     for (const auto& a : lib.downloadedAttachments()) {
         std::error_code ec;
@@ -98,6 +101,12 @@ void SettingsScreen::draw(Canvas& canvas) {
 
     drawText(cr, "WebDAV", label, {kMargin, rows().webDav, w, 50}, 1);
     drawText(cr, config_.webdavUrl.empty() ? "Not used: files come from Zotero storage" : hostOf(config_.webdavUrl), value, {kMargin, rows().webDav + 54, w, 50}, 1);
+    hRule(cr, rows().readTag - rows().rule, kMargin, W() - kMargin);
+
+    drawText(cr, "Read tag", label, {kMargin, rows().readTag, w - 260, 50}, 1);
+    drawText(cr, "Items tagged “" + readTag_ + "” in Zotero show as read", value,
+             {kMargin, rows().readTag + 54, w - 260, 50}, 1);
+    drawButton(cr, readTagRect(), "Change…", false);
     hRule(cr, rows().interval - rows().rule, kMargin, W() - kMargin);
 
     drawText(cr, "Sync every", label, {kMargin, rows().interval, w, 50}, 1);
@@ -113,8 +122,8 @@ void SettingsScreen::draw(Canvas& canvas) {
     drawText(cr, "Keep all highlights offline", label, {kMargin, rows().highlights + 4, w - 180, 50}, 1);
     drawText(cr,
              allOffline_ ? "Every highlight is downloaded and searchable offline."
-                         : "Off: a book's highlights download when you open it. On: all of them (about 15 minutes "
-                           "the first time for a large library).",
+                         : "Off: a book's highlights download when you open it. On: all of them (the first "
+                           "time can take 15 minutes).",
              value, {kMargin, rows().highlights + 60, w - 180, 120}, 3);
     drawToggle(cr, toggleRect(), allOffline_);
     hRule(cr, rows().storage - rows().rule, kMargin, W() - kMargin);
@@ -168,6 +177,10 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (accountRect().contains(g.pos)) {
         if (changeAccount_) changeAccount_(nav);
+        return;
+    }
+    if (readTagRect().contains(g.pos)) {
+        nav.push(std::make_unique<ReadTagScreen>());
         return;
     }
     for (int i = 0; i < 4; ++i)

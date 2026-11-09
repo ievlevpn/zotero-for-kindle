@@ -43,6 +43,7 @@ struct WriteResult {
     std::map<int, std::string> failed;       // batch index -> message
     std::map<int, int> failedCodes;          // batch index -> Zotero's code (e.g. 400, 412)
     bool preconditionFailed = false;         // 412: the library changed since `ifUnmodifiedSince`
+    bool gone = false;                       // patchItem: 404, the item isn't in Zotero any more
     int64_t libraryVersion = 0;
 };
 
@@ -66,6 +67,10 @@ public:
     std::optional<WriteResult> createItems(const nlohmann::json& array /* ≤50 */, int64_t ifUnmodifiedSince, UserError*);
     // DELETE /items?itemKey=… (≤50 keys). Success carries the new library version; 412 sets preconditionFailed.
     std::optional<WriteResult> deleteItems(const std::vector<std::string>& keys, int64_t ifUnmodifiedSince, UserError*);
+    // PATCH /items/<key> with only the fields in `data`, against the item's own version: 204
+    // carries the new library version (the item's new version); 412 sets preconditionFailed, 404 gone.
+    std::optional<WriteResult> patchItem(const std::string& key, const nlohmann::json& data, int64_t itemVersion,
+                                         UserError*);
     // GET /settings?since=N: the user library's synced settings changed since N.
     std::optional<SettingsListing> settings(int64_t since, UserError*);
     // POST /settings {key: {value, version}}: 204 carries the new library version; a setting whose

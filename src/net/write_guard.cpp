@@ -4,7 +4,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <iterator>
 #include <regex>
+#include <set>
 
 namespace zk {
 
@@ -73,8 +76,41 @@ std::string settingsRefusal(const HttpRequest& req, const IsAnnotation& isAttach
     return {};
 }
 
+// PATCH /users/<id>/items/<key> of a regular item: only {"tags": [{"tag": …, "type": n}, …]}, against
+// the item's version, adding or removing one tag name and keeping the others.
+std::string tagsRefusal(const HttpRequest& req, const std::string& key, const WriteGuard::ItemTags& itemTags) {
+    if (!itemTags) return "item " + key + " is not an annotation";
+    const auto have = itemTags(key);
+    if (!have) return "item " + key + " is not an item of this library";
+    if (req.method != "PATCH") return "item " + key + ": only PATCH of its tags";
+    if (!queryOf(req.url).empty()) return "PATCH item with a query";
+    static const std::regex version(R"(^\d+$)");
+    bool versioned = false;
+    for (const auto& [name, value] : req.headers)
+        if (name == "If-Unmodified-Since-Version" && std::regex_match(value, version)) versioned = true;
+    if (!versioned) return "PATCH item " + key + " without If-Unmodified-Since-Version";
+    auto body = nlohmann::json::parse(req.body, nullptr, false);
+    if (!body.is_object() || body.size() != 1 || !body.contains("tags") || !body["tags"].is_array())
+        return "PATCH item " + key + " changes more than its tags";
+    std::set<std::string> after;
+    for (const auto& t : body["tags"]) {
+        if (!t.is_object() || !t.contains("tag") || !t["tag"].is_string() || t["tag"].get<std::string>().empty())
+            return "PATCH item " + key + " has a malformed tag";
+        for (const auto& [field, v] : t.items())
+            if (field != "tag" && !(field == "type" && v.is_number_unsigned()))
+                return "PATCH item " + key + " has tag field " + field;
+        after.insert(t["tag"].get<std::string>());
+    }
+    const std::set<std::string> before(have->begin(), have->end());
+    std::vector<std::string> changed;
+    std::set_symmetric_difference(before.begin(), before.end(), after.begin(), after.end(), std::back_inserter(changed));
+    if (changed.size() != 1) return "PATCH item " + key + " changes " + std::to_string(changed.size()) + " tags, not one";
+    return {};
+}
+
 // Why the request must not go out, or empty if it may.
-std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, const IsAnnotation& isAttachment) {
+std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, const IsAnnotation& isAttachment,
+                    const WriteGuard::ItemTags& itemTags) {
     const std::string& m = req.method;
     if (m == "GET" || m == "HEAD" || m == "PROPFIND")
         return req.body.empty() ? std::string{} : m + " with a body";  // curl would send it as a POST
@@ -93,7 +129,8 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, co
         return "DELETE " + path + " is not an allowed write";
     }
     if ((m == "PUT" || m == "PATCH") && std::regex_match(path, match, itemPath)) {
-        return isAnnotation(match[1].str()) ? std::string{} : "item " + match[1].str() + " is not an annotation";
+        const std::string key = match[1].str();
+        return isAnnotation(key) ? std::string{} : tagsRefusal(req, key, itemTags);
     }
     static const std::regex settingsPath(R"(^/users/\d+/settings/?$)");
     if (m == "POST" && std::regex_match(path, settingsPath)) return settingsRefusal(req, isAttachment);
@@ -117,11 +154,12 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, co
 }  // namespace
 
 WriteGuard::WriteGuard(Http& inner, std::function<bool(const std::string& key)> isAnnotation,
-                       std::function<bool(const std::string& key)> isAttachment)
-    : inner_(inner), isAnnotation_(std::move(isAnnotation)), isAttachment_(std::move(isAttachment)) {}
+                       std::function<bool(const std::string& key)> isAttachment, ItemTags itemTags)
+    : inner_(inner), isAnnotation_(std::move(isAnnotation)), isAttachment_(std::move(isAttachment)),
+      itemTags_(std::move(itemTags)) {}
 
 HttpResponse WriteGuard::send(const HttpRequest& req) {
-    const std::string why = refusal(req, isAnnotation_, isAttachment_);
+    const std::string why = refusal(req, isAnnotation_, isAttachment_, itemTags_);
     if (why.empty()) return inner_.send(req);
     log(LogLevel::Warn, "write guard refused %s %s: %s", req.method.c_str(), pathOf(req.url).c_str(), why.c_str());
     HttpResponse r;

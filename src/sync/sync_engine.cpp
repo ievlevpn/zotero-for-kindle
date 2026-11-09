@@ -408,6 +408,8 @@ SyncReport SyncEngine::push() {
             else if (!pushOnce(rep, precondition) && precondition)
                 rep.error = UserError{ErrorKind::Other, "Zotero kept changing during the upload. Try again.", "HTTP 412 twice"};
         }
+        // Read marks, on their own too: each item against its own version.
+        if (!rep.error) pushReadMarks(rep);
         // Reading positions, on their own: a refused one never holds annotations back.
         if (!rep.error && !pushPositions(rep, precondition) && precondition && !rep.error) {
             SyncReport pulled = pull(nullptr);  // the computer moved: the reader will ask
@@ -426,7 +428,76 @@ SyncReport SyncEngine::push() {
 int SyncEngine::pendingChanges() {
     int n = static_cast<int>(lib_.pendingDeletions().size());
     for (const auto& a : lib_.dirtyAnnotations()) n += !a.conflict && !a.localOnly;
-    return n + static_cast<int>(sendablePositions().size());
+    return n + static_cast<int>(sendablePositions().size() + lib_.readMarks().size());
+}
+
+// Each mark adds the read tag to its item or takes it off, sending the item's whole tag list
+// (Zotero replaces it) against the item's version, so a tag changed on the desktop meanwhile is
+// never lost: on a 412 the item is fetched again and the change made once more on Zotero's copy.
+bool SyncEngine::pushReadMarks(SyncReport& rep) {
+    for (const ReadMark& mark : lib_.readMarks()) {
+        for (int attempt = 0;; ++attempt) {
+            auto item = lib_.item(mark.itemKey);
+            if (!item) {  // gone from Zotero: nothing to tag
+                lib_.clearReadMark(mark);
+                break;
+            }
+            json data = json::parse(item->json, nullptr, false);
+            if (!data.is_object()) data = json::object();
+            json tags = data.contains("tags") && data["tags"].is_array() ? data["tags"] : json::array();
+            json next = json::array();
+            bool has = false;
+            for (const auto& t : tags) {
+                const bool same = t.is_object() && t.value("tag", "") == mark.tag;
+                has = has || same;
+                if (!same) next.push_back(t);
+            }
+            if (has == mark.read) {  // already so (marked on the desktop too)
+                lib_.clearReadMark(mark);
+                break;
+            }
+            if (mark.read) next.push_back({{"tag", mark.tag}});
+            UserError err;
+            auto res = api_.patchItem(mark.itemKey, {{"tags", next}}, item->version, &err);
+            if (!res) {
+                rep.error = err;
+                return false;
+            }
+            if (res->gone) {  // deleted in Zotero meanwhile: the next pull removes it here too
+                lib_.clearReadMark(mark);
+                break;
+            }
+            if (res->preconditionFailed) {
+                if (attempt > 0) {
+                    log(LogLevel::Warn, "sync: read tag of %s refused twice; next time", mark.itemKey.c_str());
+                    break;
+                }
+                UserError err2;
+                auto objects = api_.fetch("items", {mark.itemKey}, &err2);
+                if (!objects) {
+                    rep.error = err2;
+                    return false;
+                }
+                auto tx = lib_.begin();
+                for (const auto& obj : *objects) apply(obj, rep);
+                tx.commit();
+                continue;
+            }
+            data["tags"] = next;
+            item->json = data.dump();
+            item->tags.clear();
+            for (const auto& t : next) item->tags.push_back(t.value("tag", ""));
+            item->version = res->libraryVersion;
+            auto tx = lib_.begin();
+            lib_.upsertItem(*item);
+            lib_.setObjectVersion(mark.itemKey, res->libraryVersion);
+            lib_.clearReadMark(mark);
+            tx.commit();
+            ++rep.itemsUpdated;
+            break;
+        }
+    }
+    return true;
 }
 
 // Reading positions to send: of the library's files, and well-formed.

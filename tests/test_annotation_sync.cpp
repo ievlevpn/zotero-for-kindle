@@ -364,7 +364,7 @@ TEST_CASE("annotations: schema v2 databases gain the new columns without losing 
     }
     Db db = Db::open(path);
     Library lib(db);
-    CHECK(db.userVersion() == 4);
+    CHECK(db.userVersion() == 5);
     lib.setLocalPosition("EPUB0001", "3");  // version 4's table is there too
     CHECK(lib.readingPosition("EPUB0001"));
     auto a = lib.annotation("UNSENT01");

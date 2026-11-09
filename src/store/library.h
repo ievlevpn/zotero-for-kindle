@@ -20,7 +20,11 @@ std::string newLocalKey();
 bool isZoteroKey(const std::string&);
 
 enum class SortBy { Recent, Title, Author, Year };
+// Unread: not read, as ItemRow::read.
 enum class Filter { All, Epub, Pdf, Unread };
+
+// The Zotero tag that means "read", unless the user picks another (Settings).
+constexpr const char* kDefaultReadTag = "read";
 
 struct ListQuery {
     SortBy sort = SortBy::Recent;
@@ -35,6 +39,7 @@ struct ItemRow {
     AttachmentRecord::State fileState = AttachmentRecord::State::Remote;
     double progress = -1;  // -1: never opened
     std::string itemType;  // Zotero's: "book", "journalArticle", "preprint", … ("attachment": a lone file)
+    bool read = false;     // has the read tag (or was marked read on the Kindle, not sent yet)
 };
 
 // Everything the item details sheet and page show (long-press on an item).
@@ -50,6 +55,15 @@ struct ItemDetails {
     };
     std::vector<File> files;  // readable files first (EPUB, then PDF), as rows pick them
     double progress = -1;     // how far the item was read; -1 if never opened
+    bool read = false;        // as ItemRow::read
+};
+
+// Read or unread, set on the Kindle and not sent to Zotero yet: the read tag (as it was when
+// marked) to add to the item or take off it.
+struct ReadMark {
+    std::string itemKey;
+    bool read = false;
+    std::string tag;
 };
 
 // A file's reading position in Zotero's terms (JSON text, as the engines make it: a PDF page
@@ -187,6 +201,16 @@ public:
     std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit);
     std::optional<ItemRow> rowFor(const std::string& itemKey);
     std::optional<ItemDetails> details(const std::string& itemKey);
+    std::optional<ItemRecord> item(const std::string& key);
+
+    // Read (spec: mark as read): an item is read when it has the read tag. Marking it on the
+    // Kindle is kept as a ReadMark until SyncEngine::push has changed the tag in Zotero.
+    std::string readTag();                   // "read" unless changed
+    void setReadTag(const std::string&);     // "" puts back the default
+    bool isRead(const std::string& itemKey);
+    void markRead(const std::string& itemKey, bool read);
+    std::vector<ReadMark> readMarks();
+    void clearReadMark(const ReadMark&);     // only if it is still this mark (not marked again meanwhile)
     // Deletes the downloaded copy of an attachment (the file and its folder) and marks it as not
     // on the Kindle. Highlights, the reading position and the item itself stay.
     void removeDownload(const std::string& attachmentKey);

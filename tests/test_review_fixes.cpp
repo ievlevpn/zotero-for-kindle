@@ -53,7 +53,7 @@ TEST_CASE("review I-1: a download finishing for the last row of a shrinking Unre
     const auto rows = screen.list().rows();
     REQUIRE_FALSE(rows.empty());
     const ItemRow last = rows.back();
-    lib.markOpened(last.key, last.attachmentKey, 5);  // opening it removes it from Unread
+    lib.markRead(last.key, true);  // marking it read removes it from Unread
     SyncEvent e;
     e.kind = SyncEvent::Kind::DownloadFinished;
     e.itemKey = last.key;

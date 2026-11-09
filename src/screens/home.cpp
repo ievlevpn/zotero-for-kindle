@@ -240,7 +240,7 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
                 if (actions_.openItem) actions_.openItem(row);
                 break;
             }
-            case ItemSheet::Action::Removed:
+            case ItemSheet::Action::Changed:
                 reload(nav.library());
                 nav.damage(area, Waveform::Ui);
                 break;

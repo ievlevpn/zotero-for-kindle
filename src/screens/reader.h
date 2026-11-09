@@ -78,6 +78,11 @@ public:
     const std::optional<LinkInfo>& linkPopup() const { return linkPopup_; }
     Rect linkPopupRect() const;
     Rect linkButtonRect() const;  // "Go to note" / "Go to page N"; empty when there's nothing to go to
+    // Turning on past the last page of a book not read yet: a pop-up offering Mark as read. Any
+    // gesture closes it; its button marks the item read.
+    bool endPrompt() const { return endPrompt_; }
+    Rect endPromptRect() const;
+    Rect endPromptButtonRect() const;
     bool turning() const { return turning_; }
 
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
@@ -205,6 +210,7 @@ private:
     void followLink(const LinkInfo&);
     std::vector<LinkBox> links_;
     std::optional<LinkInfo> linkPopup_;
+    bool endPrompt_ = false;
     uint64_t linkId_ = 0;
     int turnsSinceJump_ = 0;
     static constexpr int kBackTurns = 3;  // pages read at the new place before Back goes

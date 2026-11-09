@@ -1,6 +1,6 @@
 #pragma once
-// Settings (spec §7.7): account, WebDAV, sync interval, "Keep all highlights offline",
-// downloaded files, about.
+// Settings (spec §7.7): account, WebDAV, the read tag, sync interval, "Keep all highlights
+// offline", downloaded files, about.
 
 #include <functional>
 #include <optional>
@@ -31,6 +31,7 @@ public:
     Rect toggleRect() const;
     Rect removeRect() const;
     Rect accountRect() const;
+    Rect readTagRect() const;  // Change… opens ReadTagScreen
     Rect flashMinusRect() const;  // "Full refresh every N pages" (reader), 1–12
     Rect flashPlusRect() const;
     Rect updateRect() const;
@@ -49,6 +50,7 @@ private:
     int interval_ = 10;
     int flashEvery_ = 6;
     bool allOffline_ = false;
+    std::string readTag_;
     bool confirmRemove_ = false;
     int64_t downloadedBytes_ = 0;
 };

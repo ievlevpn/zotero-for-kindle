@@ -1,7 +1,8 @@
 #pragma once
 // The sheet a long-press on an item slides up over a list (Home, Library, a collection, search):
-// title, people, collections, the file and the start of the abstract, with Open / Remove from
-// Kindle / More…. The host draws it over its list and passes it the gestures while it is open.
+// title, people, collections, the file and the start of the abstract, with Mark as read (or unread)
+// above Open / Remove from Kindle / More…. The host draws it over its list and passes it the
+// gestures while it is open.
 
 #include <string>
 
@@ -14,18 +15,20 @@ namespace zk {
 
 class ItemSheet {
 public:
-    enum class Action { None, Close, Open, Removed, More };
+    enum class Action { None, Close, Open, Changed, More };
 
     ItemSheet(ItemRow, ItemDetails);
     // Fades `area` and draws the sheet over its bottom.
     void draw(cairo_t*, Rect area) const;
-    // Close: a tap above the sheet. Removed: the file was just removed (the host reloads its rows).
+    // Close: a tap above the sheet. Changed: the file was just removed, or the item marked read or
+    // unread (the host reloads its rows).
     Action onGesture(const Gesture&, Rect area, Nav&);
 
     Rect sheetRect(Rect area) const;
     Rect openRect(Rect area) const;
     Rect removeRect(Rect area) const;  // only drawn while the file is on the Kindle
     Rect moreRect(Rect area) const;
+    Rect readRect(Rect area) const;  // Mark as read / Mark as unread
 
     const ItemRow& row() const { return row_; }
     const ItemDetails& details() const { return details_; }
