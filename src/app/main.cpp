@@ -1,5 +1,6 @@
 // The Zotero app: opens the library database, starts the background sync, runs the screens.
 //   zotero                         run (Kindle or desktop window)
+//   zotero --plugins-dir DIR       (desktop) use DIR as the plugins folder; plugin logs go to stderr; a changed main.js reloads
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
 //                                                  render a screen to a PNG and exit
 
@@ -20,6 +21,7 @@
 #include "app/lifecycle.h"
 #include "app/plugin_background.h"
 #include "app/plugin_events.h"
+#include "app/plugin_watch.h"
 #include "app/settings_store.h"
 #include "app/stall_watchdog.h"
 #include "platform/device_profile.h"
@@ -84,8 +86,11 @@ bool envFlag(const char* name) {
     return v && std::string(v) == "1";
 }
 
-// The plugin host's settings for this run. Seams for later: --plugins-dir (Task 19) picks the
-// folder, safe mode (Task 18) decides whether start() is called at all.
+// --plugins-dir (desktop): plugins are developed in a folder of the author's choosing; their logs
+// are also written to stderr, and a changed main.js reloads that plugin (PluginWatcher).
+bool gPluginDevLoop = false;
+
+// The plugin host's settings for this run (safe mode decides whether start() is called at all).
 PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& config) {
     PluginHostDeps d;
     d.pluginsDir = paths.pluginsDir;
@@ -95,6 +100,12 @@ PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& c
     d.appVersion = appVersion();
     d.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
     d.webdavHost = config ? config->webdavUrl : "";  // zk.fetch never reaches it (setWebdavHost on changes)
+    if (gPluginDevLoop)
+        d.logSink = [](const std::string& id, const std::string& line) {
+            std::string text = line;
+            while (!text.empty() && (text.back() == '\n' || text.back() == '\r')) text.pop_back();
+            std::fprintf(stderr, "[plugin %s] %s\n", id.c_str(), text.c_str());
+        };
     return d;
 }
 
@@ -220,7 +231,15 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
 int main(int argc, char** argv) {
     log(LogLevel::Info, "zotero %s starting (backend=%s)", ZK_VERSION, ZK_BACKEND);
     addFontDir(fontDir());
-    const Paths paths = defaultPaths();
+    Paths paths = defaultPaths();
+#ifndef ZK_KINDLE
+    // --plugins-dir <dir>: the plugins folder to use instead of the app's own (the developer loop).
+    for (int i = 1; i + 1 < argc; ++i)
+        if (!std::strcmp(argv[i], "--plugins-dir")) {
+            paths.pluginsDir = argv[i + 1];
+            gPluginDevLoop = true;
+        }
+#endif
     if (argc > 1 && !std::strcmp(argv[1], "--reset-system-ink")) {  // the launcher, after a crash
         displayResetSystemInk();
         return 0;
@@ -360,6 +379,12 @@ int main(int argc, char** argv) {
         for (int sig : {SIGTERM, SIGINT, SIGHUP}) std::signal(sig, safeModeEndingSignal);
     }
     const int64_t startedMs = app.nowMs();
+    std::unique_ptr<PluginWatcher> pluginWatch;
+    if (gPluginDevLoop)  // a saved main.js reloads its plugin (about a second later)
+        pluginWatch = std::make_unique<PluginWatcher>(paths.pluginsDir, [&](const std::string& id) {
+            log(LogLevel::Info, "plugins: %s/main.js changed: reloading", id.c_str());
+            if (plugins) plugins->reload(id);
+        });
     app.setPollHook([&] {
         if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {
             startConfirmed = true;
@@ -367,6 +392,7 @@ int main(int argc, char** argv) {
         }
         pluginEvents.poll(app);
         backgroundRound.tick(app.nowMs());
+        if (pluginWatch && plugins && pluginsRunning && !pluginsOff) pluginWatch->poll(app.nowMs());
     });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     auto startService = [&](const Config& c) {

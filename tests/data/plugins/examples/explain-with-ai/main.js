@@ -1,4 +1,4 @@
-// src/main.ts
+// examples/explain-with-ai/src/main.ts
 var MAX_PASSAGE = 4e3;
 zk.selectionAction({
   id: "explain",

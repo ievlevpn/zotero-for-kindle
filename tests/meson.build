@@ -100,6 +100,7 @@ test_sources = files(
   'test_plugin_confirm.cpp',
   'test_plugin_events.cpp',
   'test_plugin_background.cpp',
+  'test_plugin_example.cpp',
   'test_plugin_entry.cpp',
   'test_plugins_screen.cpp',
   'test_safe_mode.cpp',
