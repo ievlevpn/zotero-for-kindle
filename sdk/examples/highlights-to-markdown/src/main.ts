@@ -12,15 +12,17 @@
 // Read this file top to bottom: it is a walk-through of the plugin API. Every `zk.…` call is
 // documented, with an example, in sdk/types/zk.d.ts.
 //
-// The plan, in four pieces:
+// The plan, in four pieces (the sections below):
 //
-//   1. exportBook()  writes one book's file from what the library holds now. It is the only
-//                    thing that writes, and doing it twice does no harm.
-//   2. Events        a highlight made on the Kindle is written at once; highlights that arrive
-//                    with a sync (made in Zotero on the desktop) are noted as "to do".
-//   3. syncFinished  after each sync, writes the books noted as "to do".
-//   4. background    once an hour, catches anything missed (changes made while the plugin was
-//                    off; on its first run, every book in the library).
+//   1. State         what the plugin remembers in zk.storage, chiefly a "to do" list of books.
+//   2. Writing       exportBook() writes one book's file from what the library holds now. It
+//                    is the only thing that writes, and doing it twice does no harm.
+//   3. Events        a highlight made on the Kindle is noted and written at once; highlights
+//                    that arrive with a sync (made in Zotero on the desktop) are only noted.
+//                    When the sync finishes, a few noted books are written straight away.
+//   4. Background    after a sync, at most hourly, writes what is noted, and catches anything
+//                    missed (changes made while the plugin was off; on its first run, every
+//                    book in the library).
 //
 // Permissions (plugin.json): "annotations:read" to hear highlight events and read annotations,
 // "library:read" to read each book's title, authors and attachments, "background" for piece 4.
@@ -51,6 +53,9 @@ async function saveState(state: State): Promise<void> {
 // Event handlers and the background task can run at the same time: each `await` lets another
 // one in. Two of them loading the state, changing it and saving it would lose one change. So
 // everything that touches the state goes through `serially`, which runs one job after another.
+// Keep each job short — one book — because an event handler waiting its turn behind a long job
+// would run out of its 5 seconds. (If a call is stopped by a limit, what it started rejects with
+// zk.LimitError, so a stopped job never blocks the queue.)
 let queue: Promise<unknown> = Promise.resolve();
 function serially<T>(job: () => Promise<T>): Promise<T> {
   const result = queue.then(job, job);
@@ -101,19 +106,22 @@ async function exportBook(itemKey: string, state: State): Promise<void> {
   console.log(`wrote ${file} (${highlights} highlights)`);
 }
 
-/** Writes the given books one by one, saving the state after each, so a run cut short keeps what it did. */
+/**
+ * Writes the given books one by one, each as its own job: write the file, take the book off the
+ * "to do" list, save. A call stopped halfway leaves the rest noted for next time.
+ */
 async function exportBooks(itemKeys: Iterable<string>): Promise<void> {
-  await serially(async () => {
-    const state = await loadState();
-    for (const key of new Set(itemKeys)) {
+  for (const key of new Set(itemKeys)) {
+    await serially(async () => {
+      const state = await loadState();
       await exportBook(key, state);
       state.todo = state.todo.filter((k) => k !== key);
       await saveState(state);
-    }
-  });
+    });
+  }
 }
 
-/** Remembers books to write later. */
+/** Notes books to write. Cheap, so it can always run first. */
 async function addTodo(itemKeys: Iterable<string>): Promise<void> {
   await serially(async () => {
     const state = await loadState();
@@ -128,13 +136,15 @@ async function addTodo(itemKeys: Iterable<string>): Promise<void> {
 //   origin "kindle" — the user just did it on this Kindle; one event per highlight, at once.
 //   origin "zotero" — it came in with a sync; one event for everything in that sync, which
 //                     can be hundreds of highlights. A handler has 5 seconds, so for those we
-//                     only note the books and write them after the sync (piece 4).
+//                     only note the books; the background task writes them (piece 4).
+// Kindle changes are noted first too, then written: if the handler runs out of time (say,
+// waiting behind the background task), the book stays noted and isn't lost.
 // A deleted annotation is gone from the library, so highlightDeleted carries only its keys —
 // which is all we need: the item key says which book to rewrite.
 async function onAnnotations(origin: zk.Origin, annotations: { itemKey: string }[]): Promise<void> {
   const books = annotations.map((a) => a.itemKey);
+  await addTodo(books);
   if (origin === "kindle") await exportBooks(books);
-  else await addTodo(books);
 }
 
 zk.on("highlightCreated", ({ origin, annotations }) => onAnnotations(origin, annotations));
@@ -142,19 +152,25 @@ zk.on("highlightChanged", ({ origin, annotations }) => onAnnotations(origin, ann
 zk.on("highlightDeleted", ({ origin, annotations }) => onAnnotations(origin, annotations));
 
 // syncFinished fires after the other events of a sync, so the books they noted are waiting.
+// The background task writes them, but runs at most once an hour; a sync every 10 minutes
+// usually brings a book or two, so write a few now — few enough for 5 seconds. The rest wait
+// for the background task, which has 30 seconds a run.
 // The first full sync of a library fires nothing but this event (with initial: true) — no
 // highlight events for the thousands of annotations it brings. That case is left to the
-// background task, whose first run writes every book; it has 30 seconds a run instead of 5.
+// background task, whose first run writes every book.
+const WRITE_AFTER_SYNC = 3;
 zk.on("syncFinished", async ({ initial }) => {
   if (initial) return;
-  await exportBooks((await loadState()).todo);
+  await exportBooks((await loadState()).todo.slice(0, WRITE_AFTER_SYNC));
 });
 
-// ───────────────────────────── 4. Background: catch what was missed ─────────────────────────────
+// ──────────────────── 4. Background: write what is noted, catch what was missed ────────────────────
 
 // The background task runs after a sync, at most once an hour. It finds every book with an
-// annotation changed since its last run (all books, the first time), notes them as "to do",
-// then works through "to do". If the 30 seconds run out, what is left stays noted for next time.
+// annotation changed since its last run (all books, the first time) and notes them as "to do" —
+// moving `lastRun` on in the same step, since the list now carries that work. Then it works
+// through "to do". If the 30 seconds run out, what is left stays noted, and the next run carries
+// on from there instead of starting over.
 //
 // recentAnnotations() is lazy (`for await`): it reads the library a page at a time, newest
 // change first, and stops at `since`. Deleted annotations aren't in it — the events above
@@ -164,15 +180,14 @@ zk.background(async () => {
   const { lastRun } = await loadState();
   const changed = new Set<string>();
   for await (const a of zk.library.recentAnnotations({ since: lastRun })) changed.add(a.itemKey);
-  await addTodo(changed);
-
-  await exportBooks((await loadState()).todo);
-
   await serially(async () => {
     const state = await loadState();
+    state.todo = [...new Set([...state.todo, ...changed])];
     state.lastRun = started;
     await saveState(state);
   });
+
+  await exportBooks((await loadState()).todo);
 });
 
 // ───────────────────────────── Markdown ─────────────────────────────

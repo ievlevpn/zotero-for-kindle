@@ -24,11 +24,12 @@ zk.on(event, handler), zk.background(task), zk.setBadge(text), zk.selectionActio
 ## What each example shows
 
 - **Highlights to Markdown** (`highlights-to-markdown/`, the shipped teaching example). Events
-  by origin: a Kindle highlight rewrites its book at once; a sync's highlights are noted and
-  written on `syncFinished`; an hourly `background` run catches what was missed (and on its first
-  run writes the whole library, since the first sync fires no highlight events). Item →
-  attachments → annotations, `zk.files`, a `zk.storage` index of files written, and the
-  five-line `serially` helper for state shared between handlers.
+  by origin: every change is noted in a "to do" list first; a Kindle highlight's book is then
+  written at once; `syncFinished` writes a few noted books; an hourly `background` run drains the
+  list and catches what was missed (its first run notes the whole library, since the first sync
+  fires no highlight events; a cut-short run resumes next time). Item → attachments →
+  annotations, `zk.files`, a `zk.storage` index of files written, and the five-line `serially`
+  helper for state shared between handlers, taken one book at a time.
 - **Feed Riffle skeleton** (`feed-riffle-skeleton/`). The hard case. `net:*` fetch with a
   per-feed timeout, a bundled npm XML parser (txml 6.0.3), `findByIdentifier` ignoring arXiv
   versions, a deck in storage, `keep` as one `createItem` (filed and tagged) plus `addNote`,
@@ -68,9 +69,11 @@ zk.on(event, handler), zk.background(task), zk.setBadge(text), zk.selectionActio
    whether module variables survive between calls and whether calls interleave. The header now
    says: the module stays loaded while the plugin is on; calls interleave at `await`, so
    read-modify-write of storage must be run one after another (the examples' `serially`).
-9. **`zk.PermissionError` / `zk.LimitError` were constructible.** Now `private constructor()`:
+9. **What a stopped call leaves behind was unstated.** Now: its pending work is cancelled and
+   rejects with `zk.LimitError`, so nothing hangs (see open question 1).
+10. **`zk.PermissionError` / `zk.LimitError` were constructible.** Now `private constructor()`:
    plugins test them with `instanceof`, only the app makes them.
-10. **`console.*` vs `zk.log`.** Decided: `console.log/warn/error` is preferred (standard, has
+11. **`console.*` vs `zk.log`.** Decided: `console.log/warn/error` is preferred (standard, has
     levels, what bundled libraries call); `zk.log` is documented as its alias. Every example in
     `zk.d.ts`, the template and the three plugins use `console`. (Removing `zk.log` — see below.)
 
@@ -95,7 +98,12 @@ should follow whatever you approve here.
 1. **Should the runtime serialise a plugin's calls**, so no plugin needs `serially`? Simpler
    to write, but a 30-second background run would hold up an event or an action. Both stateful
    examples needed the same helper, which is a smell. A middle way: a `zk.storage.update(key,
-   fn)` that runs updates in order.
+   fn)` that runs updates in order. Either way, a plugin-side queue is only safe if a stopped
+   call can't leave it waiting forever. **Ruled (controller, review round 1):** when a call is
+   stopped by a limit, the app cancels the work it started and every pending promise of that work
+   rejects with `zk.LimitError`; now stated in `zk.d.ts` (`LimitError`, `zk.on`,
+   `zk.background`). The examples also keep each queued job short (one book), so an event
+   handler never waits behind a whole background run.
 2. **Is a handler's time budget wall-clock or JavaScript time?** A Kindle highlight handler
    waiting behind the background run (5 s budget, 30 s run) fails if waiting counts. Proposal:
    count time running JavaScript, plus a generous wall-clock cap.

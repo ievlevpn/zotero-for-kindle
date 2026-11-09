@@ -24,10 +24,12 @@ A file is named after the book's citation key (the `Citation Key:` line Better B
 Zotero's *Extra* field), or after its title. Copy the folder off over USB.
 
 - A highlight you make, change or delete on the Kindle rewrites that book's file at once.
-- Highlights that arrive with a sync (made in Zotero on the desktop) are written when the sync
-  finishes.
-- Once an hour, after a sync, a background run catches anything missed — changes made while the
-  plugin was off — and, the first time, writes every book in the library that has highlights.
+- Highlights that arrive with a sync (made in Zotero on the desktop) are noted; a few books are
+  written as the sync finishes, the rest by the background run.
+- After a sync, at most once an hour, a background run writes what is noted and catches anything
+  missed — changes made while the plugin was off — and, the first time, writes every book in the
+  library that has highlights. A large library takes several runs; each carries on where the last
+  stopped.
 - A book whose last highlight is deleted, or that leaves the library, loses its file; a renamed
   book's file is renamed.
 

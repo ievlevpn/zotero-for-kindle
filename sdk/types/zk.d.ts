@@ -756,7 +756,8 @@ declare namespace zk {
 
   /**
    * Runs `handler` whenever `event` happens. Register handlers when the plugin loads (at the top
-   * level of `main.js`). A handler has 5 seconds; an error it throws is logged with its stack.
+   * level of `main.js`). A handler has 5 seconds; going over stops it (see {@link LimitError}:
+   * what it started is cancelled). An error it throws is logged with its stack.
    *
    * Every event says where the change was made: `origin: "kindle"` (the user did it on this
    * Kindle, one event per change, as it happens) or `origin: "zotero"` (it came in with a sync:
@@ -836,7 +837,8 @@ declare namespace zk {
   /**
    * Registers the plugin's background task (one per plugin; registering again replaces it). The
    * app runs it after a successful sync, at most once an hour, while the Kindle is awake and
-   * online; it never wakes a sleeping Kindle. A run has 30 seconds. Three failed runs in a row
+   * online; it never wakes a sleeping Kindle. A run has 30 seconds; going over stops it (see
+   * {@link LimitError}: what it started is cancelled). Three failed runs in a row
    * turn the plugin off. A background task can't show anything or ask the user: removals resolve
    * `null`; use {@link setBadge} to say there is something to see.
    *
@@ -1134,6 +1136,13 @@ declare namespace zk {
    * Thrown (or rejected with) when the plugin goes over one of the app's limits; the message names
    * it. `time`, `memory` and `stack` stop the running handler or task; the fetch limits only fail
    * that fetch.
+   *
+   * When a call is stopped, the work it started in the app (fetches, library reads, storage and
+   * file operations, timers) is cancelled, and every promise of that work still pending rejects
+   * with a `LimitError` — none is left pending forever. So a queue that chains calls one after
+   * another (`queue.then(job, job)`) moves on to the next job instead of hanging. Changes to Zotero
+   * already asked for stay asked for (each resolved at once); a removal still waiting for the
+   * user's answer is withdrawn.
    *
    * @example
    * try {

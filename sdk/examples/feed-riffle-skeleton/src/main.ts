@@ -70,7 +70,8 @@ const LIMITS = { seen: 5000, undo: 50, recent: 9 };
 
 // Calls interleave at each `await` (a background refresh can run while the user is deciding),
 // so every read-modify-write of the state runs through `serially`, one after another. Slow work —
-// the network, the user's confirmation — is done outside it.
+// the network, the user's confirmation — is done outside it. (A call stopped by a limit has what
+// it started rejected with zk.LimitError, so a stopped job never blocks the queue.)
 let queue: Promise<unknown> = Promise.resolve();
 function serially<T>(job: () => Promise<T>): Promise<T> {
   const result = queue.then(job, job);
