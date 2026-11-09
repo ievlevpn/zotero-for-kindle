@@ -7,11 +7,14 @@
 //  - ChangesQueued: a plugin queued a change for Zotero: the sync pushes soon.
 //  - BackgroundDone: the background round ended: onBackgroundDone() (the keep-awake hold, see
 //    plugin_background.h).
-//  - Badge, Disabled, Log: kept for Settings → Plugins (Task 17).
+//  - Disabled: a toast "<Plugin> stopped working — turned off" (the host's text); while a system
+//    dialog or the screensaver is over the app it waits until the app is in front again; several
+//    are shown one after another.
+//  - Badge, Log: nothing here (Settings → Plugins reads badges and logs from the host).
 
 #include <cstdint>
+#include <deque>
 #include <functional>
-#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -41,21 +44,13 @@ public:
 
     int waiting() const { return static_cast<int>(open_.size()); }
 
-    struct Notice {
-        PluginHostEvent::Kind kind;
-        std::string pluginId, pluginName, text;
-    };
-    static constexpr size_t kNotices = 50;
-    // Disabled and Log events, oldest first (the newest kNotices).
-    const std::vector<Notice>& notices() const { return notices_; }
-    // Each plugin's badge ("" once cleared).
-    const std::map<std::string, std::string>& badges() const { return badges_; }
+    static constexpr int64_t kToastGapMs = 3000;  // a toast's time on screen
 
 private:
     PluginHost* host_;
     std::set<uint64_t> open_;
-    std::vector<Notice> notices_;
-    std::map<std::string, std::string> badges_;
+    std::deque<std::string> turnedOff_;  // toasts not shown yet
+    int64_t lastToastMs_ = -kToastGapMs;
     std::function<void(uint64_t)> backgroundDone_;
 };
 

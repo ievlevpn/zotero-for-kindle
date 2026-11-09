@@ -46,17 +46,20 @@ void PluginEvents::poll(App& app) {
             case PluginHostEvent::Kind::BackgroundDone:
                 if (backgroundDone_) backgroundDone_(ev.requestId);
                 break;
-            case PluginHostEvent::Kind::Badge:
-                badges_[ev.pluginId] = ev.text;
-                break;
             case PluginHostEvent::Kind::Disabled:
+                log(LogLevel::Warn, "plugin %s: %s", ev.pluginId.c_str(), ev.text.c_str());
+                turnedOff_.push_back(ev.text);
+                break;
+            case PluginHostEvent::Kind::Badge:
             case PluginHostEvent::Kind::Log:
-                if (ev.kind == PluginHostEvent::Kind::Disabled)
-                    log(LogLevel::Warn, "plugin %s: %s", ev.pluginId.c_str(), ev.text.c_str());
-                notices_.push_back({ev.kind, ev.pluginId, ev.pluginName, ev.text});
-                if (notices_.size() > kNotices) notices_.erase(notices_.begin());
                 break;
         }
+    }
+    // Not over a system dialog or the screensaver: shown when the app is in front again.
+    if (!turnedOff_.empty() && !app.inBackground() && app.nowMs() - lastToastMs_ >= kToastGapMs) {
+        app.toast(turnedOff_.front());
+        turnedOff_.pop_front();
+        lastToastMs_ = app.nowMs();
     }
 }
 

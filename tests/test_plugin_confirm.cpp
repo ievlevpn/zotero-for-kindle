@@ -498,3 +498,37 @@ TEST_CASE("confirm: golden") {
         checkGolden(c, "tests/golden/plugin_confirm_list.png");
     }
 }
+
+TEST_CASE("plugin events: a plugin turned off shows \"<Plugin> stopped working — turned off\"; in the background it waits") {
+    // The app stopped while "riffle" ran last time: the host turns it off and says so.
+    for (bool background : {false, true}) {
+        CAPTURE(background);
+        FakePlugins fp;
+        fp.add("riffle", "", {}, "Feed Riffle");
+        fp.write(".running", "riffle");
+        Db db = Db::open(":memory:");
+        Library lib{db};
+        FakeDisplay display;
+        FakeSync sync;
+        NullKeyboard keyboard;
+        int64_t now = 1000;
+        App app{display, lib, sync, keyboard, [&] { return now; }};
+        PluginHost host(fp.deps());
+        PluginEvents events(&host);
+        app.setPollHook([&] { events.poll(app); });
+        for (int i = 0; i < App::kTabs; ++i) app.setRoot(i, std::make_unique<PageScreen>());
+        app.start();
+        if (background) {
+            display.lifecycle(InputEvent::Kind::Background);
+            app.step(0);
+            now += 70;
+            app.step(0);
+            CHECK(app.lastToast().empty());  // not over a system dialog or the screensaver
+            display.lifecycle(InputEvent::Kind::Foreground);
+        }
+        app.step(0);
+        now += 70;
+        app.step(0);
+        CHECK(app.lastToast() == "The app stopped while Feed Riffle was running — turned off");
+    }
+}
