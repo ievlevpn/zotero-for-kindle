@@ -364,3 +364,32 @@ TEST_CASE("library: tracked attachments and dropping untracked annotations") {
     CHECK_FALSE(rig.lib.annotation("DROPME01"));
     CHECK(rig.lib.objectVersion("DROPME01") == 0);
 }
+
+TEST_CASE("library: a version 6 database keeps its search index when migrated; an older one rebuilds it") {
+    for (int from : {5, 6}) {
+        CAPTURE(from);
+        char tmpl[] = "/tmp/zk-fts-v6-XXXXXX";
+        std::filesystem::path dir = mkdtemp(tmpl);
+        const std::string path = (dir / "z.db").string();
+        {
+            Db db = Db::open(path);
+            Library lib(db);
+            ItemRecord it;
+            it.key = "BOOK0001";
+            it.title = "Owls of the world";
+            lib.upsertItem(it);
+            // A row only the index has: it stays only if the index is kept as it is.
+            db.exec("INSERT INTO item_fts(rowid, title, creators, publication, tags) VALUES (999999, 'zzmarker', '', '', '');");
+            db.setUserVersion(from);
+        }
+        Db db = Db::open(path);
+        Library lib(db);
+        Stmt marker = db.prepare("SELECT COUNT(*) FROM item_fts WHERE item_fts MATCH 'zzmarker'");
+        REQUIRE(marker.step());
+        CHECK(marker.integer(0) == (from == 6 ? 1 : 0));
+        Stmt owls = db.prepare("SELECT COUNT(*) FROM item_fts WHERE item_fts MATCH 'owls'");
+        REQUIRE(owls.step());
+        CHECK(owls.integer(0) == 1);  // either way the items are searchable
+        std::filesystem::remove_all(dir);
+    }
+}

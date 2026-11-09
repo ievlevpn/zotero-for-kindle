@@ -354,7 +354,7 @@ void Library::migrate() {
                 "NOT NULL DEFAULT 0, remoteNew INTEGER NOT NULL DEFAULT 0, lastSent TEXT NOT NULL DEFAULT '');");
             db_.exec(  // version 5: read marks
                 "CREATE TABLE IF NOT EXISTS read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);");
-            if (version <= 6) db_.exec(kVersion6);
+            if (version < 6) db_.exec(kVersion6);  // a version 6 database has this index already
             db_.exec(  // version 7: Zotero notes
                 "CREATE TABLE IF NOT EXISTS notes (key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', html TEXT NOT "
                 "NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT "
@@ -369,7 +369,7 @@ void Library::migrate() {
                 st.bind(1, std::string(table));
                 return st.step();
             };
-            if (has("items") && version <= 6)  // kVersion6 emptied it
+            if (has("items") && version < 6)  // kVersion6 emptied it
                 db_.exec("INSERT INTO item_fts(rowid, title, creators, publication, tags) "
                          "SELECT rowid, title, creatorsText, publication, tagsText FROM items;");
             if (!has("note_fts")) {
