@@ -14,10 +14,16 @@
 #include <vector>
 
 #include "plugins/host.h"
+#include "sync/sync_control.h"
 
 namespace zk {
 
 class App;
+
+// What a sync tells plugins: the changes Zotero made (a push that had to pull first reports its
+// own), then, when a sync finished without error, syncFinished {origin "zotero", initial}: after
+// the other events of that sync. The first full sync of a library carries no per-item events.
+void forwardSyncToPlugins(const SyncEvent&, PluginSink&);
 
 class PluginEvents {
 public:

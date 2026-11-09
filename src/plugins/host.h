@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include "docs/document.h"
+#include "plugins/events.h"
 #include "plugins/manifest.h"
 #include "update/version.h"
 
@@ -49,12 +50,6 @@ struct PluginHostDeps {
     // More bindings installed into every plugin's `zk` after the built-in ones (tests use this to
     // give plugins host work they control).
     std::vector<std::function<void(plugins::PluginCtx&)>> extraBindings;
-};
-
-struct PluginEvent {
-    std::string name;
-    nlohmann::json payload;
-    bool userCaused = false;
 };
 
 // Confirm: the app's own confirmation of a removal (zk.zotero): `text` the question, `lines` what

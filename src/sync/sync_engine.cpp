@@ -87,11 +87,18 @@ SyncEngine::SyncEngine(ZoteroApi& api, Library& lib) : api_(api), lib_(lib) {}
 
 SyncReport SyncEngine::pull(std::function<void(const SyncProgress&)> progress) {
     SyncReport rep;
+    pulled_ = {};
+    collecting_ = false;
     try {
         pullInto(rep, progress ? progress : [](const SyncProgress&) {});
+        // Even a pull that stopped on an error leaves its stored batches behind, and they are not
+        // listed again: their changes are told now.
+        if (collecting_ && !pulled_.empty()) rep.pluginEvents = plugins::pulledEvents(lib_, pulled_);
     } catch (const DbError&) {
         rep.error = lib_.lastError();
     }
+    collecting_ = false;
+    pulled_ = {};
     if (rep.error) log(LogLevel::Warn, "sync: pull stopped: %s (%s)", rep.error->message.c_str(), rep.error->details.c_str());
     return rep;
 }
@@ -99,6 +106,8 @@ SyncReport SyncEngine::pull(std::function<void(const SyncProgress&)> progress) {
 void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncProgress&)>& progress) {
     const int64_t from = lib_.libraryVersion();
     rep.fromVersion = from;
+    rep.initial = from == 0;
+    collecting_ = from > 0;  // the first full sync tells plugins nothing item by item
     UserError err;
 
     // The first listing fixes the version this pull brings us to. Anything changed later has a
@@ -298,8 +307,13 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
     switch (kind) {
         case ObjectKind::Item: {
             const bool known = lib_.objectVersion(key) > 0;
+            const bool wasRead = collecting_ && known && lib_.isRead(key);
             lib_.upsertItem(parseItem(obj));
             ++(known ? rep.itemsUpdated : rep.itemsAdded);
+            if (collecting_ && known) {
+                const bool nowRead = lib_.isRead(key);
+                if (nowRead != wasRead) pulled_.itemRead(key, nowRead);
+            }
             break;
         }
         case ObjectKind::Attachment: {
@@ -340,6 +354,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                 if (local->deletedHere) {
                     lib_.upsertAnnotation(incoming);
                     ++rep.annotations;
+                    if (collecting_) pulled_.annotationCreated(key);  // it was hidden here, and is back
                     break;
                 }
                 if (local->createdHere && local->dirty && local->version == 0) {
@@ -369,8 +384,11 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                     break;  // our unsent edit is newer than what the server listed
                 }
             }
+            const bool isNew = !lib_.annotation(key).has_value();
             lib_.upsertAnnotation(incoming);
             ++rep.annotations;
+            if (collecting_ && incoming.conflictOf.empty() && !incoming.conflict)
+                isNew ? pulled_.annotationCreated(key) : pulled_.annotationChanged(key);
             break;
         }
         case ObjectKind::Note:
@@ -425,10 +443,12 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
             mine.createdHere = true;
             mine.version = 0;
             mine.conflictOf = key;
+            if (collecting_) pulled_.annotationRemoved(plugins::annotationRef(lib_, *a));
             lib_.removeObject("annotation", key);
             lib_.upsertAnnotation(mine);
             ++rep.conflicts;
         } else if (!a->conflict) {
+            if (collecting_) pulled_.annotationRemoved(plugins::annotationRef(lib_, *a));
             lib_.removeObject("annotation", key);
         }
         return;
@@ -437,7 +457,10 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         rep.conflicts += conflictUnsynced(key);
         refetch_.clear();  // the file is gone from Zotero, and its annotations with it
         for (const auto& a : lib_.annotationsFor(key))
-            if (!a.conflict) lib_.removeObject("annotation", a.key);
+            if (!a.conflict) {
+                if (collecting_) pulled_.annotationRemoved(plugins::annotationRef(lib_, a));
+                lib_.removeObject("annotation", a.key);
+            }
         for (const auto& a : lib_.pendingDeletions())  // Zotero deleted them with the file
             if (a.parentKey == key) lib_.removeObject("annotation", a.key);
         lib_.removeObject("attachment", key);
@@ -462,6 +485,7 @@ SyncReport SyncEngine::push() {
             // The library changed on the server: pull first, then send our changes again.
             SyncReport pulled = pull(nullptr);
             rep.conflicts += pulled.conflicts;
+            rep.pluginEvents.insert(rep.pluginEvents.end(), pulled.pluginEvents.begin(), pulled.pluginEvents.end());
             if (pulled.error) rep.error = pulled.error;
             else if (!pushOnce(rep, precondition) && precondition)
                 rep.error = UserError{ErrorKind::Other, "Zotero kept changing during the upload. Try again.", "HTTP 412 twice"};
@@ -475,6 +499,7 @@ SyncReport SyncEngine::push() {
         // Reading positions, on their own: a refused one never holds annotations back.
         if (!rep.error && !pushPositions(rep, precondition) && precondition && !rep.error) {
             SyncReport pulled = pull(nullptr);  // the computer moved: the reader will ask
+            rep.pluginEvents.insert(rep.pluginEvents.end(), pulled.pluginEvents.begin(), pulled.pluginEvents.end());
             if (pulled.error) rep.error = pulled.error;
             else if (!pushPositions(rep, precondition) && precondition)
                 log(LogLevel::Warn, "sync: reading positions refused twice; next time");

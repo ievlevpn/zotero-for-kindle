@@ -29,6 +29,20 @@ public:
     Rect fixed;
 };
 
+// Keeps the plugin events the screens send.
+class RecordingSink : public PluginSink {
+public:
+    void emit(PluginEvent e) override { events.push_back(std::move(e)); }
+    std::vector<PluginEvent> events;
+    // The events of one name, in order.
+    std::vector<PluginEvent> named(const std::string& name) const {
+        std::vector<PluginEvent> out;
+        for (const auto& e : events)
+            if (e.name == name) out.push_back(e);
+        return out;
+    }
+};
+
 class FakeNav : public Nav {
 public:
     explicit FakeNav(Library& lib) : lib_(lib) {}
@@ -49,6 +63,8 @@ public:
     void paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>&) override { painted.push_back({r, w}); }
     bool systemInk() const override { return hasSystemInk; }
     void setSystemInk(bool on) override { systemInkOn = on; }
+    PluginSink& plugins() override { return pluginSink; }
+    RecordingSink pluginSink;
     bool hasSystemInk = false, systemInkOn = false;
     int orientationChanges = 0;
 

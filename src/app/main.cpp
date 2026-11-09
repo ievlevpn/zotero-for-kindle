@@ -315,6 +315,13 @@ int main(int argc, char** argv) {
     auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
     PluginEvents pluginEvents(plugins.get());
     app.setPollHook([&] { pluginEvents.poll(app); });
+    // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
+    // for JavaScript). Not while the host is stopped for an update's install.
+    bool pluginsRunning = true;
+    FnPluginSink pluginSink([&](PluginEvent e) {
+        if (plugins && pluginsRunning) plugins->dispatch(std::move(e));
+    });
+    app.setPluginSink(pluginSink);
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     auto startService = [&](const Config& c) {
         if (plugins) plugins->setWebdavHost(c.webdavUrl);  // the account (and its WebDAV server) may have changed
@@ -334,8 +341,9 @@ int main(int argc, char** argv) {
         service->start();
     };
 
-    app.setEventHook([&flow, &updateNotice](const SyncEvent& e, Nav& nav) {
+    app.setEventHook([&flow, &updateNotice, &pluginSink](const SyncEvent& e, Nav& nav) {
         flow.onSyncEvent(e, nav);
+        forwardSyncToPlugins(e, pluginSink);
         updateNotice.poll(nav.library());
         if (e.kind == SyncEvent::Kind::SyncFinished) updateNotice.onSyncFinished(nav.library(), !e.error);
     });
@@ -361,6 +369,7 @@ int main(int argc, char** argv) {
             [&] {  // installing backs up the library: no sync and no plugin writing to it meanwhile
                 if (service) service->stop();
                 app.setSync(nullSync);
+                pluginsRunning = false;
                 if (plugins) plugins->stop();
                 pluginEvents.rebind(nullptr, app);  // its questions go, unanswered
             },
@@ -371,6 +380,7 @@ int main(int argc, char** argv) {
                 plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
                 pluginEvents.rebind(plugins.get(), app);
                 plugins->start();
+                pluginsRunning = true;
             }));
     };
     auto pendingUpdate = [&]() -> std::optional<std::string> {

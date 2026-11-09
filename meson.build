@@ -91,6 +91,16 @@ zotero_lib = static_library('zk-zotero',
   dependencies : [store_dep])
 zotero_dep = declare_dependency(link_with : zotero_lib, dependencies : [store_dep])
 
+# What plugins hear (events, the Item/Annotation shapes): used by the sync engine, the screens and
+# the plugin runtime alike, so it stands apart from the runtime.
+plugin_events_lib = static_library('zk-plugin-events',
+  'src/plugins/events.cpp',
+  'src/plugins/identifiers.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [store_dep])
+plugin_events_dep = declare_dependency(link_with : plugin_events_lib, dependencies : [store_dep],
+  include_directories : include_directories('third_party', is_system : true))
+
 # Device services shared by the app and its tests: lipc, keep-awake, storage watch, paths.
 services_lib = static_library('zk-services',
   'src/platform/power.cpp',
@@ -110,8 +120,8 @@ sync_lib = static_library('zk-sync',
   'src/sync/sync_service.cpp',
   'third_party/pugixml/pugixml.cpp',
   include_directories : [inc, include_directories('third_party', 'third_party/pugixml', is_system : true)],
-  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep])
-sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep])
+  dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
+sync_dep = declare_dependency(link_with : sync_lib, dependencies : [zotero_dep, miniz_dep, md5_dep, services_dep, plugin_events_dep])
 
 # Updates (Plan 7): versions, signatures (Monocypher), checking, downloading, installing.
 monocypher_lib = static_library('zk-monocypher', 'third_party/monocypher/monocypher.c',
@@ -172,11 +182,10 @@ plugins_lib = static_library('zk-plugins',
   'src/plugins/bindings_fetch.cpp',
   'src/plugins/bindings_library.cpp',
   'src/plugins/bindings_zotero.cpp',
-  'src/plugins/identifiers.cpp',
   'src/plugins/plugin_http.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
-  dependencies : [core_dep, store_dep, docs_dep, quickjs_dep])
-plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep],
+  dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep])
+plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep],
   include_directories : include_directories('third_party', is_system : true))
 
 screens_lib = static_library('zk-screens',

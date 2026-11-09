@@ -851,7 +851,7 @@ struct PluginHost::Impl {
 
     void dispatch(const PluginEvent& ev) {
         activate();
-        const nlohmann::json payload = ev.payload.is_null() ? nlohmann::json::object() : ev.payload;
+        const nlohmann::ordered_json payload = ev.payload.is_null() ? nlohmann::ordered_json::object() : ev.payload;
         std::vector<std::string> ids;
         for (const auto& [id, p] : loaded) ids.push_back(id);
         for (const auto& id : ids) {
@@ -865,7 +865,7 @@ struct PluginHost::Impl {
                 for (const auto& handler : handlers) {
                     if (stopping || turnOffs.count(id)) break;
                     startCall(p, CallKind::Event, "the " + ev.name + " handler", deps.handlerBudgetMs, ev.userCaused,
-                              [&] { return p.cx.call(handler, {js::Value::fromJson(p.cx, payload)}); });
+                              [&] { return p.cx.call(handler, {js::Value::fromOrderedJson(p.cx, payload)}); });
                 }
             }  // no Value of the plugin may outlive it: turning it off frees its runtime
             applyTurnOffs();

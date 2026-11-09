@@ -85,6 +85,9 @@ public:
     void setEventHook(std::function<void(const SyncEvent&, Nav&)> hook) { hook_ = std::move(hook); }
     // Called every loop iteration after the sync events (the plugin host's events).
     void setPollHook(std::function<void()> hook) { pollHook_ = std::move(hook); }
+    // Where the screens' plugin events go (the plugin host's queue); none until set.
+    PluginSink& plugins() override { return *pluginSink_; }
+    void setPluginSink(PluginSink& s) { pluginSink_ = &s; }
 
     // The app's own confirmation (a plugin's removal): drawn over whatever screen shows, taking
     // every gesture, key and pen stroke until one of its buttons answers it; `answered` is then
@@ -173,6 +176,7 @@ private:
     Rect inkDirty_;
     int64_t lastInkPresentMs_ = -1'000'000;
     std::function<void()> pollHook_;
+    PluginSink* pluginSink_ = &nullPluginSink();
     struct Question {
         uint64_t id = 0;
         PluginConfirm view;

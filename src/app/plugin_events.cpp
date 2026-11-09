@@ -5,6 +5,13 @@
 
 namespace zk {
 
+void forwardSyncToPlugins(const SyncEvent& e, PluginSink& sink) {
+    if (e.kind != SyncEvent::Kind::SyncFinished && e.kind != SyncEvent::Kind::PushFinished) return;
+    for (const PluginEvent& pe : e.report.pluginEvents) sink.emit(pe);
+    if (e.kind == SyncEvent::Kind::SyncFinished && !e.error)
+        sink.emit(PluginEvent{"syncFinished", {{"origin", "zotero"}, {"initial", e.report.initial}}, false});
+}
+
 PluginEvents::PluginEvents(PluginHost* host) : host_(host) {}
 
 void PluginEvents::rebind(PluginHost* host, App& app) {

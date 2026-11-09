@@ -199,7 +199,10 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         const AnnotationRecord& a = lines_[i].note.annotation;
         if (!lines_[i].header && a.conflict) {
             if (noteRowButtonRect(rects[i], 0).contains(g.pos)) {
-                nav.library().reapplyConflict(a.key);
+                const std::string result = nav.library().reapplyConflict(a.key);
+                if (!result.empty())  // an edit of an annotation still there, or the annotation made again
+                    plugins::annotationEvent(nav.plugins(), nav.library(),
+                                             result == a.conflictOf ? "highlightChanged" : "highlightCreated", result);
                 nav.sync().pushSoon();
                 load(nav.library());
                 nav.damage(contentArea(), Waveform::Quality);

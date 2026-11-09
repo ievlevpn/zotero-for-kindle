@@ -289,6 +289,7 @@ void ReaderScreen::onShow(Nav& nav) {
     }
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start, zoteroStart);
+    plugins::bookEvent(nav.plugins(), nav.library(), "bookOpened", row_.key, row_.attachmentKey);
     marks_ = nav.library().bookmarks(row_.attachmentKey);
     sendBookmarks();
     if (openAt_) {
@@ -433,6 +434,10 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     linkId_ = 0;
     commitInk();
     const int target = page_ + delta;
+    if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !finishedSent_) {
+        finishedSent_ = true;  // once a reading, however often the last page is swiped on
+        plugins::bookEvent(nav.plugins(), nav.library(), "bookFinished", row_.key, row_.attachmentKey);
+    }
     if (delta > 0 && pageCount_ > 0 && target >= pageCount_ && !endPrompt_ && !nav.library().isRead(row_.key)) {
         endPrompt_ = true;
         nav.damage(endPromptRect(), Waveform::Ui);
@@ -550,6 +555,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         endPrompt_ = false;
         if (mark) {
             nav.library().markRead(row_.key, true);
+            plugins::itemMarked(nav.plugins(), nav.library(), row_.key, true);
             nav.sync().pushSoon();
             nav.toast("Marked as read.");
         }
@@ -793,7 +799,7 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     a.position = selection_->position;
     a.pageLabel = selection_->pageLabel;
     a.localOnly = !selection_->roundTrips;  // §7.5: never upload a place that doesn't round-trip
-    nav.library().createAnnotation(a);
+    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", nav.library().createAnnotation(a));
     nav.library().setMetaValue(kColourKey, colour_);
     if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
     else nav.sync().pushSoon();
@@ -1292,6 +1298,7 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     a.sortIndex = e.ink->sortIndex;
     a.pageLabel = e.ink->pageLabel;
     const std::string key = nav.library().createAnnotation(a);
+    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
     nav.sync().pushSoon();
     inkSaved_.push_back(SavedInk{key, sent.page, std::move(sent.paths)});
     refreshHighlights(nav);
@@ -1363,11 +1370,14 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
             pos["paths"] = kept;
             rec->position = pos.dump();
             nav.library().editAnnotation(*rec);
+            plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", key);
         } else if (!rec->comment.empty() || !rec->tags.empty()) {
             nav.toast("This handwriting has a comment or tags: delete it in Notes.");
             continue;
         } else {
+            const plugins::AnnotationRef ref = plugins::annotationRef(nav.library(), *rec);
             nav.library().deleteAnnotation(key);
+            plugins::annotationDeleted(nav.plugins(), ref);
         }
         saved = true;
         // Shown at once: those strokes off the page's drawing and the kept strokes.

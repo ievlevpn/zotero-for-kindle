@@ -11,6 +11,7 @@
 #include "platform/display.h"
 #include "platform/input.h"
 #include "platform/keyboard.h"
+#include "plugins/events.h"
 #include "store/library.h"
 #include "sync/sync_control.h"
 #include "ui/canvas.h"
@@ -44,6 +45,8 @@ public:
     // screen is visible; the app turns it off whenever another screen shows).
     virtual bool systemInk() const { return false; }
     virtual void setSystemInk(bool /*on*/) {}
+    // Where plugin events go (src/plugins/events.h): queuing only, never waits. Drops them by default.
+    virtual PluginSink& plugins() { return nullPluginSink(); }
 };
 
 // What a list row shows instead of its byline (download progress or an error), by attachment key.

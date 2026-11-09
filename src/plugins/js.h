@@ -105,6 +105,7 @@ public:
     ~Value();
 
     static Value fromJson(Context& cx, const nlohmann::json& j);
+    static Value fromOrderedJson(Context& cx, const nlohmann::ordered_json& j);  // keys keep their order
     nlohmann::json toJson() const;  // undefined and functions become null
 
     bool isPromise() const { return promiseState() != PromiseState::NotAPromise; }

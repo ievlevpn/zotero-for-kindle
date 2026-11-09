@@ -165,7 +165,9 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             return Result::Closed;
         case State::Confirm:
             if (confirmRect(0).contains(p)) {
+                const plugins::AnnotationRef ref = plugins::annotationRef(nav.library(), annotation_);
                 nav.library().deleteAnnotation(annotation_.key);
+                plugins::annotationDeleted(nav.plugins(), ref);
                 changed_ = true;
                 return Result::Closed;
             }
@@ -185,6 +187,7 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
         if (colour != annotation_.color) {
             annotation_.color = colour;
             nav.library().editAnnotation(annotation_);
+            plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", annotation_.key);
             changed_ = true;
         }
         bar_.setColour(colour);
@@ -214,6 +217,7 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
         annotation_ = *now;
         annotation_.comment = comment_;
         nav.library().editAnnotation(annotation_);
+        plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", annotation_.key);
         changed_ = true;
         return Result::Closed;
     }

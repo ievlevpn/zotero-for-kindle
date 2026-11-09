@@ -7,6 +7,7 @@
 // Kindle's side is kept locally, marked conflict.
 
 #include "net/write_guard.h"
+#include "plugins/events.h"
 #include "store/library.h"
 #include "zotero/api.h"
 
@@ -26,6 +27,12 @@ struct SyncReport {
     int pluginSent = 0, pluginRefused = 0;  // plugin changes that ended Sent / Refused in this push
     int64_t fromVersion = 0, toVersion = 0;
     std::optional<UserError> error;
+    // What a pull changed, as plugin events (src/plugins/events.h): annotations created, changed
+    // or deleted by Zotero, items marked read or unread there. Built on the sync worker's thread.
+    // Empty for the first full sync of a library (`initial`), which tells plugins only that it
+    // finished, and for the on-demand download of a book's annotations.
+    std::vector<PluginEvent> pluginEvents;
+    bool initial = false;  // this pull was the library's first full sync (fromVersion 0)
 };
 
 // The WriteGuard's view of the plugin changes pending in `lib` (its plugin rules), as Zotero has
@@ -68,6 +75,8 @@ private:
 
     ZoteroApi& api_;
     Library& lib_;
+    plugins::Pulled pulled_;  // this pull's changes for plugins; kept only when collecting_
+    bool collecting_ = false;
     std::vector<std::string> refetch_;  // annotations to download again at the end of this pull
 };
 

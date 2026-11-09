@@ -169,6 +169,7 @@ ItemSheet::Action ItemSheet::onGesture(const Gesture& g, Rect area, Nav& nav) {
     if (moreRect(area).contains(g.pos)) return Action::More;
     if (readRect(area).contains(g.pos)) {
         nav.library().markRead(row_.key, !row_.read);
+        plugins::itemMarked(nav.plugins(), nav.library(), row_.key, !row_.read);
         nav.sync().pushSoon();
         if (auto fresh = nav.library().rowFor(row_.key)) row_ = std::move(*fresh);
         confirmRemove_ = false;

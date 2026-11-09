@@ -27,6 +27,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include "plugins/events.h"
 #include "plugins/fulltext.h"
 #include "plugins/identifiers.h"
 #include "plugins/plugin_ctx.h"
@@ -140,59 +141,6 @@ std::string lowerOf(std::string s) {
 json nullable(const std::string& s) { return s.empty() ? json(nullptr) : json(s); }
 
 json itemOf(Library& lib, const ItemRecord& r) { return itemJson(r, lib.isRead(r.key)); }
-
-json fieldOf(const std::string& jsonText, const char* key) {
-    nlohmann::json d = nlohmann::json::parse(jsonText, nullptr, false);
-    if (d.is_object()) {
-        auto it = d.find(key);
-        if (it != d.end() && it->is_string()) return json(it->get<std::string>());
-    }
-    return json(nullptr);
-}
-
-std::string createdOf(const std::string& jsonText, const std::string& fallback) {
-    json added = fieldOf(jsonText, "dateAdded");
-    return added.is_string() && !added.get<std::string>().empty() ? added.get<std::string>() : fallback;
-}
-
-// The item an attachment belongs to (a lone attachment is its own item).
-std::string itemKeyOfAttachment(Library& lib, const std::string& attachmentKey) {
-    auto a = lib.attachment(attachmentKey);
-    if (!a) return "";
-    return a->parentKey.empty() ? a->key : a->parentKey;
-}
-
-json annotationOf(const AnnotationRecord& a, const std::string& itemKey) {
-    json j = json::object();
-    j["key"] = a.key;
-    j["attachmentKey"] = a.parentKey;
-    j["itemKey"] = itemKey;
-    j["type"] = a.type;
-    j["text"] = nullable(a.text);
-    j["comment"] = nullable(a.comment);
-    j["color"] = a.color;
-    j["pageLabel"] = nullable(a.pageLabel);
-    j["tags"] = a.tags;
-    j["created"] = createdOf(a.json, a.dateModified);
-    j["modified"] = a.dateModified;
-    return j;
-}
-
-bool downloaded(const AttachmentRecord& a) {
-    std::error_code ec;
-    return a.state == AttachmentRecord::State::Local && !a.localPath.empty() && fs::is_regular_file(a.localPath, ec);
-}
-
-json attachmentOf(const AttachmentRecord& a) {
-    json j = json::object();
-    j["key"] = a.key;
-    j["itemKey"] = a.parentKey;
-    j["title"] = a.filename;  // Zotero's attachment title isn't kept; the file name is the nearest
-    j["contentType"] = a.contentType;
-    j["filename"] = nullable(a.filename);
-    j["downloaded"] = downloaded(a);
-    return j;
-}
 
 void rebuildIndex(LibState& st) {
     st.dataVersion = st.lib->dataVersion();
@@ -323,7 +271,7 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (op == "attachments") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
         json out = json::array();
-        for (const AttachmentRecord& at : lib.attachmentsOf(a)) out.push_back(attachmentOf(at));
+        for (const AttachmentRecord& at : lib.attachmentsOf(a)) out.push_back(attachmentJson(at));
         return toJs(c, out);
     }
     if (op == "annotations") {
@@ -331,7 +279,7 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         const std::string itemKey = itemKeyOfAttachment(lib, a);
         json out = json::array();
         for (const AnnotationRecord& an : lib.annotationsFor(a))
-            if (an.conflictOf.empty()) out.push_back(annotationOf(an, itemKey));
+            if (an.conflictOf.empty()) out.push_back(annotationJson(an, itemKey));
         return toJs(c, out);
     }
     if (op == "recent") {  // offset, limit
@@ -340,7 +288,7 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         const auto rows = lib.recentAnnotations(std::max(0, offset), std::clamp(limit, 1, 200));
         json items = json::array();
         for (const NoteRow& row : rows)
-            if (row.annotation.conflictOf.empty()) items.push_back(annotationOf(row.annotation, row.itemKey));
+            if (row.annotation.conflictOf.empty()) items.push_back(annotationJson(row.annotation, row.itemKey));
         return toJs(c, json{{"rows", rows.size()}, {"items", items}});
     }
     if (op == "notes") {

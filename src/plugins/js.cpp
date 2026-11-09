@@ -151,6 +151,11 @@ Value Value::fromJson(Context& cx, const nlohmann::json& j) {
     return Value(cx.raw(), JS_ParseJSON(cx.raw(), text.data(), text.size(), "<json>"));
 }
 
+Value Value::fromOrderedJson(Context& cx, const nlohmann::ordered_json& j) {
+    const std::string text = j.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
+    return Value(cx.raw(), JS_ParseJSON(cx.raw(), text.data(), text.size(), "<json>"));
+}
+
 nlohmann::json Value::toJson() const {
     if (!ctx_ || JS_IsUndefined(v_) || JS_IsFunction(ctx_, v_)) return nullptr;
     JSValue s = JS_JSONStringify(ctx_, v_, JS_UNDEFINED, JS_UNDEFINED);

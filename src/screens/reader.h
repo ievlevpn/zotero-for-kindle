@@ -153,6 +153,7 @@ private:
     void onSelection(const RenderEvent&, Nav&);
     void onBarTap(Point, Nav&);
     void showBar(Nav&);
+    bool finishedSent_ = false;  // bookFinished went to the plugins already
     void saveSelection(const std::string& type, const std::string& comment, Nav&);
     void closeSelection(Nav&);
     bool editAt(Point, Nav&);  // a highlight under (or right next to) the tap: open its editor
