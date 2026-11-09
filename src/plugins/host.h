@@ -25,7 +25,7 @@ class Http;
 namespace plugins {
 struct PluginCtx;
 // The plugin thread and its workers (fetch, full text) call this first: they run below the screen
-// and sync threads (nice 10 on Linux; the utility QoS class on macOS), so reading never stutters
+// and sync threads (nice 10 on Linux; 10 below the default scheduling priority on macOS), so reading never stutters
 // for a plugin.
 void lowerThreadPriority();
 }
@@ -56,6 +56,9 @@ struct PluginHostDeps {
     // run at most quietRunMs in any quietWindowMs; a timer or continuation whose call has ended
     // waits (not failed) until the window allows it.
     int quietRunMs = 2000, quietWindowMs = 60000;
+    // Free bytes on the partition holding a path (statvfs; tests inject their own): plugin writes
+    // (zk.files, zk.storage) are refused when it is under 50 MB.
+    std::function<uint64_t(const std::string& path)> freeSpace;
     // Each line written to a plugin's log is also handed here (on the plugin thread): the desktop
     // build mirrors it to stderr when asked to.
     std::function<void(const std::string& pluginId, const std::string& line)> logSink;

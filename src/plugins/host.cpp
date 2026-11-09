@@ -46,9 +46,7 @@
 #include <pthread.h>
 #include <sys/resource.h>
 #include <unistd.h>
-#if defined(__APPLE__)
-#include <pthread/qos.h>
-#else
+#if !defined(__APPLE__)
 #include <sys/syscall.h>
 #endif
 
@@ -1319,7 +1317,14 @@ void setBackgroundTask(PluginCtx& p, js::Value task) {
 
 void plugins::lowerThreadPriority() {
 #if defined(__APPLE__)
-    pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+    // macOS (the desktop build): a lower scheduling priority within the default QoS class. A lower
+    // QoS class (utility) would also coalesce its timers, which makes plugin timers late.
+    int policy = 0;
+    sched_param param{};
+    if (pthread_getschedparam(pthread_self(), &policy, &param) == 0) {
+        param.sched_priority = std::max(sched_get_priority_min(policy), param.sched_priority - kPluginNice);
+        pthread_setschedparam(pthread_self(), policy, &param);
+    }
 #else
     // Linux: nice is per thread (the tid), raised from what it inherited; no privilege needed.
     setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), kPluginNice);

@@ -2,11 +2,10 @@
 
 #include <sys/resource.h>
 #include <unistd.h>
-#if defined(__APPLE__)
-#include <pthread/qos.h>
-#else
+#if !defined(__APPLE__)
 #include <sys/syscall.h>
 #endif
+#include <pthread.h>
 
 #include <atomic>
 #include <chrono>
@@ -1240,13 +1239,16 @@ namespace {
 // The calling thread's scheduling level: its nice value (Linux) or QoS class (macOS).
 int threadLevel() {
 #if defined(__APPLE__)
-    return static_cast<int>(qos_class_self());
+    int policy = 0;
+    sched_param param{};
+    pthread_getschedparam(pthread_self(), &policy, &param);
+    return param.sched_priority;
 #else
     return getpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)));
 #endif
 }
 #if defined(__APPLE__)
-const int kLowered = static_cast<int>(QOS_CLASS_UTILITY);
+const int kLowered = 31 - 10;  // the default priority, 10 lower
 #else
 const int kLowered = 10;
 #endif
