@@ -160,6 +160,7 @@ void SyncService::run() {
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);
+        w.engine->setPluginEventsWanted(deps_.pluginEventsWanted);
         w.files = makeFileStore(*w.guard, deps_.config);
     } catch (const DbError& e) {
         log(LogLevel::Error, "sync service: can't open the database: %s", e.what());

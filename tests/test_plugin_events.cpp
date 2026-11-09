@@ -612,3 +612,43 @@ TEST_CASE("events: a push of a plugin's new item that has to pull first reports 
     CHECK(rep.pluginEvents[0].name == "highlightCreated");
     CHECK(rep.pluginEvents[0].payload["annotations"][0]["key"] == "DESKTOP1");
 }
+
+TEST_CASE("events: with no plugin on, the screens build no event and a pull collects none") {
+    SUBCASE("screens: nothing is built for a sink nobody listens to") {
+        Db db = Db::open(":memory:");
+        Library lib(db);
+        fillFixtureLibrary(lib, 4);
+        FakeNav nav(lib);
+        nav.pluginSink.listens = false;
+        const ItemRow row = *lib.rowFor("IT000002");
+        ItemSheet sheet(row, *lib.details(row.key));
+        const Rect area{0, 0, 1236, 1500};
+        sheet.onGesture(tapAt(sheet.readRect(area).center()), area, nav);
+        CHECK(lib.isRead("IT000002"));  // the action itself happened
+        CHECK(nav.pluginSink.events.empty());
+        plugins::annotationDeleted(nav.pluginSink, {"K", "A", "I"});
+        plugins::bookEvent(nav.pluginSink, lib, "bookOpened", "IT000002", "AT000002");
+        CHECK(nav.pluginSink.events.empty());
+        CHECK_FALSE(nullPluginSink().listening());
+        bool on = false;
+        FnPluginSink fn([](PluginEvent) {}, [&] { return on; });
+        CHECK_FALSE(fn.listening());
+        on = true;
+        CHECK(fn.listening());
+        CHECK(FnPluginSink([](PluginEvent) {}).listening());
+    }
+    SUBCASE("sync: a pull collects nothing while no plugin is on, and does again once one is") {
+        SyncRig rig;
+        bool on = false;
+        rig.engine.setPluginEventsWanted([&] { return on; });
+        rig.server.put(FakeZotero::annotation("ANNO0001", "EPUB0001", "one"));
+        SyncReport rep = rig.engine.pull(nullptr);
+        REQUIRE_FALSE(rep.error);
+        CHECK(rep.pluginEvents.empty());
+        on = true;
+        rig.server.put(FakeZotero::annotation("ANNO0002", "EPUB0001", "two"));
+        rep = rig.engine.pull(nullptr);
+        REQUIRE(rep.pluginEvents.size() == 1);
+        CHECK(rep.pluginEvents[0].payload["annotations"][0]["key"] == "ANNO0002");
+    }
+}

@@ -109,7 +109,8 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     const int64_t from = lib_.libraryVersion();
     rep.fromVersion = from;
     rep.initial = from == 0;
-    collecting_ = from > 0;  // the first full sync tells plugins nothing item by item
+    // The first full sync tells plugins nothing item by item; with no plugin on, nothing at all.
+    collecting_ = from > 0 && (!pluginEventsWanted_ || pluginEventsWanted_());
     UserError err;
 
     // The first listing fixes the version this pull brings us to. Anything changed later has a

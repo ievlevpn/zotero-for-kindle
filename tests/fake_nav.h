@@ -33,6 +33,8 @@ public:
 class RecordingSink : public PluginSink {
 public:
     void emit(PluginEvent e) override { events.push_back(std::move(e)); }
+    bool listening() const override { return listens; }
+    bool listens = true;  // false: as when no plugin is on (nothing should be built or emitted)
     std::vector<PluginEvent> events;
     // The events of one name, in order.
     std::vector<PluginEvent> named(const std::string& name) const {

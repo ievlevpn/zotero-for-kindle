@@ -1284,3 +1284,15 @@ TEST_CASE("host: the plugin thread and its workers run at a lower priority than 
     REQUIRE(host.waitIdle(3000));
     CHECK(gPluginThreadLevel.load() == kLowered);
 }
+
+TEST_CASE("host: anyEnabled says whether some installed plugin is on") {
+    FakePlugins fp;
+    fp.add("a", "");
+    fp.add("b", "");
+    PluginHost host(fp.deps());
+    CHECK_FALSE(host.anyEnabled());
+    host.setEnabled("b", true);
+    CHECK(eventually([&] { return host.anyEnabled(); }));
+    host.setEnabled("b", false);
+    CHECK(eventually([&] { return !host.anyEnabled(); }));
+}

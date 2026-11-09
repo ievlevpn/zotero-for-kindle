@@ -1378,9 +1378,10 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
             nav.toast("This handwriting has a comment or tags: delete it in Notes.");
             continue;
         } else {
-            const plugins::AnnotationRef ref = plugins::annotationRef(nav.library(), *rec);
+            const bool told = nav.plugins().listening();
+            const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), *rec) : plugins::AnnotationRef{};
             nav.library().deleteAnnotation(key);
-            plugins::annotationDeleted(nav.plugins(), ref);
+            if (told) plugins::annotationDeleted(nav.plugins(), ref);
         }
         saved = true;
         // Shown at once: those strokes off the page's drawing and the kept strokes.

@@ -14,6 +14,7 @@ namespace {
 class NullSink final : public PluginSink {
 public:
     void emit(PluginEvent) override {}
+    bool listening() const override { return false; }
 };
 }  // namespace
 
@@ -105,6 +106,7 @@ AnnotationRef annotationRef(Library& lib, const AnnotationRecord& a) {
 }
 
 void annotationEvent(PluginSink& sink, Library& lib, const char* event, const std::string& key) {
+    if (!sink.listening()) return;
     auto a = lib.annotation(key);
     if (!a || a->deletedHere || !a->conflictOf.empty()) return;
     sink.emit(kindle(event, json{{"origin", "kindle"},
@@ -112,12 +114,14 @@ void annotationEvent(PluginSink& sink, Library& lib, const char* event, const st
 }
 
 void annotationDeleted(PluginSink& sink, const AnnotationRef& r) {
+    if (!sink.listening()) return;
     sink.emit(kindle("highlightDeleted",
                      json{{"origin", "kindle"},
                           {"annotations", json::array({json{{"key", r.key}, {"attachmentKey", r.attachmentKey}, {"itemKey", r.itemKey}}})}}));
 }
 
 void itemMarked(PluginSink& sink, Library& lib, const std::string& itemKey, bool read) {
+    if (!sink.listening()) return;
     auto it = lib.item(itemKey);
     if (!it) return;
     sink.emit(kindle(read ? "itemMarkedRead" : "itemMarkedUnread",
@@ -125,6 +129,7 @@ void itemMarked(PluginSink& sink, Library& lib, const std::string& itemKey, bool
 }
 
 void bookEvent(PluginSink& sink, Library& lib, const char* event, const std::string& itemKey, const std::string& attachmentKey) {
+    if (!sink.listening()) return;
     auto it = lib.item(itemKey);
     auto att = lib.attachment(attachmentKey);
     if (!it || !att) return;

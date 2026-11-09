@@ -5,6 +5,7 @@
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
 //                                                  render a screen to a PNG and exit
 
+#include <atomic>
 #include <chrono>
 #include <fstream>
 #include <cstdlib>
@@ -328,6 +329,9 @@ int main(int argc, char** argv) {
     }
     NullSync nullSync;
     App app(*display, lib, nullSync, *keyboard);
+    // Some plugin is on and running: only then do the screens and the sync worker build events for
+    // plugins (kept by the poll hook; read on both threads). Outlives the sync service.
+    std::atomic<bool> pluginsListening{false};
     std::unique_ptr<SyncService> service;
     SyncStatus status;
     OpenFlow flow(wallMs);
@@ -368,9 +372,15 @@ int main(int argc, char** argv) {
     // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
     // for JavaScript). Not while the host is stopped for an update's install.
     bool pluginsRunning = true;
-    FnPluginSink pluginSink([&](PluginEvent e) {
-        if (plugins && pluginsRunning && !pluginsOff) plugins->dispatch(std::move(e));
-    });
+    FnPluginSink pluginSink(
+        [&](PluginEvent e) {
+            if (plugins && pluginsRunning && !pluginsOff) plugins->dispatch(std::move(e));
+        },
+        [&] { return pluginsListening.load(std::memory_order_relaxed); });
+    auto updateListening = [&] {
+        pluginsListening.store(plugins && pluginsRunning && !pluginsOff && plugins->anyEnabled(), std::memory_order_relaxed);
+    };
+    updateListening();
     app.setPluginSink(pluginSink);
     // After a successful sync, plugins' background tasks run (the host allows each one once an
     // hour) inside a keep-awake hold of the screen thread's: see app/plugin_background.h.
@@ -404,6 +414,7 @@ int main(int argc, char** argv) {
             if (plugins) plugins->reload(id);
         });
     app.setPollHook([&] {
+        updateListening();
         if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {
             startConfirmed = true;
             confirmSafeModeStart(paths.pluginsDir);
@@ -426,6 +437,7 @@ int main(int argc, char** argv) {
         deps.config = c;
         deps.keepAwake = &keepAwake;
         deps.intervalMinutes = loadSettings(lib).syncIntervalMinutes;
+        deps.pluginEventsWanted = [&pluginsListening] { return pluginsListening.load(std::memory_order_relaxed); };
         service = std::make_unique<SyncService>(std::move(deps));
         app.setSync(*service);
         service->start();

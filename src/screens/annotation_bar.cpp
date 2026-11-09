@@ -165,9 +165,10 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             return Result::Closed;
         case State::Confirm:
             if (confirmRect(0).contains(p)) {
-                const plugins::AnnotationRef ref = plugins::annotationRef(nav.library(), annotation_);
+                const bool told = nav.plugins().listening();
+                const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), annotation_) : plugins::AnnotationRef{};
                 nav.library().deleteAnnotation(annotation_.key);
-                plugins::annotationDeleted(nav.plugins(), ref);
+                if (told) plugins::annotationDeleted(nav.plugins(), ref);
                 changed_ = true;
                 return Result::Closed;
             }

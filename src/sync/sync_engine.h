@@ -52,6 +52,9 @@ public:
     // The "Keep all highlights offline" setting. Off drops the downloaded annotations of books
     // not opened on the Kindle (never local edits or conflicts); on syncs all at the next pull.
     void setAllHighlightsOffline(bool on);
+    // Whether a pull collects what it brought in for plugins (SyncReport::pluginEvents): asked at
+    // the start of each pull; false (no plugin is on) builds nothing. Unset: always.
+    void setPluginEventsWanted(std::function<bool()> wanted) { pluginEventsWanted_ = std::move(wanted); }
 
 private:
     void pullInto(SyncReport&, const std::function<void(const SyncProgress&)>&);
@@ -78,6 +81,7 @@ private:
     Library& lib_;
     plugins::Pulled pulled_;  // this pull's changes for plugins; kept only when collecting_
     bool collecting_ = false;
+    std::function<bool()> pluginEventsWanted_;
     bool annotationEvents_ = true;  // false while annotations are only caught up on
     std::set<std::string> refetched_;  // Zotero's copies fetched again after a replaced file: not new to plugins
     std::vector<std::string> refetch_;  // annotations to download again at the end of this pull

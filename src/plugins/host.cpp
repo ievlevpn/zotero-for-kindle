@@ -1394,6 +1394,14 @@ void PluginHost::runBackground(uint64_t round) {
     impl_->post([round](Impl& h) { h.runBackground(round); });
 }
 
+bool PluginHost::anyEnabled() const {
+    Impl& h = *impl_;
+    std::lock_guard<std::mutex> lock(h.mu);
+    for (const auto& f : h.folders)
+        if (f.manifest && f.problem.empty() && h.state.enabled(f.dir)) return true;
+    return false;
+}
+
 bool PluginHost::backgroundDue() const {
     Impl& h = *impl_;
     const int64_t now = h.deps.clock();

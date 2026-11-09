@@ -129,6 +129,9 @@ public:
     // Is some enabled plugin's background task due (see above)? Cheap and any thread: loads nothing.
     // A plugin not loaded yet whose manifest has the background permission counts as possibly due.
     bool backgroundDue() const;
+    // Some installed plugin that can load is turned on (cheap; any thread): with none, the app
+    // builds no events for plugins.
+    bool anyEnabled() const;
     // The Kindle is going to sleep: stops background tasks still running. Not failures.
     void cancelBackground();
     // Empties the plugin's data/ folder and its storage (Settings → Plugins → Reset its data). Works

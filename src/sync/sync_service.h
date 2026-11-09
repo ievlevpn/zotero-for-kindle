@@ -31,6 +31,9 @@ struct SyncDeps {
     int onlinePollMs = 5000;
     int onlineGiveUpMs = 120'000;
     int pushDelayMs = 10'000;  // pushSoon(): this long after the last change
+    // Whether pulls collect events for plugins (asked on the worker; must be cheap and thread-safe):
+    // false while no plugin is on. Unset: always.
+    std::function<bool()> pluginEventsWanted;
 };
 
 class SyncService final : public SyncControl {

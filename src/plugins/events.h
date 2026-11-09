@@ -34,22 +34,28 @@ struct PluginEvent {
 };
 
 // Where screens (and the app, for what sync brought in) hand events. emit() only queues.
+// listening(): false when no plugin would hear an event (none is on): the builders below then
+// build nothing, so a Kindle without plugins pays nothing for them.
 class PluginSink {
 public:
     virtual ~PluginSink() = default;
     virtual void emit(PluginEvent) = 0;
+    virtual bool listening() const { return true; }
 };
-PluginSink& nullPluginSink();  // drops everything
+PluginSink& nullPluginSink();  // drops everything; never listening
 
 class FnPluginSink final : public PluginSink {
 public:
-    explicit FnPluginSink(std::function<void(PluginEvent)> f) : f_(std::move(f)) {}
+    explicit FnPluginSink(std::function<void(PluginEvent)> f, std::function<bool()> listening = {})
+        : f_(std::move(f)), listening_(std::move(listening)) {}
     void emit(PluginEvent e) override {
         if (f_) f_(std::move(e));
     }
+    bool listening() const override { return f_ && (!listening_ || listening_()); }
 
 private:
     std::function<void(PluginEvent)> f_;
+    std::function<bool()> listening_;
 };
 
 namespace plugins {
