@@ -1,10 +1,11 @@
 #pragma once
 // What the user and the app remember about each plugin: on/off, failures, a badge, the last
-// background run. One file, <pluginsDir>/.state.json, written atomically; a torn or garbled file
+// background run. Thread-safe (the screen and plugin threads share it). One file, <pluginsDir>/.state.json, written atomically; a torn or garbled file
 // reads as defaults.
 
 #include <cstdint>
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -35,6 +36,7 @@ private:
     };
     void load();
     void save();
+    std::mutex mu_;
     std::string file_;
     std::map<std::string, Entry> entries_;
 };

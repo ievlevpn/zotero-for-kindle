@@ -212,3 +212,70 @@ TEST_CASE("state: survives a torn write") {
     write(f, "{\"plugins\": 5}");
     CHECK_FALSE(PluginState(f).enabled("a"));
 }
+
+TEST_CASE("state: invalid UTF-8 in a failure message persists and reloads") {
+    TempDir t;
+    std::string f = (t.p / ".state.json").string();
+    {
+        PluginState s(f);
+        s.recordFailure("a", std::string("bad \xff byte"));
+        CHECK(s.failures("a") == 1);
+    }
+    PluginState s(f);
+    CHECK(s.failures("a") == 1);
+    REQUIRE(s.lastErrors("a").size() == 1);
+    CHECK(s.lastErrors("a")[0].find("bad") == 0);
+}
+
+TEST_CASE("manifest: huge inputs are problems, not crashes") {
+    UserError why;
+    std::string big(1 << 20, ' ');
+    CHECK_FALSE(parseManifest(big, &why));
+    CHECK(why.message.find("64 KB") != std::string::npos);
+    std::string ver(100000, '1');
+    CHECK_FALSE(parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"" + ver +
+                              "\",\"api\":0,\"main\":\"main.js\",\"permissions\":[]}", &why));
+    CHECK_FALSE(parseManifest("{\"id\":\"" + std::string(100000, 'a') +
+                              "\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\",\"permissions\":[]}", &why));
+
+    TempDir t;
+    write(t.p / "big" / "plugin.json", big);
+    auto v = scanPlugins(t.p.string(), Version{9, 9, 9});
+    REQUIRE(v.size() == 1);
+    CHECK(v[0].problem == "plugin.json is larger than 64 KB");
+}
+
+TEST_CASE("manifest: name length counts characters, not bytes") {
+    UserError why;
+    auto with = [&](const std::string& name) {
+        return parseManifest("{\"id\":\"a\",\"name\":\"" + name + "\",\"version\":\"1.0.0\",\"api\":0,"
+                             "\"main\":\"main.js\",\"permissions\":[]}", &why);
+    };
+    auto rep = [](int n) { std::string s; for (int i = 0; i < n; i++) s += "\xD0\xB6"; return s; };
+    CHECK(with(rep(40)));
+    CHECK_FALSE(with(rep(41)));
+}
+
+TEST_CASE("manifest: a minApp with huge numbers says so") {
+    UserError why;
+    CHECK_FALSE(parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"1.0.0\",\"api\":0,\"minApp\":\"99999999999.0.0\","
+                              "\"main\":\"main.js\",\"permissions\":[]}", &why));
+    CHECK(why.message.find("too large") != std::string::npos);
+    // a plugin version of any size within the schema is fine
+    CHECK(parseManifest("{\"id\":\"a\",\"name\":\"A\",\"version\":\"99999999999.0.0\",\"api\":0,"
+                        "\"main\":\"main.js\",\"permissions\":[]}", &why));
+}
+
+TEST_CASE("scan: a dangling symlink doesn't hide a later good plugin") {
+    TempDir t;
+    fs::copy("tests/data/plugins/scan/good", t.p / "zzz-good", fs::copy_options::recursive);
+    write(t.p / "zzz-good" / "plugin.json",
+          "{\"id\":\"zzz-good\",\"name\":\"G\",\"version\":\"1.0.0\",\"api\":0,\"main\":\"main.js\",\"permissions\":[]}");
+    std::error_code ec;
+    fs::create_symlink(t.p / "does-not-exist", t.p / "aaa-dangling", ec);
+    REQUIRE_FALSE(ec);
+    auto v = scanPlugins(t.p.string(), Version{9, 9, 9});
+    auto* g = find(v, "zzz-good");
+    REQUIRE(g);
+    CHECK(g->problem.empty());
+}

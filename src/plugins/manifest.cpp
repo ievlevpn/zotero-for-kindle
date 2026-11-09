@@ -48,6 +48,20 @@ std::string str(const json& j, const char* key, bool required) {
     return it->get<std::string>();
 }
 
+// Characters (code points), as the schema's maxLength counts them.
+size_t codePoints(const std::string& s) {
+    size_t n = 0;
+    for (unsigned char c : s) if ((c & 0xC0) != 0x80) n++;
+    return n;
+}
+
+// Lengths are checked before any regex runs, so a huge string never reaches the matcher.
+bool matches(const std::string& s, size_t maxLen, const std::regex& re) {
+    return s.size() <= maxLen && std::regex_match(s, re);
+}
+
+constexpr size_t kMaxManifestBytes = 64 * 1024;
+
 PluginManifest parseObject(const json& j) {
     if (!j.is_object()) bad("plugin.json must be an object");
     static const std::set<std::string> known = {"$schema", "id", "name", "version", "api", "minApp",
@@ -58,14 +72,15 @@ PluginManifest parseObject(const json& j) {
 
     PluginManifest m;
     m.id = str(j, "id", true);
-    if (m.id.size() > 64 || !std::regex_match(m.id, idRe()))
+    if (!matches(m.id, 64, idRe()))
         bad("\"id\" must be lowercase letters, digits and dashes (at most 64): " + m.id);
     m.name = str(j, "name", true);
-    if (m.name.empty() || m.name.size() > 40) bad("\"name\" must be 1 to 40 characters");
+    if (m.name.empty() || codePoints(m.name) > 40) bad("\"name\" must be 1 to 40 characters");
     m.version = str(j, "version", true);
-    if (!std::regex_match(m.version, semverRe())) bad("\"version\" must look like 1.2.3: " + m.version);
+    if (!matches(m.version, 100, semverRe()))
+        bad("\"version\" must look like 1.2.3 (at most 100 characters)");
     m.main = str(j, "main", true);
-    if (!std::regex_match(m.main, mainRe())) bad("\"main\" must be one .js file name: " + m.main);
+    if (!matches(m.main, 100, mainRe())) bad("\"main\" must be one .js file name (at most 100 characters)");
     m.author = str(j, "author", false);
     m.description = str(j, "description", false);
 
@@ -77,8 +92,9 @@ PluginManifest parseObject(const json& j) {
 
     if (j.contains("minApp")) {
         std::string s = str(j, "minApp", true);
-        auto v = std::regex_match(s, minAppRe()) ? parseVersion(s) : std::nullopt;
-        if (!v) bad("\"minApp\" must look like 1.2.3: " + s);
+        if (!matches(s, 40, minAppRe())) bad("\"minApp\" must look like 1.2.3");
+        auto v = parseVersion(s);
+        if (!v) bad("\"minApp\": version numbers are too large");
         m.minApp = *v;
     }
 
@@ -96,6 +112,7 @@ PluginManifest parseObject(const json& j) {
     for (const auto& p : *perms) {
         if (!p.is_string()) bad("every permission must be text");
         std::string s = p.get<std::string>();
+        if (s.size() > 300) bad("a permission is too long");
         if (!seen.insert(s).second) bad("permission listed twice: " + s);
         auto f = std::find_if(fixed.begin(), fixed.end(), [&](auto& e) { return e.first == s; });
         if (f != fixed.end()) {
@@ -110,25 +127,32 @@ PluginManifest parseObject(const json& j) {
     return m;
 }
 
-bool readFile(const fs::path& p, std::string& out) {
+enum class Read { Ok, Missing, TooBig };
+
+Read readFile(const fs::path& p, std::string& out) {
     std::ifstream in(p, std::ios::binary);
-    if (!in) return false;
-    std::ostringstream ss;
-    ss << in.rdbuf();
-    out = ss.str();
-    return true;
+    if (!in) return Read::Missing;
+    std::string buf(kMaxManifestBytes + 1, '\0');
+    in.read(buf.data(), (std::streamsize)buf.size());
+    buf.resize((size_t)in.gcount());
+    if (buf.size() > kMaxManifestBytes) return Read::TooBig;
+    out = std::move(buf);
+    return Read::Ok;
 }
 
 }  // namespace
 
 std::optional<PluginManifest> parseManifest(const std::string& text, UserError* why) {
     try {
+        if (text.size() > kMaxManifestBytes) bad("plugin.json is larger than 64 KB");
         json j = json::parse(text);
         return parseObject(j);
     } catch (const Bad& b) {
         if (why) *why = {ErrorKind::Other, "plugin.json: " + b.msg, ""};
     } catch (const json::exception& e) {
         if (why) *why = {ErrorKind::Other, "plugin.json is not valid JSON", e.what()};
+    } catch (const std::exception& e) {
+        if (why) *why = {ErrorKind::Other, "plugin.json could not be read", e.what()};
     }
     return std::nullopt;
 }
@@ -137,21 +161,30 @@ std::vector<PluginFolder> scanPlugins(const std::string& pluginsDir, Version app
     std::vector<PluginFolder> out;
     std::error_code ec;
     std::vector<fs::path> dirs;
+    std::vector<std::pair<fs::path, bool>> entries;  // path, is a folder
     for (fs::directory_iterator it(pluginsDir, ec), end; !ec && it != end; it.increment(ec)) {
         std::string name = it->path().filename().string();
         if (name.empty() || name[0] == '.') continue;
-        if (!it->is_directory(ec)) continue;
-        dirs.push_back(it->path());
+        std::error_code dirEc;
+        bool isDir = it->is_directory(dirEc);
+        if (dirEc) {  // e.g. a dangling symlink: a problem of its own, never the end of the scan
+            entries.push_back({it->path(), false});
+            continue;
+        }
+        if (isDir) entries.push_back({it->path(), true});
     }
-    std::sort(dirs.begin(), dirs.end());
+    std::sort(entries.begin(), entries.end());
 
     std::set<std::string> ids;
-    for (const auto& d : dirs) {
+    for (const auto& [d, isDir] : entries) {
         PluginFolder f;
         f.dir = d.filename().string();
         std::string text;
-        if (!readFile(d / "plugin.json", text)) {
-            f.problem = "No plugin.json in this folder.";
+        Read r = isDir ? readFile(d / "plugin.json", text) : Read::Missing;
+        if (r == Read::Missing) {
+            f.problem = isDir ? "No plugin.json in this folder." : "This entry can't be read.";
+        } else if (r == Read::TooBig) {
+            f.problem = "plugin.json is larger than 64 KB";
         } else {
             UserError why;
             f.manifest = parseManifest(text, &why);
@@ -163,7 +196,7 @@ std::vector<PluginFolder> scanPlugins(const std::string& pluginsDir, Version app
                 f.problem = "Another plugin already has the id \"" + f.manifest->id + "\".";
             } else if (app < f.manifest->minApp) {
                 f.problem = "Needs app version " + f.manifest->minApp.str() + " or newer.";
-            } else if (!fs::is_regular_file(d / f.manifest->main, ec)) {
+            } else if (std::error_code mainEc; !fs::is_regular_file(d / f.manifest->main, mainEc)) {
                 f.problem = "The file " + f.manifest->main + " is missing.";
             }
         }
