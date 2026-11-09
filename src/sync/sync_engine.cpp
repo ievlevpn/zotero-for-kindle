@@ -320,8 +320,10 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
             break;
         }
         case ObjectKind::Note:
+            lib_.upsertNote(parseNote(obj));
+            break;
         case ObjectKind::Other:
-            break;  // notes are not shown in v1
+            break;
     }
     lib_.setObjectVersion(key, version);
 }
@@ -391,6 +393,7 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
         }
         return;
     }
+    if (lib_.note(key)) lib_.removeObject("note", key);
     if (lib_.objectVersion(key) > 0) ++rep.itemsRemoved;  // notes count too; they share the key space
     lib_.removeObject("item", key);
 }

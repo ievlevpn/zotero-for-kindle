@@ -14,6 +14,7 @@ ObjectKind kindOf(const nlohmann::json& obj);
 ItemRecord parseItem(const nlohmann::json& obj);
 AttachmentRecord parseAttachment(const nlohmann::json& obj);
 AnnotationRecord parseAnnotation(const nlohmann::json& obj);
+NoteRecord parseNote(const nlohmann::json& obj);
 CollectionRecord parseCollection(const nlohmann::json& obj);
 
 }  // namespace zk

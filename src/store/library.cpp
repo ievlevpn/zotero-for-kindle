@@ -18,7 +18,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 6;
+constexpr int64_t kSchemaVersion = 7;
 
 // The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
@@ -59,6 +59,10 @@ CREATE TABLE annotations (
 CREATE INDEX annotations_modified ON annotations(dateModified DESC);
 CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
+CREATE TABLE notes (
+  key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', html TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0,
+  json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '', createdBy TEXT NOT NULL DEFAULT '');
+CREATE INDEX notes_parent ON notes(parentKey);
 CREATE TABLE tracked_attachments (key TEXT PRIMARY KEY);
 CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
 CREATE TABLE reading_positions (attachmentKey TEXT PRIMARY KEY, remote TEXT NOT NULL DEFAULT '',
@@ -266,8 +270,8 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 5) {
-            // Versions 2 to 5 may hold unsent Kindle work, so they are extended in place, never rebuilt.
+        if (version >= 2 && version <= 6) {
+            // Versions 2 to 6 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
                     "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
@@ -280,6 +284,11 @@ void Library::migrate() {
             db_.exec(  // version 5: read marks
                 "CREATE TABLE IF NOT EXISTS read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TEXT NOT NULL);");
             db_.exec(kVersion6);
+            db_.exec(  // version 7: Zotero notes
+                "CREATE TABLE IF NOT EXISTS notes (key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', html TEXT NOT "
+                "NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT "
+                "NULL DEFAULT '', createdBy TEXT NOT NULL DEFAULT '');"
+                "CREATE INDEX IF NOT EXISTS notes_parent ON notes(parentKey);");
             auto has = [&](const char* table) {
                 Stmt st = db_.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
                 st.bind(1, std::string(table));
@@ -437,6 +446,52 @@ void Library::upsertAnnotation(const AnnotationRecord& r) {
     });
 }
 
+void Library::upsertNote(const NoteRecord& r) {
+    guarded([&] {
+        Stmt st = db_.prepare(
+            "INSERT INTO notes (key, parentKey, html, version, json, dateModified, createdBy) VALUES (?,?,?,?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, html=excluded.html, version=excluded.version, "
+            "json=excluded.json, dateModified=excluded.dateModified, createdBy=excluded.createdBy");
+        st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.html).bind(4, r.version);
+        st.bind(5, r.json.empty() ? "{}" : r.json).bind(6, r.dateModified).bind(7, r.createdBy);
+        st.step();
+    });
+}
+
+namespace {
+const char* kNoteColumns = "key, parentKey, html, version, json, dateModified, createdBy";
+NoteRecord readNote(Stmt& st) {
+    NoteRecord n;
+    n.key = st.text(0);
+    n.parentKey = st.text(1);
+    n.html = st.text(2);
+    n.version = st.integer(3);
+    n.json = st.text(4);
+    n.dateModified = st.text(5);
+    n.createdBy = st.text(6);
+    return n;
+}
+}  // namespace
+
+std::optional<NoteRecord> Library::note(const std::string& key) {
+    return guarded([&]() -> std::optional<NoteRecord> {
+        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE key = ?");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return readNote(st);
+    });
+}
+
+std::vector<NoteRecord> Library::notes(const std::string& itemKey) {
+    return guarded([&] {
+        std::vector<NoteRecord> out;
+        Stmt st = db_.prepare(std::string("SELECT ") + kNoteColumns + " FROM notes WHERE parentKey = ? ORDER BY key");
+        st.bind(1, itemKey);
+        while (st.step()) out.push_back(readNote(st));
+        return out;
+    });
+}
+
 void Library::upsertCollection(const CollectionRecord& r) {
     guarded([&] {
         Stmt st = db_.prepare(
@@ -470,6 +525,9 @@ void Library::removeObject(const std::string& type, const std::string& key) {
             Stmt st = db_.prepare("DELETE FROM annotations WHERE key = ?");
             st.bind(1, key).step();
             touch(itemOfAttachment(attachment));
+        } else if (type == "note") {
+            Stmt st = db_.prepare("DELETE FROM notes WHERE key = ?");
+            st.bind(1, key).step();
         } else if (type == "collection") {
             Stmt links = db_.prepare("DELETE FROM item_collections WHERE collectionKey = ?");
             links.bind(1, key).step();

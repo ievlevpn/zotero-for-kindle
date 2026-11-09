@@ -16,6 +16,7 @@ test_sources = files(
   'test_mark_read.cpp',
   'test_search_scope.cpp',
   'test_notes_search.cpp',
+  'test_notes_sync.cpp',
   'test_errors.cpp',
   'test_library.cpp',
   'test_parse.cpp',

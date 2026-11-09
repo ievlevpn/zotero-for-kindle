@@ -66,6 +66,12 @@ public:
         a["filename"] = "lonely.pdf";
         return a;
     }
+    static json note(const std::string& key, const std::string& parent, const std::string& html) {
+        json n = {{"key", key}, {"itemType", "note"}, {"note", html}, {"tags", json::array()},
+                  {"dateModified", "2024-02-02T00:00:00Z"}};
+        if (!parent.empty()) n["parentItem"] = parent;
+        return n;
+    }
     static json annotation(const std::string& key, const std::string& parent, const std::string& text) {
         return {{"key", key}, {"itemType", "annotation"}, {"parentItem", parent}, {"annotationType", "highlight"},
                 {"annotationText", text}, {"annotationComment", ""}, {"annotationColor", "#ffd400"},

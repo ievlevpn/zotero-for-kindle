@@ -141,6 +141,18 @@ AnnotationRecord parseAnnotation(const json& obj) {
     return a;
 }
 
+NoteRecord parseNote(const json& obj) {
+    const json& d = dataOf(obj);
+    NoteRecord n;
+    n.key = keyOf(obj);
+    n.version = versionOf(obj);
+    n.parentKey = str(d, "parentItem");
+    n.html = str(d, "note");
+    n.json = d.dump();
+    n.dateModified = str(d, "dateModified");
+    return n;
+}
+
 CollectionRecord parseCollection(const json& obj) {
     const json& d = dataOf(obj);
     CollectionRecord c;

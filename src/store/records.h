@@ -45,6 +45,13 @@ struct AnnotationRecord {
     std::string dateModified;
 };
 
+// A Zotero note: its HTML as Zotero holds it. Read-only on the Kindle; createdBy is empty for
+// notes that came from Zotero.
+struct NoteRecord {
+    std::string key, parentKey /* '' for a standalone note */, html, json, dateModified, createdBy;
+    int64_t version = 0;
+};
+
 struct CollectionRecord {
     std::string key, name, parentKey;
     int64_t version = 0;

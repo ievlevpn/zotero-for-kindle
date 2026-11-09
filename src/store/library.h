@@ -135,7 +135,12 @@ public:
     void upsertAttachment(const AttachmentRecord&);
     void upsertAnnotation(const AnnotationRecord&);
     void upsertCollection(const CollectionRecord&);
-    // type: "item", "attachment", "annotation" or "collection".
+    // Zotero notes: pulled, never edited or pushed here. notes(itemKey) lists one item's notes
+    // ("" lists the standalone ones).
+    void upsertNote(const NoteRecord&);
+    std::optional<NoteRecord> note(const std::string& key);
+    std::vector<NoteRecord> notes(const std::string& itemKey);
+    // type: "item", "attachment", "annotation", "note" or "collection".
     void removeObject(const std::string& type, const std::string& key);
 
     int64_t libraryVersion();
