@@ -445,6 +445,7 @@ struct PluginHost::Impl {
         JS_FreeValue(c, global);
         try {
             installCore(p);
+            installStorage(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -465,6 +466,14 @@ struct PluginHost::Impl {
             failedLoad.insert(id);
             unload(id);
         }
+    }
+
+    void resetData(const std::string& id) {
+        bool known = false;
+        for (const auto& f : foldersCopy()) known = known || f.dir == id;
+        if (!known) return;
+        auto it = loaded.find(id);
+        resetPluginData((fs::path(deps.pluginsDir) / id).string(), it == loaded.end() ? nullptr : it->second.get());
     }
 
     void unload(const std::string& id) {
@@ -908,7 +917,7 @@ PluginCtx& ctxOf(JSContext* c) { return *static_cast<PluginCtx*>(JS_GetContextOp
 CallInfo currentCall(PluginCtx& p) {
     auto it = p.run->calls.find(p.run->current);
     if (it == p.run->calls.end()) return {};
-    return {it->first, it->second.userCaused, it->second.kind == CallKind::Background};
+    return {it->first, it->second.userCaused, it->second.kind == CallKind::Background, it->second.kind == CallKind::Cleanup};
 }
 
 Work::Work(std::weak_ptr<Inbox> inbox, uint64_t ctxSerial, uint64_t id) : inbox_(std::move(inbox)), ctxSerial_(ctxSerial), id_(id) {}
@@ -1086,6 +1095,10 @@ void PluginHost::reload() {
 
 void PluginHost::reload(const std::string& id) {
     impl_->post([id](Impl& h) { h.reload(&id); });
+}
+
+void PluginHost::resetData(const std::string& id) {
+    impl_->post([id](Impl& h) { h.resetData(id); });
 }
 
 void PluginHost::dispatch(PluginEvent ev) {

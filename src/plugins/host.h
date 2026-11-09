@@ -86,6 +86,9 @@ public:
     void reload(const std::string& id);
     void dispatch(PluginEvent);
     void runBackground();
+    // Empties the plugin's data/ folder and its storage (Settings → Plugins → Reset its data). Works
+    // whether or not the plugin is loaded; if it is, its queued storage writes are dropped.
+    void resetData(const std::string& id);
     // The user's answer to a Confirm event.
     void answer(uint64_t requestId, bool yes);
     bool poll(PluginHostEvent&);

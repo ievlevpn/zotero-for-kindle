@@ -60,6 +60,7 @@ struct PluginCtx {
     js::Value zk;  // the plugin's global `zk`; installers add their members to it
     js::Value makePermissionError, makeLimitError;  // the error classes' factories (installCore)
     std::unique_ptr<PluginRun> run;
+    std::shared_ptr<void> storage;  // bindings_storage.cpp's state (no JavaScript values in it)
 };
 
 // The plugin a native function was called for.
@@ -109,6 +110,7 @@ struct CallInfo {
     uint64_t id = 0;  // 0: no call is running
     bool userCaused = false;
     bool background = false;
+    bool cleanup = false;  // the code of a stopped call, running its last rejections
 };
 CallInfo currentCall(PluginCtx&);
 
@@ -172,5 +174,10 @@ bool installStandardGlobals(js::Context&);
 // setTimeout/clearTimeout, and the standard globals. Throws std::runtime_error on an internal
 // error (a bug in the preludes, or no memory).
 void installCore(PluginCtx&);
+// zk.storage and zk.files (bindings_storage.cpp). Throws std::runtime_error on an internal error.
+void installStorage(PluginCtx&);
+// Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
+// are dropped and its storage closed (it reopens, empty, at the next use).
+void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);
 
 }  // namespace zk::plugins
