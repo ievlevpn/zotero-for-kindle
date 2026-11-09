@@ -266,3 +266,24 @@ TEST_CASE("update fix: startup clears a download that was never installed") {
     CHECK_FALSE(fs::exists(k.app("update/new")));
     CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));
 }
+
+TEST_CASE("update install: the recovery launcher is written beside Zotero.sh, and a release without it still installs") {
+    {
+        Kindle k;
+        auto files = releaseFiles("0.3.0");
+        files["documents/Zotero-no-plugins.sh"] = "noplugins 0.3.0";
+        const std::string newDir = k.unpackNew(files);
+        CHECK((fs::status(fs::path(newDir) / "Zotero-no-plugins.sh").permissions() & fs::perms::owner_exec) != fs::perms::none);
+        UserError err;
+        REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, &err));
+        CHECK(readFile(k.root / "documents/Zotero-no-plugins.sh") == "noplugins 0.3.0");
+        CHECK(readFile(k.root / "documents/Zotero.sh") == "launcher 0.3.0");
+        CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh.new"));
+    }
+    {
+        Kindle k;  // an older release: none in the zip, none written, the install succeeds
+        UserError err;
+        REQUIRE(installRelease(k.paths, k.unpackNew(releaseFiles("0.3.0")), {0, 2, 0}, {0, 3, 0}, nullptr, &err));
+        CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh"));
+    }
+}

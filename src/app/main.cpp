@@ -6,6 +6,7 @@
 #include <chrono>
 #include <fstream>
 #include <cstdlib>
+#include <csignal>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -354,6 +355,10 @@ int main(int argc, char** argv) {
     // The start counts as good after 60 s of running (not at the first screen: plugins start after
     // it); a clean exit counts too. Until then a crash leaves the count for the next start.
     bool startConfirmed = pluginsOff;
+    if (!pluginsOff) {  // ended by the system (SIGTERM, SIGINT, SIGHUP): not a crash either
+        armSafeModeSignalConfirm(paths.pluginsDir);
+        for (int sig : {SIGTERM, SIGINT, SIGHUP}) std::signal(sig, safeModeEndingSignal);
+    }
     const int64_t startedMs = app.nowMs();
     app.setPollHook([&] {
         if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {

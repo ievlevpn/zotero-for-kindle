@@ -12,6 +12,7 @@
 #include <ctime>
 
 #include "core/log.h"
+#include "plugins/safe_mode.h"
 
 namespace zk {
 
@@ -39,6 +40,8 @@ volatile sig_atomic_t gSem = -1, gQueue = -1;
 
 void onFatalSignal(int sig) {
     WetInk::emergencyOff();
+    // Ended by the system (not a crash): the safe-mode start counts as good, as in main.cpp's handler.
+    if (sig == SIGTERM || sig == SIGINT || sig == SIGHUP) zk::confirmSafeModeStartFromSignal();
     std::signal(sig, SIG_DFL);
     std::raise(sig);
 }

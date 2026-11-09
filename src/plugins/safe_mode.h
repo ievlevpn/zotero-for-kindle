@@ -7,7 +7,11 @@
 //   launcher     ZK_NO_PLUGINS=1, set by documents/Zotero-no-plugins.sh: off for that run only
 // In every case the PluginHost is not started: no plugin code runs.
 
+#include <csignal>
+#include <cstring>
 #include <string>
+
+#include <unistd.h>
 
 namespace zk {
 
@@ -23,6 +27,27 @@ SafeModeDecision decideSafeMode(const std::string& pluginsDir, bool launcherAske
 
 // The start is confirmed (60 s of running, or a clean exit): the count goes back to 0.
 void confirmSafeModeStart(const std::string& pluginsDir);
+
+// The system ending the app (SIGTERM, SIGINT, SIGHUP) is a clean end, not a crash. The path is kept
+// here when armed, so the signal path needs no allocation: confirmFromSignal() only unlinks
+// <pluginsDir>/.starts (async-signal-safe; a missing file reads as a count of 0). Header-only so the
+// wet-ink handler (another library) can call it too.
+namespace safe_mode_detail {
+inline char gStartsPath[512] = {0};
+}
+inline void armSafeModeSignalConfirm(const std::string& pluginsDir) {
+    const std::string path = pluginsDir + "/.starts";
+    if (path.size() < sizeof safe_mode_detail::gStartsPath) std::memcpy(safe_mode_detail::gStartsPath, path.c_str(), path.size() + 1);
+}
+inline void confirmSafeModeStartFromSignal() {
+    if (safe_mode_detail::gStartsPath[0]) ::unlink(safe_mode_detail::gStartsPath);
+}
+// Handler for SIGTERM/SIGINT/SIGHUP: confirm, then die of the signal as it would have.
+inline void safeModeEndingSignal(int sig) {
+    confirmSafeModeStartFromSignal();
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
 
 // How long a start runs before it counts as confirmed.
 constexpr int kSafeModeConfirmMs = 60'000;

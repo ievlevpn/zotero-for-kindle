@@ -133,6 +133,7 @@ bool unpackRelease(const std::string& zipPath, const std::string& newDir, UserEr
         fs::path dest;
         if (name.rfind("zotero/", 0) == 0) dest = out / name.substr(7);
         else if (name == "documents/Zotero.sh") dest = out / "Zotero.sh";
+        else if (name == "documents/Zotero-no-plugins.sh") dest = out / "Zotero-no-plugins.sh";  // optional
         else continue;
         fs::create_directories(dest.parent_path(), ec);
         if (ec || !mz_zip_reader_extract_to_file(&zip, i, dest.c_str(), 0)) {
@@ -148,6 +149,7 @@ bool unpackRelease(const std::string& zipPath, const std::string& newDir, UserEr
                       fs::perms::others_exec;
     for (const auto& f : fs::directory_iterator(out / "bin", ec)) fs::permissions(f.path(), exec, ec);
     fs::permissions(out / "Zotero.sh", exec, ec);
+    if (fs::exists(out / "Zotero-no-plugins.sh", ec)) fs::permissions(out / "Zotero-no-plugins.sh", exec, ec);
     return true;
 }
 
@@ -223,6 +225,20 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     if (!ec) fs::permissions(launcherTmp, fs::perms::owner_all | fs::perms::group_read | fs::perms::others_read, ec);
     if (!ec) fs::rename(launcherTmp, p.launcherPath, ec);
     if (ec) return failDuringSwap("launcher: " + ec.message());
+    // The recovery launcher (safe mode) beside it: best effort, an older release has none, and a
+    // failure here never fails the install (nothing rolls it back either).
+    if (fs::exists(fresh / "Zotero-no-plugins.sh", ec)) {
+        const fs::path second = fs::path(p.launcherPath).parent_path() / "Zotero-no-plugins.sh";
+        const fs::path secondTmp = second.string() + ".new";
+        std::error_code e2;
+        fs::copy_file(fresh / "Zotero-no-plugins.sh", secondTmp, fs::copy_options::overwrite_existing, e2);
+        if (!e2) fs::permissions(secondTmp, fs::perms::owner_all | fs::perms::group_read | fs::perms::others_read, e2);
+        if (!e2) fs::rename(secondTmp, second, e2);
+        if (e2) {
+            log(LogLevel::Warn, "update: Zotero-no-plugins.sh not written: %s", e2.message().c_str());
+            fs::remove(secondTmp, e2);
+        }
+    }
     if (fs::exists(fresh / "LICENSE")) fs::copy_file(fresh / "LICENSE", app / "LICENSE", fs::copy_options::overwrite_existing, ec);
     fs::remove_all(fresh, ec);
 

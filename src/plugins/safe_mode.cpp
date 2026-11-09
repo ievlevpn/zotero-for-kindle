@@ -50,7 +50,7 @@ SafeModeDecision decideSafeMode(const std::string& pluginsDir, bool launcherAske
         return {false, false};
     }
     PluginState state(pluginsDir + "/.state.json");
-    for (const auto& f : scanPlugins(pluginsDir, appVersion())) state.setEnabled(f.dir, false);
+    for (const auto& f : scanPlugins(pluginsDir, appVersion())) state.turnOff(f.dir);
     writeStarts(pluginsDir, 0);
     return {true, true};
 }

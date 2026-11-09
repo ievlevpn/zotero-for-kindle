@@ -82,6 +82,12 @@ void PluginState::setEnabled(const std::string& id, bool on) {
     e.stopped = false;
     save();
 }
+void PluginState::turnOff(const std::string& id) {
+    std::lock_guard<std::mutex> lock(mu_);
+    Entry& e = entries_[id];
+    e.enabled = false;
+    save();
+}
 bool PluginState::everEnabled(const std::string& id) {
     std::lock_guard<std::mutex> lock(mu_);
     auto it = entries_.find(id);

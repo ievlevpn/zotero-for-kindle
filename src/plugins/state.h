@@ -18,6 +18,8 @@ public:
     bool enabled(const std::string& id);  // false for a plugin never seen
     // The user's choice: on also marks it ever enabled; either clears stopped.
     void setEnabled(const std::string& id, bool on);
+    // Off, nothing else touched (automatic safe mode: a plugin the app stopped keeps its note).
+    void turnOff(const std::string& id);
     bool everEnabled(const std::string& id);
     // The app turned it off (it kept failing, or the app stopped while it ran).
     void stop(const std::string& id);

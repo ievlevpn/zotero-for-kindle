@@ -9,4 +9,4 @@
 # update logic stays in Zotero.sh.
 ZK_NO_PLUGINS=1
 export ZK_NO_PLUGINS
-exec "${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}" "$@"
+exec sh "${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}" "$@"  # sh: works if the copy lost its execute bit

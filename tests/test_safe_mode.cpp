@@ -37,6 +37,8 @@ TEST_CASE("safe mode: two unconfirmed starts turn plugins off, automatic") {
         PluginState st(dir + "/.state.json");
         st.setEnabled("a", true);
         st.setEnabled("b", true);
+        st.recordFailure("b", "boom");
+        st.stop("b");  // the app had stopped it: that note stays
     }
     CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);  // start 1
     CHECK(readStarts(d) == "1");
@@ -49,6 +51,8 @@ TEST_CASE("safe mode: two unconfirmed starts turn plugins off, automatic") {
     PluginState st(dir + "/.state.json");
     CHECK_FALSE(st.enabled("a"));
     CHECK_FALSE(st.enabled("b"));
+    CHECK(st.stopped("b"));
+    CHECK(st.failures("b") == 1);
     CHECK(st.everEnabled("a"));
     // The count restarted: the start after the user turned a plugin on tries plugins again.
     CHECK(readStarts(d) == "0");
@@ -131,4 +135,16 @@ TEST_CASE("safe mode: Settings -> Plugins lists the plugins without loading them
     CHECK_FALSE(list.plugins()[0].loaded);
     CHECK(seen == 1);
     CHECK(list.rowRects()[0].y > 200);  // the line about why sits above the rows
+}
+
+TEST_CASE("safe mode: the system ending the app counts as a confirmed start") {
+    FakePlugins d;
+    const std::string dir = d.dir();
+    CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
+    CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
+    armSafeModeSignalConfirm(dir);
+    confirmSafeModeStartFromSignal();  // what the SIGTERM/SIGINT/SIGHUP handlers call
+    CHECK_FALSE(decideSafeMode(dir, false).pluginsOff);
+    CHECK(readStarts(d) == "1");  // back to counting from zero
+    // (The handlers themselves, in main.cpp and wet_ink.cpp, only call this and re-raise: not run here.)
 }
