@@ -416,3 +416,107 @@ TEST_CASE("files: resetData works for a plugin that isn't loaded, and drops queu
         CHECK(contains(log, "OUT []"));
     }
 }
+
+TEST_CASE("storage: set stores the value as it was when set() was called, and refuses a bad one at once") {
+    FakePlugins fp;
+    std::string log = runOnce(fp, "a", R"(
+        const arr = [1];
+        const p = zk.storage.set("k", arr);
+        arr.push(2);
+        let toJsonCalls = 0;
+        const q = zk.storage.set("t", { toJSON() { toJsonCalls++; return "called"; } });
+        out("toJSON calls right after set(): " + toJsonCalls);
+        // Blocked behind a slow update, a bad value still rejects at once.
+        const slow = zk.storage.update("slow", async () => { await new Promise((r) => setTimeout(r, 80)); return 1; });
+        let order = [];
+        const bad1 = zk.storage.set("u", undefined).catch((e) => order.push("undefined: " + e.name));
+        const bad2 = zk.storage.set("f", () => 1).catch((e) => order.push("function: " + e.name));
+        slow.then(() => order.push("slow done"));
+        await Promise.all([p, q, bad1, bad2, slow]);
+        out(order);
+        out(await zk.storage.get("k"));
+        out(await zk.storage.get("t"));
+        const r = await zk.storage.update("k", (v) => { const w = [...v, 3]; setTimeout(() => w.push("late"), 0); return w; });
+        out(r);
+    )");
+    CHECK(contains(log, "OUT toJSON calls right after set(): 1"));
+    CHECK(contains(log, R"(OUT ["undefined: TypeError","function: TypeError","slow done"])"));
+    CHECK(contains(log, "OUT [1]\n"));
+    CHECK(contains(log, "OUT called"));
+    CHECK(contains(log, "OUT [1,3]"));
+    CHECK_FALSE(contains(log, "ERR"));
+}
+
+TEST_CASE("storage: the store's size total stays right across overwrite, delete and reset") {
+    FakePlugins fp;
+    fp.add("a", pluginWith(R"(
+        const chunk = "y".repeat(1000000);
+        const tryset = async (k, v) => { try { await zk.storage.set(k, v); return "ok"; } catch (e) { return "refused"; } };
+        const res = [];
+        if (!initial) {
+            for (let i = 0; i < 16; i++) res.push(await tryset("k" + i, chunk));
+            res.push(await tryset("k16", chunk));        // over the cap
+            await zk.storage.set("k0", "small");          // overwrite frees ~1 MB
+            res.push(await tryset("k16", chunk));         // fits now
+            res.push(await tryset("k17", chunk));         // full again
+            await zk.storage.delete("k1"); await zk.storage.delete("k2");
+            res.push(await tryset("k17", chunk));
+            res.push(await tryset("k18", chunk));
+            res.push(await tryset("k19", chunk));         // full again
+            out(res.join(","));
+        } else {
+            for (let i = 0; i < 16; i++) res.push(await tryset("n" + i, chunk));
+            res.push(await tryset("n16", chunk));
+            out(res.join(","));
+        }
+    )"));
+    auto deps = fp.deps();
+    deps.handlerBudgetMs = 6000;
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    REQUIRE(host.waitIdle(15000));
+    host.resetData("a");
+    host.dispatch(kSecond);
+    REQUIRE(host.waitIdle(15000));
+    std::string log = fp.log("a");
+    const std::string sixteenOk = "ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok,ok";
+    CHECK(contains(log, "OUT " + sixteenOk + ",refused,ok,refused,ok,ok,refused\n"));
+    CHECK(contains(log, "OUT " + sixteenOk + ",refused\n"));
+}
+
+TEST_CASE("files: resetData on a data/ that is a symlink removes the link, not what it points to") {
+    FakePlugins fp;
+    fp.add("a", pluginWith("out(1);"));
+    fp.write("outside/precious.txt", "keep me");
+    fs::create_symlink(fp.path("outside"), fp.path("a/data"));
+    PluginHost host(fp.deps());
+    host.start();
+    host.resetData("a");
+    REQUIRE(host.waitIdle(5000));
+    CHECK(fp.read("outside/precious.txt") == "keep me");
+    CHECK_FALSE(fs::is_symlink(fp.path("a/data")));
+}
+
+TEST_CASE("storage: an update waiting in the queue holds the call that asked, and its fn runs once") {
+    FakePlugins fp;
+    fp.add("a", pluginWith(R"(
+        if (!initial) {
+            zk.storage.update("slow", async () => { await new Promise((r) => setTimeout(r, 100)); return 1; });
+            zk.storage.update("n", (n = 0) => { console.log("queued fn ran"); return n + 1; });   // not awaited
+        } else {
+            out(await zk.storage.update("n", (n) => n));
+        }
+    )"));
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kRun);
+    host.dispatch(kSecond);
+    REQUIRE(host.waitIdle(5000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "OUT 1"));
+    CHECK(where(log, "queued fn ran") == log.rfind("queued fn ran"));
+    CHECK_FALSE(contains(log, "ERR"));
+}

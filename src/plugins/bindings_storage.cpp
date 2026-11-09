@@ -3,9 +3,10 @@
 //
 // The natives are plain and synchronous; the JavaScript below is what plugins see: promises, and
 // the one per-plugin queue every storage write goes through (set, delete, update), in the order
-// asked. An update's `fn` is the only thing in the queue that can take long, so each runs holding
-// a "slot": host work owned by the running call. If that call is stopped (LimitError), the slot
-// rejects and the update fails, so the queue moves on rather than hanging.
+// asked. An update's `fn` is the only thing in the queue that can take long, so each update holds
+// a "slot": host work owned by the call that asked for it. If that call is stopped (LimitError), the
+// slot rejects and the update fails, so the queue moves on rather than hanging. Values are encoded
+// to JSON text when set() is called (or when an update's fn returns), never later.
 
 #include <sys/stat.h>
 
@@ -14,6 +15,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -33,8 +35,9 @@ constexpr size_t kMaxFile = 16u << 20;       // one file written or read through
 
 struct StorageState {
     std::unique_ptr<Db> db;
-    std::shared_ptr<Work> slot;  // the running update's slot
+    std::map<uint64_t, std::shared_ptr<Work>> slots;  // by Work id: one per update not yet settled
     uint64_t gen = 0;            // bumped by a reset: queued writes of the old generation fail
+    int64_t total = -1;          // bytes of all keys and values; -1: not counted yet (after open)
 };
 
 StorageState& stateOf(PluginCtx& p) {
@@ -50,8 +53,20 @@ Db& dbOf(PluginCtx& p) {
         auto db = std::make_unique<Db>(Db::open(p.dir + "/storage.db"));
         db->exec("CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)");
         st.db = std::move(db);
+        st.total = -1;
     }
     return *st.db;
+}
+
+// The running total of key and value bytes: counted once after opening, then adjusted.
+int64_t& totalOf(PluginCtx& p) {
+    Db& db = dbOf(p);
+    StorageState& st = stateOf(p);
+    if (st.total < 0) {
+        Stmt q = db.prepare("SELECT COALESCE(SUM(LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(value AS BLOB))), 0) FROM kv");
+        st.total = q.step() ? q.integer(0) : 0;
+    }
+    return st.total;
 }
 
 JSValue fail(JSContext* c, const std::string& message) { return JS_ThrowPlainError(c, "%s", message.c_str()); }
@@ -132,7 +147,9 @@ JSValue stKeys(JSContext* c, JSValueConst, int, JSValueConst*) {
     return arr;
 }
 
-JSValue stPut(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+// Value -> the JSON text to store, now (the caller's value may change later, and a value that isn't
+// JSON is refused at the call). Throws a JS error otherwise.
+JSValue stEncode(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     std::string key;
     if (!needString(c, argc, argv, 0, "zk.storage: the key", key)) return JS_EXCEPTION;
     if (argc < 2) return JS_ThrowTypeError(c, "zk.storage: a value is needed");
@@ -149,31 +166,45 @@ JSValue stPut(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (text.size() > kMaxValue)
         return fail(c, "zk.storage: the value for \"" + key + "\" is " + std::to_string(text.size() / 1024) +
                            " KB; one value may be at most 1 MB");
-    Db& db = dbOf(ctxOf(c));
-    int64_t others = 0;
+    return JS_NewStringLen(c, text.data(), text.size());
+}
+
+JSValue stPut(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+    std::string key, text;
+    if (!needString(c, argc, argv, 0, "zk.storage: the key", key) || !needString(c, argc, argv, 1, "zk.storage: the text", text))
+        return JS_EXCEPTION;
+    PluginCtx& p = ctxOf(c);
+    Db& db = dbOf(p);
+    int64_t& total = totalOf(p);
+    int64_t old = 0;
     {
-        Stmt st = db.prepare("SELECT COALESCE(SUM(LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(value AS BLOB))), 0) FROM kv WHERE key != ?");
+        Stmt st = db.prepare("SELECT LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(value AS BLOB)) FROM kv WHERE key = ?");
         st.bind(1, key);
-        if (st.step()) others = st.integer(0);
+        if (st.step()) old = st.integer(0);
     }
-    if (static_cast<size_t>(others) + key.size() + text.size() > kMaxStore)
+    const int64_t mine = static_cast<int64_t>(key.size() + text.size());
+    if (static_cast<size_t>(total - old + mine) > kMaxStore)
         return fail(c, "zk.storage: storing \"" + key + "\" would take this plugin's storage past 16 MB (it holds " +
-                           std::to_string(others / 1024) + " KB of other data); delete something first");
+                           std::to_string((total - old) / 1024) + " KB of other data); delete something first");
     Stmt up = db.prepare("INSERT INTO kv(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value");
     up.bind(1, key).bind(2, text);
     up.step();
+    total += mine - old;
     return JS_UNDEFINED;
 }
 
 JSValue stDel(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     std::string key;
     if (!needString(c, argc, argv, 0, "zk.storage: the key", key)) return JS_EXCEPTION;
-    Db& db = dbOf(ctxOf(c));
+    PluginCtx& p = ctxOf(c);
+    Db& db = dbOf(p);
+    int64_t& total = totalOf(p);
     bool had = false;
     {
-        Stmt st = db.prepare("SELECT 1 FROM kv WHERE key = ?");
+        Stmt st = db.prepare("SELECT LENGTH(CAST(key AS BLOB)) + LENGTH(CAST(value AS BLOB)) FROM kv WHERE key = ?");
         st.bind(1, key);
         had = st.step();
+        if (had) total -= st.integer(0);
     }
     if (had) {
         Stmt d = db.prepare("DELETE FROM kv WHERE key = ?");
@@ -187,21 +218,44 @@ JSValue stGen(JSContext* c, JSValueConst, int, JSValueConst*) {
     return JS_NewInt64(c, static_cast<int64_t>(stateOf(ctxOf(c)).gen));
 }
 
-JSValue stInCleanup(JSContext* c, JSValueConst, int, JSValueConst*) { return JS_NewBool(c, currentCall(ctxOf(c)).cleanup); }
-
+// A slot is host work owned by the call that asked for an update: if that call is stopped the slot
+// rejects with its LimitError, and the update (waiting or running) fails instead of hanging.
 JSValue stSlotStart(JSContext* c, JSValueConst, int, JSValueConst*) {
     PluginCtx& p = ctxOf(c);
-    StorageState& st = stateOf(p);
-    if (st.slot) st.slot->resolve(nullptr);
     JSValue promise;
-    st.slot = startWork(p, &promise);
-    return promise;
+    auto work = startWork(p, &promise);
+    stateOf(p).slots[work->id()] = work;
+    JSValue pair = JS_NewArray(c);
+    JS_SetPropertyUint32(c, pair, 0, JS_NewInt64(c, static_cast<int64_t>(work->id())));
+    JS_SetPropertyUint32(c, pair, 1, promise);
+    return pair;
 }
 
-JSValue stSlotEnd(JSContext* c, JSValueConst, int, JSValueConst*) {
-    StorageState& st = stateOf(ctxOf(c));
-    if (st.slot) st.slot->resolve(nullptr);
-    st.slot.reset();
+bool slotId(JSContext* c, int argc, JSValueConst* argv, uint64_t& id) {
+    int64_t v = 0;
+    if (argc < 1 || JS_ToInt64(c, &v, argv[0])) {
+        JS_FreeValue(c, JS_GetException(c));
+        return false;
+    }
+    id = static_cast<uint64_t>(v);
+    return true;
+}
+
+JSValue stSlotCancelled(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+    uint64_t id;
+    auto& slots = stateOf(ctxOf(c)).slots;
+    auto it = slotId(c, argc, argv, id) ? slots.find(id) : slots.end();
+    return JS_NewBool(c, it != slots.end() && it->second->cancelled());
+}
+
+JSValue stSlotEnd(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
+    uint64_t id;
+    auto& slots = stateOf(ctxOf(c)).slots;
+    auto it = slotId(c, argc, argv, id) ? slots.find(id) : slots.end();
+    if (it != slots.end()) {
+        it->second->resolve(nullptr);
+        slots.erase(it);
+    }
     return JS_UNDEFINED;
 }
 
@@ -340,7 +394,7 @@ JSValue flRemove(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 
 // ---- What plugins see ---------------------------------------------------------------------
 
-const char kStorageJs[] = R"JS((function (n, setT) {
+const char kStorageJs[] = R"JS((function (n) {
 "use strict";
 let tail = Promise.resolve();
 let inFn = false;  // true while an update's fn runs its synchronous part
@@ -351,9 +405,7 @@ const reset = () => new Error("zk.storage was reset (Settings → Plugins → Re
 function enqueue(what, task) {
   if (inFn) return Promise.reject(new Error(`zk.storage.${what} can't be called inside another update's function`));
   const gen = n.gen();
-  const run = tail.then(async () => {
-    // Code of a stopped call can't start host work: carry on from a timer, a call of its own.
-    if (n.inCleanup()) await new Promise((r) => setT(r, 0));
+  const run = tail.then(() => {
     if (n.gen() !== gen) throw reset();
     return task(gen);
   });
@@ -365,31 +417,36 @@ const storage = {
   async get(key) { return n.get(key); },
   async keys() { return n.keys(); },
   set(key, value) {
-    return enqueue("set", () => { n.put(key, value); });
+    if (inFn) return enqueue("set");
+    let text;
+    try { text = n.encode(key, value); } catch (e) { return Promise.reject(e); }  // now, not when its turn comes
+    return enqueue("set", () => { n.put(key, text); });
   },
   delete(key) {
     return enqueue("delete", () => n.del(key));
   },
   update(key, fn) {
-    return enqueue("update", async (gen) => {
+    if (inFn) return enqueue("update");
+    // The slot belongs to the call that asks (this one), not to whichever call runs the queue later.
+    const [slotId, slot] = n.slotStart();
+    slot.catch(() => {});
+    const run = enqueue("update", async (gen) => {
       if (typeof fn !== "function") throw new TypeError("zk.storage.update: fn must be a function");
+      if (n.slotCancelled(slotId)) await slot;  // the asker was stopped while this waited: LimitError
       const old = n.get(key);
-      const slot = n.slotStart();
-      slot.catch(() => {});
       let result;
-      try {
-        let r;
-        inFn = true;
-        try { r = fn(old); } finally { inFn = false; }
-        result = await Promise.race([r, slot]);
-      } finally {
-        n.slotEnd();
-      }
+      let r;
+      inFn = true;
+      try { r = fn(old); } finally { inFn = false; }
+      result = await Promise.race([r, slot]);
       if (n.gen() !== gen) throw reset();
       if (result === undefined) n.del(key);
-      else n.put(key, result);
+      else n.put(key, n.encode(key, result));  // encoded as fn returned it, then stored
       return n.get(key);
     });
+    const end = () => n.slotEnd(slotId);
+    run.then(end, end);
+    return run;
   },
 };
 
@@ -410,20 +467,17 @@ void installStorage(PluginCtx& p) {
     js::Value natives(c, JS_NewObject(c));
     defineFunction<stGet>(c, natives.raw(), "get", 1);
     defineFunction<stKeys>(c, natives.raw(), "keys", 0);
+    defineFunction<stEncode>(c, natives.raw(), "encode", 2);
     defineFunction<stPut>(c, natives.raw(), "put", 2);
     defineFunction<stDel>(c, natives.raw(), "del", 1);
     defineFunction<stGen>(c, natives.raw(), "gen", 0);
-    defineFunction<stInCleanup>(c, natives.raw(), "inCleanup", 0);
     defineFunction<stSlotStart>(c, natives.raw(), "slotStart", 0);
-    defineFunction<stSlotEnd>(c, natives.raw(), "slotEnd", 0);
+    defineFunction<stSlotCancelled>(c, natives.raw(), "slotCancelled", 1);
+    defineFunction<stSlotEnd>(c, natives.raw(), "slotEnd", 1);
     defineFunction<flRead>(c, natives.raw(), "read", 1);
     defineFunction<flWrite>(c, natives.raw(), "write", 2);
     defineFunction<flList>(c, natives.raw(), "list", 1);
     defineFunction<flRemove>(c, natives.raw(), "remove", 1);
-
-    JSValue global = JS_GetGlobalObject(c);
-    js::Value setT(c, JS_GetPropertyStr(c, global, "setTimeout"));
-    JS_FreeValue(c, global);
 
     const char* name = "<zk storage>";
     js::Value fn(c, JS_Eval(c, kStorageJs, sizeof kStorageJs - 1, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_STRICT));
@@ -436,7 +490,7 @@ void installStorage(PluginCtx& p) {
         if (s) JS_FreeCString(c, s);
         throw std::runtime_error(std::string(name) + ": " + text);
     }
-    js::Value made = p.cx.call(fn, {natives, setT});
+    js::Value made = p.cx.call(fn, {natives});
     if (auto e = p.cx.takeError()) throw std::runtime_error(std::string(name) + ": " + e->message);
     js::Value storage = made.get("storage"), files = made.get("files");
     JS_SetPropertyStr(c, p.zk.raw(), "storage", JS_DupValue(c, storage.raw()));
@@ -452,7 +506,9 @@ void resetPluginData(const std::string& pluginDir, PluginCtx* loaded) {
     std::error_code ec;
     for (const char* suffix : {"", "-wal", "-shm", "-journal"}) fs::remove(pluginDir + "/storage.db" + suffix, ec);
     const fs::path data = fs::path(pluginDir) / "data";
-    if (fs::is_directory(data, ec))
+    if (fs::is_symlink(data, ec)) {
+        fs::remove(data, ec);  // the link itself; never what it points to
+    } else if (fs::is_directory(data, ec))
         for (fs::directory_iterator it(data, ec), end; !ec && it != end; it.increment(ec)) {
             std::error_code e2;
             fs::remove_all(it->path(), e2);
