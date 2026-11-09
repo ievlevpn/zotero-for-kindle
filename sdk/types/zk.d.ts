@@ -5,9 +5,10 @@
  * changelog. A plugin declares the version it was written for in `plugin.json` (`"api": 0`).
  *
  * A plugin is one ES module (`main.js`) run by the app on QuickJS-ng (ES2023). It is neither Node
- * nor a browser: there is no `require`, no `process`, no `window` or DOM, and no timers. Rely on
- * standard ES2023 and on what this file declares: the one global `zk`, plus `console`. Libraries
- * bundled into `main.js` are fine if they need nothing else.
+ * nor a browser: there is no `require`, no `process`, no `window` or DOM. Rely on standard
+ * ES2023 and on what this file declares: the one global `zk`, plus `console`, `setTimeout` /
+ * `clearTimeout`, `URL`, `URLSearchParams`, `TextEncoder` and `TextDecoder` (only the members
+ * declared below). Libraries bundled into `main.js` are fine if they need nothing else.
  *
  * Everything is plain data: items, notes and annotations are JSON-like objects, the same shape
  * wherever they come from (a query, an event, an action). Everything that touches the library,
@@ -37,6 +38,114 @@ declare var console: {
   warn(...data: unknown[]): void;
   error(...data: unknown[]): void;
 };
+
+// ───────────────────────────── Standard globals ─────────────────────────────
+// Only the members declared here are provided.
+
+/**
+ * Runs `callback` after `ms` milliseconds, on the plugin thread. The callback still counts
+ * against the time budget of the call that set it (an event handler, the background task, an
+ * action): a timer can't outlive that budget. Pending timers are dropped when the plugin is
+ * turned off. Returns an id for {@link clearTimeout}. No permission.
+ *
+ * @example
+ * const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+ * for (const url of feeds) { await fetchFeed(url); await pause(500); } // be polite to the host
+ */
+declare function setTimeout(callback: () => void, ms?: number): number;
+
+/**
+ * Cancels a timer set with {@link setTimeout}; unknown ids are ignored. No permission.
+ *
+ * @example
+ * const timer = setTimeout(() => zk.log("slow"), 2000);
+ * await work();
+ * clearTimeout(timer);
+ */
+declare function clearTimeout(id: number | undefined): void;
+
+/**
+ * A parsed URL, as on the web (WHATWG URL). No permission.
+ *
+ * @example
+ * const url = new URL("https://export.arxiv.org/api/query");
+ * url.searchParams.set("id_list", ids.join(","));
+ * const res = await zk.fetch(url.href);
+ */
+declare class URL {
+  /** Throws a `TypeError` if `url` (resolved against `base`) isn't a valid URL. */
+  constructor(url: string, base?: string | URL);
+  /** Whether `new URL(url, base)` would succeed. */
+  static canParse(url: string, base?: string | URL): boolean;
+  href: string;
+  readonly origin: string;
+  protocol: string;
+  username: string;
+  password: string;
+  host: string;
+  hostname: string;
+  port: string;
+  pathname: string;
+  search: string;
+  readonly searchParams: URLSearchParams;
+  hash: string;
+  toString(): string;
+  toJSON(): string;
+}
+
+/**
+ * A URL's query string, as on the web. No permission.
+ *
+ * @example
+ * const q = new URLSearchParams({ search_query: "cat:math.PR", max_results: "50" });
+ * await zk.fetch(`https://export.arxiv.org/api/query?${q}`);
+ */
+declare class URLSearchParams implements Iterable<[string, string]> {
+  constructor(init?: string | Record<string, string> | [string, string][]);
+  readonly size: number;
+  append(name: string, value: string): void;
+  delete(name: string, value?: string): void;
+  get(name: string): string | null;
+  getAll(name: string): string[];
+  has(name: string, value?: string): boolean;
+  set(name: string, value: string): void;
+  sort(): void;
+  forEach(callback: (value: string, name: string, params: URLSearchParams) => void): void;
+  keys(): IterableIterator<string>;
+  values(): IterableIterator<string>;
+  entries(): IterableIterator<[string, string]>;
+  [Symbol.iterator](): IterableIterator<[string, string]>;
+  /** The query string, without the leading `?`. */
+  toString(): string;
+}
+
+/**
+ * Encodes strings as UTF-8 bytes, as on the web. No permission.
+ *
+ * @example
+ * const bytes = new TextEncoder().encode(text).length; // size of a request body
+ */
+declare class TextEncoder {
+  constructor();
+  /** Always `"utf-8"`. */
+  readonly encoding: "utf-8";
+  encode(input?: string): Uint8Array;
+}
+
+/**
+ * Decodes UTF-8 bytes to a string, as on the web. Only UTF-8 is supported. No permission.
+ *
+ * @example
+ * const text = new TextDecoder().decode(bytes);
+ */
+declare class TextDecoder {
+  /** `fatal: true` throws a `TypeError` on invalid bytes instead of inserting U+FFFD. */
+  constructor(label?: "utf-8" | "utf8", options?: { fatal?: boolean; ignoreBOM?: boolean });
+  readonly encoding: "utf-8";
+  readonly fatal: boolean;
+  readonly ignoreBOM: boolean;
+  decode(input?: ArrayBuffer | ArrayBufferView, options?: { stream?: boolean }): string;
+}
 
 declare namespace zk {
   // ───────────────────────────── Plugin, settings, log ─────────────────────────────
@@ -217,16 +326,37 @@ declare namespace zk {
    * });
    * const { answer } = await res.json<{ answer: string }>();
    */
-  function fetch(url: string, init?: FetchInit): Promise<Response>;
+  function fetch(url: string, init?: RequestInit): Promise<Response>;
 
   /** Options for {@link zk.fetch}. */
-  interface FetchInit {
+  interface RequestInit {
     /** Default `"GET"`. */
     method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
-    /** Request headers. `Cookie` is not allowed. */
-    headers?: Record<string, string>;
+    /**
+     * Request headers, as an object or as `[name, value]` pairs (for repeated names). `Cookie` is
+     * not allowed.
+     */
+    headers?: Record<string, string> | [string, string][];
     /** Request body; send JSON with `JSON.stringify` and a `content-type` header. */
     body?: string;
+  }
+
+  /**
+   * Response headers: a read-only subset of the web's `Headers`. Names are case-insensitive;
+   * repeated headers are joined with `", "`.
+   *
+   * @example
+   * const type = res.headers.get("Content-Type") ?? "";
+   * for (const [name, value] of res.headers) zk.log(name, value); // names in lower case
+   */
+  interface Headers extends Iterable<[string, string]> {
+    /** The header's value, or `null` if it is absent. */
+    get(name: string): string | null;
+    /** Whether the header is present. */
+    has(name: string): boolean;
+    /** `[name, value]` pairs, names in lower case, sorted by name. */
+    entries(): IterableIterator<[string, string]>;
+    [Symbol.iterator](): IterableIterator<[string, string]>;
   }
 
   /** The answer to {@link zk.fetch}. The body is read whole (it is capped), and can be read again. */
@@ -237,8 +367,8 @@ declare namespace zk {
     readonly status: number;
     /** The URL answered, after redirects. */
     readonly url: string;
-    /** Response headers, names in lower case: `res.headers["content-type"]`. */
-    readonly headers: Readonly<Record<string, string>>;
+    /** Response headers, as in the web's `Headers`: `res.headers.get("content-type")`. */
+    readonly headers: Headers;
     /** The body as text (decoded as UTF-8 unless the response says otherwise). */
     text(): Promise<string>;
     /** The body parsed as JSON. `T` is not checked. Rejects if it isn't JSON. */
@@ -254,7 +384,8 @@ declare namespace zk {
   namespace library {
     /**
      * Every item matching `query` (all items if none), in the library's order, fetched lazily —
-     * so a whole library can be walked without loading it at once. Filters combine (AND).
+     * so a whole library can be walked without loading it at once. Filters combine (AND). To find
+     * items by words (title, creators…), use {@link search}.
      *
      * **Permission**: `library:read`.
      *
@@ -315,9 +446,8 @@ declare namespace zk {
     function tags(): Promise<Tag[]>;
 
     /**
-     * Searches like the app's search box (title, creators, year, publication, tags), best matches
-     * first, at most one screenful of results. To go through *every* match, use
-     * `items({ text })`.
+     * Finds items by words, like the app's search box: matches title, creators, year, publication
+     * and tags; best matches first. The one way to search; {@link items} lists by collection or tag.
      *
      * **Permission**: `library:read`.
      *
@@ -388,8 +518,6 @@ declare namespace zk {
     collection?: string;
     /** Only items with this tag (its name, exact). */
     tag?: string;
-    /** Only items whose title, creators, year, publication or tags contain these words. */
-    text?: string;
     /** Stop after this many items. */
     limit?: number;
   }
