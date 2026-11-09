@@ -74,7 +74,7 @@ PluginManifest parseObject(const json& j) {
     m.id = str(j, "id", true);
     if (!matches(m.id, 64, idRe()))
         bad("\"id\" must be lowercase letters, digits and dashes (at most 64): " + m.id);
-    m.name = str(j, "name", true);
+    m.name = oneLine(str(j, "name", true));
     if (m.name.empty() || codePoints(m.name) > 40) bad("\"name\" must be 1 to 40 characters");
     m.version = str(j, "version", true);
     if (!matches(m.version, 100, semverRe()))
@@ -141,6 +141,31 @@ Read readFile(const fs::path& p, std::string& out) {
 }
 
 }  // namespace
+
+std::string oneLine(const std::string& s) {
+    std::string out;
+    bool gap = false;
+    for (size_t i = 0; i < s.size();) {
+        const unsigned char b = static_cast<unsigned char>(s[i]);
+        size_t n = b < 0x80 ? 1 : (b >> 5) == 0x6 ? 2 : (b >> 4) == 0xE ? 3 : (b >> 3) == 0x1E ? 4 : 1;
+        if (i + n > s.size()) n = 1;
+        uint32_t cp = b;
+        if (n == 2) cp = ((b & 0x1Fu) << 6) | (s[i + 1] & 0x3F);
+        if (n == 3) cp = ((b & 0x0Fu) << 12) | ((s[i + 1] & 0x3Fu) << 6) | (s[i + 2] & 0x3F);
+        if (n == 4) cp = ((b & 0x07u) << 18) | ((s[i + 1] & 0x3Fu) << 12) | ((s[i + 2] & 0x3Fu) << 6) | (s[i + 3] & 0x3F);
+        const bool blank = cp <= 0x20 || cp == 0x7F || (cp >= 0x80 && cp <= 0xA0) || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200F) ||
+                           (cp >= 0x2028 && cp <= 0x202F) || cp == 0x205F || cp == 0x2060 || cp == 0x3000 || cp == 0xFEFF;
+        if (blank) {
+            gap = true;
+        } else {
+            if (gap && !out.empty()) out += ' ';
+            gap = false;
+            out.append(s, i, n);
+        }
+        i += n;
+    }
+    return out;
+}
 
 std::optional<PluginManifest> parseManifest(const std::string& text, UserError* why) {
     try {

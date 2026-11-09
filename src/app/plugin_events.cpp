@@ -5,11 +5,18 @@
 
 namespace zk {
 
-PluginEvents::PluginEvents(PluginHost& host) : host_(host) {}
+PluginEvents::PluginEvents(PluginHost* host) : host_(host) {}
+
+void PluginEvents::rebind(PluginHost* host, App& app) {
+    for (uint64_t id : open_) app.withdrawConfirm(id);
+    open_.clear();
+    host_ = host;
+}
 
 void PluginEvents::poll(App& app) {
+    if (!host_) return;
     PluginHostEvent ev;
-    while (host_.poll(ev)) {
+    while (host_->poll(ev)) {
         switch (ev.kind) {
             case PluginHostEvent::Kind::Confirm: {
                 std::vector<std::string> lines{ev.text};
@@ -18,8 +25,8 @@ void PluginEvents::poll(App& app) {
                 open_.insert(id);
                 log(LogLevel::Info, "plugin %s asks: %s", ev.pluginId.c_str(), ev.text.c_str());
                 app.confirm(id, PluginConfirm(ev.pluginName, std::move(lines), ev.action), [this, id](bool yes) {
-                    if (!open_.erase(id)) return;  // withdrawn meanwhile: nobody waits for it
-                    host_.answer(id, yes);
+                    if (!open_.erase(id) || !host_) return;  // withdrawn meanwhile: nobody waits for it
+                    host_->answer(id, yes);
                 });
                 break;
             }

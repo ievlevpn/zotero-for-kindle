@@ -70,15 +70,16 @@ int PluginConfirm::itemH(int i) const {
 
 Rect PluginConfirm::rect() const { return layout().box; }
 
-Rect PluginConfirm::yesRect() const {
+// Cancel on the left (the reader's page-back side), the action on the right.
+Rect PluginConfirm::noRect() const {
     const Rect b = rect();
     const int w = (b.w - 3 * kGap) / 2;
     return {b.x + kGap, b.y + b.h - kGap - kButtonH, w, kButtonH};
 }
 
-Rect PluginConfirm::noRect() const {
-    const Rect yes = yesRect();
-    return {yes.x + yes.w + kGap, yes.y, yes.w, kButtonH};
+Rect PluginConfirm::yesRect() const {
+    const Rect no = noRect();
+    return {no.x + no.w + kGap, no.y, no.w, kButtonH};
 }
 
 std::optional<bool> PluginConfirm::onTap(Point p) const {

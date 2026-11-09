@@ -21,8 +21,11 @@ class App;
 
 class PluginEvents {
 public:
-    explicit PluginEvents(PluginHost&);
+    explicit PluginEvents(PluginHost*);  // nullptr: no host (nothing to poll)
     void poll(App&);
+    // Another host (or none) from now on, e.g. the old one stopped for an update's install: the
+    // old one's questions are taken away unanswered, its waiting events dropped.
+    void rebind(PluginHost*, App&);
 
     // Questions shown or waiting to be shown, not answered or withdrawn yet.
     int waiting() const { return static_cast<int>(open_.size()); }
@@ -38,7 +41,7 @@ public:
     const std::map<std::string, std::string>& badges() const { return badges_; }
 
 private:
-    PluginHost& host_;
+    PluginHost* host_;
     std::set<uint64_t> open_;
     std::vector<Notice> notices_;
     std::map<std::string, std::string> badges_;

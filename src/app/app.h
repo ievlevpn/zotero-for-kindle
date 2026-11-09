@@ -90,13 +90,16 @@ public:
     // every gesture, key and pen stroke until one of its buttons answers it; `answered` is then
     // called once. It waits while a page turn is under way (at most kTurnWaitMs) or a system dialog
     // is over the app; more questions wait their turn, each shown one step after the last went.
-    // A tap in the first kConfirmGuardMs it shows is ignored (it was meant for what was there).
+    // Only a finger tap answers (never the pen), and only one that went down kConfirmGuardMs or
+    // more after the box was first presented (one that went down earlier was meant for what was
+    // there). No system ink while it shows.
     static constexpr int64_t kTurnWaitMs = 3000;
     static constexpr int64_t kConfirmGuardMs = 500;
     void confirm(uint64_t id, PluginConfirm, std::function<void(bool yes)> answered);
     // Takes the question away unanswered (waiting or shown); nothing if it is gone already.
     void withdrawConfirm(uint64_t id);
     const PluginConfirm* confirmShown() const;
+    int64_t confirmShownSince() const { return shownSince_; }  // first presented (-1: not yet)
 
 private:
     Screen* visibleTop() const;
@@ -171,8 +174,9 @@ private:
         std::function<void(bool)> answered;
         int64_t readyMs = -1;  // first seen waiting on a page turn
     };
-    std::deque<Question> questions_;  // the front one is shown when shownSince_ >= 0
-    int64_t shownSince_ = -1;
+    std::deque<Question> questions_;  // the front one is shown when questionShown_
+    bool questionShown_ = false;
+    int64_t shownSince_ = -1;  // when the box was first presented (-1: not yet)
     bool answeredThisStep_ = false;   // the rest of this step's gestures are not for the next one
     void showQuestion();              // the front question, if nothing stops it now
     bool questionTakes(const Gesture&);  // true if the shown question took the gesture

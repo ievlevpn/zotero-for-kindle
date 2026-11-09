@@ -7,6 +7,7 @@
 
 #include "fake_plugins.h"
 #include "plugins/host.h"
+#include "plugins/manifest.h"
 #include "store/library.h"
 
 using namespace zk;
@@ -297,6 +298,10 @@ TEST_CASE("zotero: trash from a user-caused event posts Confirm with \"Feed Riff
     CHECK(count(rig.log(), "OUT trash") == 1);
 
     SUBCASE("the other removals' wording") {
+        ItemRecord b = record("BBBBBBB1", "Attention is all you need");
+        b.tags = {"to-read"};
+        b.collections = {"COLLTOP1"};
+        rig.lib.upsertItem(b);
         rig.userEvent({{"kind", "unfile"}, {"key", "BBBBBBB1"}, {"value", "COLLTOP1"}});
         REQUIRE(rig.next(PluginHostEvent::Kind::Confirm, ask));
         CHECK(ask.text == "Feed Riffle wants to remove 'Attention is all you need' from Reading.");
@@ -327,14 +332,28 @@ TEST_CASE("zotero: trash from a user-caused event posts Confirm with \"Feed Riff
         CHECK(ask.text.size() < 140);
         rig.host->answer(ask.requestId, false);
     }
+    SUBCASE("a removal that would change nothing resolves null without asking") {
+        rig.userEvent({{"kind", "trash"}, {"key", "AAAAAAA1"}});  // already being trashed
+        rig.userEvent({{"kind", "untag"}, {"key", "BBBBBBB1"}, {"value", "to-read"}});  // B hasn't that tag
+        rig.userEvent({{"kind", "unfile"}, {"key", "BBBBBBB1"}, {"value", "COLLTOP1"}});  // nor is in Reading
+        REQUIRE(rig.host->waitIdle(5000));
+        log = rig.log();
+        INFO(log);
+        CHECK(count(log, "OUT trash null") == 1);
+        CHECK(contains(log, "OUT untag null"));
+        CHECK(contains(log, "OUT unfile null"));
+        CHECK(contains(log, "zk.zotero.trash(AAAAAAA1): the item is being moved to the trash already — not asked, resolved null"));
+        CHECK(contains(log, "zk.zotero.removeTag(BBBBBBB1, to-read): the item doesn't have that tag — not asked, resolved null"));
+        CHECK(contains(log, "zk.zotero.removeFromCollection(BBBBBBB1, COLLTOP1): the item isn't in that collection — not asked"));
+        for (const auto& ev : rig.drain()) CHECK(ev.kind != PluginHostEvent::Kind::Confirm);
+        CHECK(rig.lib.pluginChangeLog("riffle", 10).size() == 1);  // only the first trash: nothing declined
+    }
     SUBCASE("someone else's note, or an item that isn't there, is refused without asking") {
         rig.userEvent({{"kind", "unnote"}, {"key", "NOTEUSER"}});
-        rig.userEvent({{"kind", "trash"}, {"key", "AAAAAAA1"}});  // already being trashed
         rig.userEvent({{"kind", "trash"}, {"key", "NOSUCHIT"}});
         REQUIRE(rig.host->waitIdle(5000));
         log = rig.log();
         CHECK(contains(log, "ERR Error zk.zotero.deleteNote: only a note this plugin added can be deleted"));
-        CHECK(contains(log, "ERR Error zk.zotero.trash: item AAAAAAA1 is being moved to the trash"));
         CHECK(contains(log, "ERR Error zk.zotero.trash: no item NOSUCHIT"));
         for (const auto& ev : rig.drain()) CHECK(ev.kind != PluginHostEvent::Kind::Confirm);
     }
@@ -360,7 +379,7 @@ TEST_CASE("zotero: removals asked together are one Confirm listing them") {
     SUBCASE("three trashes") {
         rig.userEvent({{"mixed", false}});
         REQUIRE(rig.next(PluginHostEvent::Kind::Confirm, ask));
-        CHECK(ask.text == "Feed Riffle wants to move these items to the Zotero trash:");
+        CHECK(ask.text == "Feed Riffle wants to move these 3 items to the Zotero trash:");
         REQUIRE(ask.lines.size() == 3);
         CHECK(ask.lines[0] == "'Gaussian random fields (v1)'");
         CHECK(ask.lines[1] == "'Attention is all you need'");
@@ -381,7 +400,7 @@ TEST_CASE("zotero: removals asked together are one Confirm listing them") {
         rig.lib.upsertItem(b);
         rig.userEvent({{"mixed", true}});
         REQUIRE(rig.next(PluginHostEvent::Kind::Confirm, ask));
-        CHECK(ask.text == "Feed Riffle wants to make these changes:");
+        CHECK(ask.text == "Feed Riffle wants to make these 3 changes:");
         CHECK(ask.lines == std::vector<std::string>{"Move 'Gaussian random fields (v1)' to the Zotero trash",
                                                     "Remove the tag 'old' from 'Attention is all you need'",
                                                     "Delete a note it added to 'Attention is all you need'"});
@@ -448,4 +467,31 @@ TEST_CASE("zotero: cancel withdraws its own pending change") {
     CHECK(contains(log, "OUT theirs false"));
     CHECK(contains(log, "OUT bad TypeError"));
     CHECK(rig.lib.pluginChange(theirsId)->state == PluginChange::State::Pending);
+}
+
+TEST_CASE("zotero: what the plugin and the library put in the question is on one line") {
+    UserError why;
+    auto m = parseManifest(R"({"id":"riffle","name":"Feed\n\tRiffle\u2028 ","version":"1.0.0","api":0,"main":"main.js","permissions":[]})", &why);
+    REQUIRE(m);
+    CHECK(m->name == "Feed Riffle");
+    CHECK(oneLine("  a\r\n\u0085b  c\x7f ") == "a b c");
+    CHECK(oneLine("​x　y") == "x y");
+
+    Rig rig;
+    ItemRecord messy = record("DDDDDDD1", "Gaussian\n\n random\tfields\r\n(v1)");
+    messy.tags = {"to\nread"};
+    rig.lib.upsertItem(messy);
+    rig.fp.add("riffle", pluginOn("bookOpened", R"(
+        console.log('OUT r ' + JSON.stringify(await Promise.all([zk.zotero.trash("DDDDDDD1"), zk.zotero.removeTag("DDDDDDD1", "to\nread")])));
+    )"), kAll, "Feed Riffle");
+    rig.start();
+    rig.userEvent();
+    PluginHostEvent ask;
+    REQUIRE(rig.next(PluginHostEvent::Kind::Confirm, ask));
+    CHECK(ask.text == "Feed Riffle wants to make these 2 changes:");
+    REQUIRE(ask.lines.size() == 2);
+    CHECK(ask.lines[0] == "Move 'Gaussian random fields (v1)' to the Zotero trash");
+    CHECK(ask.lines[1] == "Remove the tag 'to read' from 'Gaussian random fields (v1)'");
+    rig.host->answer(ask.requestId, false);
+    REQUIRE(rig.host->waitIdle(5000));
 }

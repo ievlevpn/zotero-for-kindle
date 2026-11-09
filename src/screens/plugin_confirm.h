@@ -5,7 +5,7 @@
 // nothing).
 //
 //   Feed Riffle wants to move 'Gaussian random fields (v1)' to the Zotero trash.
-//   [ Move to trash ]  [ Cancel ]
+//   [ Cancel ]  [ Move to trash ]      (Cancel on the page-back side)
 //
 // `lines`: the question first, then what goes when several removals are asked together (as many
 // as fit, two lines each at most, then "and N more").

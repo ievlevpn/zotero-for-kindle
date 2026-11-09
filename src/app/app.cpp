@@ -75,8 +75,9 @@ void App::confirm(uint64_t id, PluginConfirm view, std::function<void(bool)> ans
 void App::withdrawConfirm(uint64_t id) {
     for (auto it = questions_.begin(); it != questions_.end(); ++it) {
         if (it->id != id) continue;
-        if (it == questions_.begin() && shownSince_ >= 0) {
+        if (it == questions_.begin() && questionShown_) {
             pending_.push_back({it->view.rect(), Waveform::Quality});  // what was under it, without ghosts
+            questionShown_ = false;
             shownSince_ = -1;
         }
         questions_.erase(it);
@@ -85,29 +86,34 @@ void App::withdrawConfirm(uint64_t id) {
 }
 
 const PluginConfirm* App::confirmShown() const {
-    return shownSince_ >= 0 && !questions_.empty() ? &questions_.front().view : nullptr;
+    return questionShown_ && !questions_.empty() ? &questions_.front().view : nullptr;
 }
 
 void App::showQuestion() {
-    if (shownSince_ >= 0 || answeredThisStep_ || questions_.empty() || background_ || !visibleTop()) return;
+    if (questionShown_ || answeredThisStep_ || questions_.empty() || background_ || !visibleTop()) return;
     Question& q = questions_.front();
     const int64_t now = clock_();
     if (visibleTop()->midTurn()) {  // never over a page turn: once it has landed (or it is stuck)
         if (q.readyMs < 0) q.readyMs = now;
         if (now - q.readyMs < kTurnWaitMs) return;
     }
-    shownSince_ = now;
-    setSystemInk(false);  // the pen answers it like a finger
+    questionShown_ = true;
+    shownSince_ = -1;     // stamped by flush() once the box is on the screen
+    setSystemInk(false);  // and kept off while it shows (setSystemInk)
     pending_.push_back({q.view.rect(), Waveform::Ui});
 }
 
 bool App::questionTakes(const Gesture& g) {
     if (!confirmShown()) return answeredThisStep_;  // the rest of an answering tap's step
-    if (g.type != GestureType::Tap || clock_() - shownSince_ < kConfirmGuardMs) return true;
+    // Only a finger answers, with a tap that went down once the box had been on screen a moment
+    // (a tap that went down earlier was meant for what was there, however late it is handled).
+    if (g.type != GestureType::Tap || g.finger == kPenFinger) return true;
+    if (shownSince_ < 0 || g.downMs < shownSince_ + kConfirmGuardMs) return true;
     const std::optional<bool> yes = questions_.front().view.onTap(g.pos);
     if (!yes) return true;
     Question q = std::move(questions_.front());
     questions_.pop_front();
+    questionShown_ = false;
     shownSince_ = -1;
     answeredThisStep_ = true;
     pending_.push_back({q.view.rect(), Waveform::Quality});
@@ -267,6 +273,7 @@ void App::paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>& pain
 }
 
 void App::setSystemInk(bool on) {
+    if (on && confirmShown()) return;  // no wet ink over the app's question
     if (on && (background_ || (caller_ && caller_ != visibleTop()))) return;
     if (on == systemInkOn_) return;
     if (display_.setSystemInk(on)) systemInkOn_ = on;  // else asked again on the next tick
@@ -305,12 +312,18 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     }
     Screen* s = visibleTop();
     if (!s) return;
-    bool took = false;
-    if (!confirmShown()) {  // else a stroke is a finger for the question
-        caller_ = s;
-        guard([&] { took = s->onPen(p, *this); });
-        caller_ = nullptr;
+    if (confirmShown()) {  // the pen never answers it, nor writes under it
+        if (penAsTouch_) {  // a stroke that began before it: lifted (its tap goes nowhere)
+            penAsTouch_ = false;
+            auto g = gestures_.feed(TouchEvent{TouchEvent::Type::Up, kPenFinger, penTouchAt_, clock_()});
+            gestures.insert(gestures.end(), g.begin(), g.end());
+        }
+        return;
     }
+    bool took = false;
+    caller_ = s;
+    guard([&] { took = s->onPen(p, *this); });
+    caller_ = nullptr;
     if (p.type == PenEvent::Type::Down) penAsTouch_ = !took;  // decided for the whole stroke
     if (!penAsTouch_ || p.type == PenEvent::Type::Near) return;
     TouchEvent t{TouchEvent::Type::Move, kPenFinger, p.pos, p.t_ms ? p.t_ms : clock_()};
@@ -534,17 +547,19 @@ void App::flush() {
         drawToast(canvas_.cr(), toastRect(), toast_);
         toastShown_ = true;
     }
-    if (const PluginConfirm* question = confirmShown()) question->draw(canvas_.cr());
+    const PluginConfirm* question = confirmShown();
+    if (question) question->draw(canvas_.cr());
     if (!full.empty()) {
         const Rect shown = full.united(quality).united(ui).united(fast);
         display_.present(canvas_, shown, Waveform::Full);
         if (shown.united(inkDirty_) == shown) inkDirty_ = {};  // already on screen, in full quality
-        return;
+    } else {
+        if (!quality.empty() && quality.united(inkDirty_) == quality) inkDirty_ = {};
+        if (!fast.empty()) display_.present(canvas_, fast, Waveform::Fast);
+        if (!ui.empty()) display_.present(canvas_, ui, Waveform::Ui);
+        if (!quality.empty()) display_.present(canvas_, quality, Waveform::Quality);
     }
-    if (!quality.empty() && quality.united(inkDirty_) == quality) inkDirty_ = {};
-    if (!fast.empty()) display_.present(canvas_, fast, Waveform::Fast);
-    if (!ui.empty()) display_.present(canvas_, ui, Waveform::Ui);
-    if (!quality.empty()) display_.present(canvas_, quality, Waveform::Quality);
+    if (question && shownSince_ < 0) shownSince_ = clock_();  // its tap guard counts from now
 }
 
 int App::run() {

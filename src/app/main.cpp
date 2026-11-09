@@ -310,12 +310,14 @@ int main(int argc, char** argv) {
     Updater updater(updaterConfig);
     // Plugins: one thread for all of them (src/plugins/host.h), started once the first screen is
     // drawn and stopped before the app exits. Its events are routed every loop iteration.
-    PluginHost plugins(pluginHostDeps(paths, config));
-    PluginEvents pluginEvents(plugins);
+    // An update's install stops it (the library is backed up meanwhile); a host can't start again,
+    // so a failed install makes a new one.
+    auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
+    PluginEvents pluginEvents(plugins.get());
     app.setPollHook([&] { pluginEvents.poll(app); });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     auto startService = [&](const Config& c) {
-        plugins.setWebdavHost(c.webdavUrl);  // the account (and its WebDAV server) may have changed
+        if (plugins) plugins->setWebdavHost(c.webdavUrl);  // the account (and its WebDAV server) may have changed
         if (service) service->stop();
         app.setSync(nullSync);
         status.reset();  // the old worker's sync and downloads are gone
@@ -356,13 +358,19 @@ int main(int argc, char** argv) {
     auto pushUpdateScreen = [&](Nav& nav) {
         nav.push(std::make_unique<UpdateScreen>(
             updater,
-            [&] {  // installing backs up the library: no sync writing to it meanwhile
+            [&] {  // installing backs up the library: no sync and no plugin writing to it meanwhile
                 if (service) service->stop();
                 app.setSync(nullSync);
+                if (plugins) plugins->stop();
+                pluginEvents.rebind(nullptr, app);  // its questions go, unanswered
             },
             &keepAwake,
             [&] {  // the install failed and changed nothing
                 if (config) startService(*config);
+                plugins.reset();
+                plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
+                pluginEvents.rebind(plugins.get(), app);
+                plugins->start();
             }));
     };
     auto pendingUpdate = [&]() -> std::optional<std::string> {
@@ -441,7 +449,7 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
-    plugins.start();  // after the first screen: plugins load lazily, at the first event
+    plugins->start();  // after the first screen: plugins load lazily, at the first event
     switch (const Confirmed c = confirmStartup(installPaths); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;
         case StartupNote::RolledBack:
@@ -464,7 +472,7 @@ int main(int argc, char** argv) {
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
     watchdog.beat("stopping plugins");
-    plugins.stop();  // interrupts what runs; within 2 s
+    if (plugins) plugins->stop();  // interrupts what runs; within 2 s
     if (service) service->stop();
     keyboard->hide();
     watchdog.beat("closing books");  // a reader may wait for its handwriting (ReaderScreen::kInkFlushMs)

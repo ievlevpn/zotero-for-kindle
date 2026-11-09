@@ -28,6 +28,11 @@ struct PluginManifest {
 // nullopt and *why filled (if given) when the text is not a valid manifest.
 std::optional<PluginManifest> parseManifest(const std::string& json, UserError* why);
 
+// `s` on one line: every run of whitespace or control characters (line breaks, tabs, Unicode
+// spaces and separators, C0/C1 controls, zero-width spaces) becomes one space; none at the ends.
+// For text a plugin puts in the app's own UI (its name, titles and tags in a confirmation).
+std::string oneLine(const std::string& s);
+
 struct PluginFolder {
     std::string dir;  // the folder's name (its path is <pluginsDir>/<dir>)
     std::optional<PluginManifest> manifest;

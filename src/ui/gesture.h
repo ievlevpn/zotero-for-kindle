@@ -15,6 +15,8 @@ struct Gesture {
     Point pos;    // current position (Down position for Tap/LongPress)
     Point start;  // where the touch went down
     Direction dir = Direction::None;
+    int64_t downMs = 0;  // when the touch went down (the input's clock)
+    int finger = -1;     // the touch id (App feeds a pen stroke used as a finger as App::kPenFinger)
 };
 
 struct GestureConfig {

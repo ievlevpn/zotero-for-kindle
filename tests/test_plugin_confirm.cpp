@@ -60,7 +60,17 @@ struct PageScreen : Screen {
                      "collections of values have joint Gaussian distributions.",
                  {theme::kSerif, 10, 400}, {kMargin, 120, c.width() - 2 * kMargin, 900}, 12);
     }
+    bool wantsInk = false;  // like the reader on a PDF page: asks for the system's wet ink every tick
+    int pens = 0;
     void onGesture(const Gesture&, Nav&) override { ++gestures; }
+    bool onPen(const PenEvent&, Nav&) override {
+        ++pens;
+        return false;  // a finger, like a screen that doesn't write
+    }
+    void onTick(Nav& nav) override {
+        if (wantsInk && nav.systemInk()) nav.setSystemInk(true);
+    }
+    bool wantsSystemInk() const override { return wantsInk; }
     bool midTurn() const override { return turningNow; }
     bool showsTabBar() const override { return false; }
 };
@@ -103,7 +113,7 @@ struct Rig {
         host = std::make_unique<PluginHost>(d);
         host->setEnabled("riffle", true);
         host->start();
-        events = std::make_unique<PluginEvents>(*host);
+        events = std::make_unique<PluginEvents>(host.get());
         app.setPollHook([this] { events->poll(app); });
         auto s = std::make_unique<PageScreen>();
         page = s.get();
@@ -145,7 +155,7 @@ TEST_CASE("confirm: the overlay's buttons and copy") {
     CHECK_FALSE(c.onTap({c.rect().x + 10, c.rect().y + 10}).has_value());  // inside, not on a button
     CHECK_FALSE(c.onTap({5, 5}).has_value());                              // outside: it can't be dismissed
     // A long list stays on screen.
-    std::vector<std::string> many{"Feed Riffle wants to move these items to the Zotero trash:"};
+    std::vector<std::string> many{"Feed Riffle wants to move these 40 items to the Zotero trash:"};
     for (int i = 0; i < 40; ++i) many.push_back("'Item number " + std::to_string(i) + "'");
     PluginConfirm list("Feed Riffle", many, "Move to trash");
     CHECK(list.rect().y >= 0);
@@ -224,6 +234,94 @@ TEST_CASE("confirm: a page turn that never lands holds a question back at most k
     CHECK(rig.now - from < App::kTurnWaitMs + 500);
 }
 
+// The rig with one question shown and its tap guard over.
+const PluginConfirm& showOne(Rig& rig) {
+    rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});
+    REQUIRE(rig.until([&] { return rig.app.confirmShown() != nullptr && rig.app.confirmShownSince() >= 0; }));
+    rig.now += 1000;
+    return *rig.app.confirmShown();
+}
+
+TEST_CASE("confirm: the pen never answers it, and no wet ink shows while it does") {
+    Rig rig;
+    rig.display.hasInk = true;
+    rig.page->wantsInk = true;
+    rig.step();
+    rig.step();
+    REQUIRE(rig.display.inkOn);  // the page had it on
+    const PluginConfirm& box = showOne(rig);
+    const Rect yes = box.yesRect();
+    for (int i = 0; i < 5; ++i) rig.step();
+    CHECK_FALSE(rig.display.inkOn);  // off, and the page's ticks don't turn it back on
+    const int pens = rig.page->pens;
+    // A short pen dot on the action button.
+    rig.display.pen(PenEvent::Type::Near, centre(yes), rig.now);
+    rig.display.pen(PenEvent::Type::Down, centre(yes), rig.now + 10);
+    rig.display.pen(PenEvent::Type::Up, centre(yes), rig.now + 40);
+    rig.display.pen(PenEvent::Type::Leave, centre(yes), rig.now + 50);
+    for (int i = 0; i < 6; ++i) rig.step();
+    CHECK(rig.app.confirmShown() != nullptr);
+    CHECK(rig.page->pens == pens);  // nor written under it
+    CHECK_FALSE(rig.display.inkOn);
+    // A finger does answer.
+    rig.now += 1000;  // past the palm rejection after the pen left
+    rig.tap(centre(yes));
+    CHECK(rig.app.confirmShown() == nullptr);
+    REQUIRE(rig.until([&] { return contains(rig.log(), "OUT AAAAAAA1 {"); }));
+    for (int i = 0; i < 3; ++i) rig.step();
+    CHECK(rig.display.inkOn);  // the page may have it again
+}
+
+TEST_CASE("confirm: a tap that went down before the guard ran out doesn't answer, however late it is handled") {
+    Rig rig;
+    rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});
+    REQUIRE(rig.until([&] { return rig.app.confirmShown() != nullptr && rig.app.confirmShownSince() >= 0; }));
+    const int64_t since = rig.app.confirmShownSince();
+    const Rect yes = rig.app.confirmShown()->yesRect();
+    // Went down 300 ms after the box was presented; the app gets to it at 520 ms, past the guard
+    // by its own clock (and soon enough not to be a long press).
+    rig.display.touch(TouchEvent::Type::Down, centre(yes), since + 300);
+    rig.display.touch(TouchEvent::Type::Up, centre(yes), since + 360);
+    rig.now = since + 520;
+    rig.step();
+    rig.step();
+    CHECK(rig.app.confirmShown() != nullptr);
+    // One that went down once the guard ran out answers.
+    rig.display.touch(TouchEvent::Type::Down, centre(yes), since + App::kConfirmGuardMs + 200);
+    rig.display.touch(TouchEvent::Type::Up, centre(yes), since + App::kConfirmGuardMs + 260);
+    rig.step();
+    rig.step();
+    CHECK(rig.app.confirmShown() == nullptr);
+}
+
+TEST_CASE("confirm: Cancel is on the left, the action on the right") {
+    PluginConfirm c("Feed Riffle", {"Feed Riffle wants to move 'X' to the Zotero trash."}, "Move to trash");
+    CHECK(c.noRect().x < c.yesRect().x);
+    CHECK(c.noRect().x + c.noRect().w < metrics().width / 2);
+}
+
+TEST_CASE("confirm: a host stopped for an install takes its questions away; a new host over the same folder asks again") {
+    Rig rig;
+    showOne(rig);
+    rig.host->stop();
+    rig.events->rebind(nullptr, rig.app);
+    rig.step();
+    CHECK(rig.app.confirmShown() == nullptr);
+    CHECK(rig.events->waiting() == 0);
+    rig.events->poll(rig.app);  // no host: nothing
+
+    PluginHostDeps d = rig.fp.deps();
+    d.dbPath = rig.dbPath;
+    rig.host = std::make_unique<PluginHost>(d);
+    rig.events->rebind(rig.host.get(), rig.app);
+    rig.host->start();
+    const Rect yes = showOne(rig).yesRect();
+    rig.tap(centre(yes));
+    REQUIRE(rig.until([&] { return contains(rig.log(), "OUT AAAAAAA1 {"); }));
+    CHECK_FALSE(rig.lib.item("AAAAAAA1"));
+    CHECK(count(rig.log(), "OUT AAAAAAA1") == 1);  // the first question was never answered
+}
+
 TEST_CASE("confirm: a question withdrawn by the host goes away unanswered") {
     Rig rig;
     rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});
@@ -255,7 +353,7 @@ TEST_CASE("confirm: golden") {
     SUBCASE("several") {
         page.draw(c);
         PluginConfirm("Feed Riffle",
-                      {"Feed Riffle wants to make these changes:", "Move 'Gaussian random fields (v1)' to the Zotero trash",
+                      {"Feed Riffle wants to make these 3 changes:", "Move 'Gaussian random fields (v1)' to the Zotero trash",
                        "Remove the tag 'to-read' from 'Attention is all you need'",
                        "Delete a note it added to 'A very long title of a book that goes on and on well past the edge of the box'"},
                       "Allow")

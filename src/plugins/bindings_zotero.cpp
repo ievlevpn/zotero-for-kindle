@@ -14,6 +14,7 @@
 // and resolves null. A stopped call's question is withdrawn by the host and its promises reject
 // with LimitError (the removals are Works of the call).
 
+#include <algorithm>
 #include <cstdio>
 #include <ctime>
 #include <memory>
@@ -52,7 +53,12 @@ std::string shortened(const std::string& s, size_t max) {
     return out + "…";
 }
 
-std::string quoted(const std::string& title) { return "'" + shortened(title.empty() ? "Untitled" : title, 60) + "'"; }
+// Text from the library or the plugin as the confirmation shows it: one line, shortened.
+std::string shown(const std::string& s, size_t max) { return shortened(oneLine(s), max); }
+std::string quotedTitle(const std::string& title) {
+    const std::string t = oneLine(title);
+    return "'" + shortened(t.empty() ? "Untitled" : t, 60) + "'";
+}
 
 // One removal as the confirmation names it.
 struct Removal {
@@ -76,13 +82,14 @@ PluginHostEvent questionFor(const std::string& pluginName, const std::vector<Rem
     const Kind first = asked.front().change.kind;
     bool same = true;
     for (const Removal& r : asked) same = same && r.change.kind == first;
+    const std::string name = oneLine(pluginName), n = std::to_string(asked.size());
     if (asked.size() == 1) {
-        ev.text = pluginName + " wants to " + asked.front().phrase + ".";
-    } else if (same && first == Kind::Trash) {
-        ev.text = pluginName + " wants to move these items to the Zotero trash:";
+        ev.text = name + " wants to " + asked.front().phrase + ".";
+    } else if (same && first == Kind::Trash) {  // the total in the question: the list may not all fit
+        ev.text = name + " wants to move these " + n + " items to the Zotero trash:";
         for (const Removal& r : asked) ev.lines.push_back(r.title);
     } else {
-        ev.text = pluginName + " wants to make these changes:";
+        ev.text = name + " wants to make these " + n + " changes:";
         for (const Removal& r : asked) ev.lines.push_back(capitalised(r.phrase));
     }
     ev.action = same ? actionOf(first) : "Allow";
@@ -209,18 +216,6 @@ JSValue addNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     return toJs(c, json{{"key", made ? made->itemKey : ch.itemKey}, {"changeId", id}});
 }
 
-// The item a removal names; throws an Error the plugin sees if it isn't there to remove from.
-std::string itemTitle(JSContext* c, Library& lib, const std::string& call, const std::string& key, bool* ok) {
-    *ok = false;
-    if (auto item = lib.item(key)) {
-        *ok = true;
-        return item->title;
-    }
-    if (lib.zoteroItem(key)) JS_ThrowPlainError(c, "zk.zotero.%s: item %s is being moved to the trash", call.c_str(), key.c_str());
-    else JS_ThrowPlainError(c, "zk.zotero.%s: no item %s", call.c_str(), key.c_str());
-    return "";
-}
-
 JSValue flushJob(JSContext* c, int, JSValueConst*);
 
 // n.remove(call, key, value): null if this call may not ask (nothing asked), else a promise for
@@ -240,32 +235,44 @@ JSValue removeNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     r.change.kind = k;
     r.change.itemKey = key;
     if (k == Kind::RemoveFromCollection || k == Kind::RemoveTag) r.change.value = value;
-    bool ok = false;
+    // A removal that would change nothing (already gone, or not there to remove) resolves null
+    // without asking: nothing to confirm.
+    auto nothing = [&](const std::string& why) {
+        log(p, LogLevel::Info, "zk.zotero." + name + "(" + key + (value.empty() ? "" : ", " + value) + "): " + why +
+                                   " — not asked, resolved null");
+        return JS_NULL;
+    };
     if (k == Kind::DeleteNote) {
         auto note = lib.note(key);
         if (!note) {
-            if (lib.zoteroNote(key)) return JS_ThrowPlainError(c, "zk.zotero.deleteNote: note %s is being deleted", key.c_str());
+            if (lib.zoteroNote(key)) return nothing("the note is being deleted already");
             return JS_ThrowPlainError(c, "zk.zotero.deleteNote: no note %s", key.c_str());
         }
         if (note->createdBy != p.manifest.id)
             return JS_ThrowPlainError(c, "zk.zotero.deleteNote: only a note this plugin added can be deleted (%s isn't)", key.c_str());
         auto parent = lib.zoteroItem(note->parentKey);
-        r.title = quoted(parent ? parent->title : "");
+        r.title = quotedTitle(parent ? parent->title : "");
         r.phrase = "delete a note it added to " + r.title;
     } else {
-        const std::string title = itemTitle(c, lib, name, key, &ok);
-        if (!ok) return JS_EXCEPTION;
-        r.title = quoted(title);
+        auto item = lib.item(key);
+        if (!item) {
+            if (lib.zoteroItem(key)) return nothing("the item is being moved to the trash already");
+            return JS_ThrowPlainError(c, "zk.zotero.%s: no item %s", name.c_str(), key.c_str());
+        }
+        r.title = quotedTitle(item->title);
         if (k == Kind::Trash) {
             r.phrase = "move " + r.title + " to the Zotero trash";
         } else if (k == Kind::RemoveTag) {
-            r.phrase = "remove the tag '" + shortened(value, 40) + "' from " + r.title;
+            if (std::find(item->tags.begin(), item->tags.end(), value) == item->tags.end())
+                return nothing("the item doesn't have that tag");
+            r.phrase = "remove the tag '" + shown(value, 40) + "' from " + r.title;
         } else {
-            std::string collection;
+            if (std::find(item->collections.begin(), item->collections.end(), value) == item->collections.end())
+                return nothing("the item isn't in that collection");
+            std::string collection = value;
             for (const CollectionRecord& col : lib.collections())
                 if (col.key == value) collection = col.name;
-            if (collection.empty()) return JS_ThrowPlainError(c, "zk.zotero.removeFromCollection: no collection %s", value.c_str());
-            r.phrase = "remove " + r.title + " from " + shortened(collection, 40);
+            r.phrase = "remove " + r.title + " from " + shown(collection, 40);
         }
     }
 

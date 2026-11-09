@@ -28,6 +28,8 @@ std::vector<Gesture> GestureRecognizer::feed(const TouchEvent& e) {
         return out;
     }
     if (e.id != finger_) return out;
+    const int finger = finger_;
+    const int64_t downMs = start_ms_;
 
     // Movement first: an Up can arrive without any Move before it.
     if (e.type != TouchEvent::Type::Down && beyond(e.pos, start_, config_.slop_px)) {
@@ -70,6 +72,10 @@ std::vector<Gesture> GestureRecognizer::feed(const TouchEvent& e) {
         state_ = State::Idle;
         finger_ = -1;
     }
+    for (Gesture& g : out) {
+        g.downMs = downMs;
+        g.finger = finger;
+    }
     return out;
 }
 
@@ -77,7 +83,7 @@ std::vector<Gesture> GestureRecognizer::tick(int64_t now_ms) {
     std::vector<Gesture> out;
     if (state_ == State::Pressed && now_ms - start_ms_ >= config_.longpress_ms) {
         state_ = State::LongPressed;
-        out.push_back({GestureType::LongPress, start_, start_});
+        out.push_back({GestureType::LongPress, start_, start_, Direction::None, start_ms_, finger_});
     }
     return out;
 }
