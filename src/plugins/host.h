@@ -57,11 +57,16 @@ struct PluginEvent {
     bool userCaused = false;
 };
 
+// Confirm: the app's own confirmation of a removal (zk.zotero): `text` the question, `lines` what
+// goes when there are several, `action` the yes button ("Move to trash"); answer it with
+// PluginHost::answer(requestId). Withdrawn: that request no longer waits (its call was stopped, or
+// the plugin turned off or reloaded): take the question away without answering.
 struct PluginHostEvent {
-    enum class Kind { Confirm, Badge, Disabled, ChangesQueued, Log } kind;
+    enum class Kind { Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
     uint64_t requestId = 0;
+    std::string action;
 };
 
 struct PluginStatus {

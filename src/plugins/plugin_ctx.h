@@ -37,6 +37,10 @@
 #include "plugins/manifest.h"
 #include "plugins/plugin_log.h"
 
+namespace zk {
+class Library;
+}
+
 namespace zk::plugins {
 
 struct Inbox;
@@ -62,6 +66,7 @@ struct PluginCtx {
     js::Value makePermissionError, makeLimitError;  // the error classes' factories (installCore)
     std::unique_ptr<PluginRun> run;
     std::shared_ptr<void> storage;  // bindings_storage.cpp's state (no JavaScript values in it)
+    std::shared_ptr<void> zotero;   // bindings_zotero.cpp's state (no JavaScript values in it)
 };
 
 // The plugin a native function was called for.
@@ -152,6 +157,9 @@ const PluginHostDeps& depsOf(PluginCtx&);
 // One slot per host for state shared by its plugins (all on the plugin thread): zk.library's
 // database connection and identifier index.
 std::shared_ptr<void>& librarySlot(PluginCtx&);
+// The plugin thread's Library on that connection (bindings_library.cpp), opened at the first use;
+// nullptr with the reason in *why if there is no library database.
+Library* sharedLibrary(PluginCtx&, std::string* why);
 
 // ---- The user -----------------------------------------------------------------------------
 
@@ -195,6 +203,8 @@ void installStorage(PluginCtx&);
 void installFetch(PluginCtx&);
 // zk.library (bindings_library.cpp). Throws std::runtime_error on an internal error.
 void installLibrary(PluginCtx&);
+// zk.zotero (bindings_zotero.cpp). Throws std::runtime_error on an internal error.
+void installZotero(PluginCtx&);
 // Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
 // are dropped and its storage closed (it reopens, empty, at the next use).
 void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);

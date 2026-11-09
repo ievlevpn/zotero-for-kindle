@@ -171,6 +171,7 @@ plugins_lib = static_library('zk-plugins',
   'src/plugins/bindings_storage.cpp',
   'src/plugins/bindings_fetch.cpp',
   'src/plugins/bindings_library.cpp',
+  'src/plugins/bindings_zotero.cpp',
   'src/plugins/identifiers.cpp',
   'src/plugins/plugin_http.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
@@ -203,6 +204,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/contents.cpp',
   'src/screens/book_notes.cpp',
   'src/screens/book_search.cpp',
+  'src/screens/plugin_confirm.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
   dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep])
@@ -213,9 +215,10 @@ app_lib = static_library('zk-app',
   'src/app/stall_watchdog.cpp', 'src/app/app.cpp',
   'src/app/startup.cpp',
   'src/app/lifecycle.cpp',
+  'src/app/plugin_events.cpp',
   include_directories : ui_incs,
-  dependencies : [screens_dep, services_dep, sync_dep])
-app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep])
+  dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
+app_dep = declare_dependency(link_with : app_lib, dependencies : [screens_dep, services_dep, sync_dep, plugins_dep])
 
 if backend == 'kindle'
   fbink_lib = meson.get_compiler('cpp').find_library('fbink',

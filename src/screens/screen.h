@@ -72,6 +72,8 @@ public:
     virtual void onClose(Nav&) {}
     // Part of reading (the reader and its panels): turns to landscape when the user chose it.
     virtual bool isReading() const { return false; }
+    // A page turn is under way (the reader): the app's own pop-ups wait until it has landed.
+    virtual bool midTurn() const { return false; }
     // The window changed size (turned): lay out again. Most screens just do what showing does.
     virtual void onResize(Nav& nav) { onShow(nav); }
     virtual bool wantsKeyboard() const { return false; }

@@ -17,6 +17,7 @@
 #include "docs/fonts.h"
 #include "app/paths.h"
 #include "app/lifecycle.h"
+#include "app/plugin_events.h"
 #include "app/settings_store.h"
 #include "app/stall_watchdog.h"
 #include "platform/device_profile.h"
@@ -53,6 +54,7 @@
 #include "update/install.h"
 #include "update/release_key.h"
 #include "platform/scaled_display.h"
+#include "plugins/host.h"
 #include "update/update_notice.h"
 #include "update/updater.h"
 
@@ -72,6 +74,20 @@ const EngineEnv kEngineEnv{"/mnt/us/zotero/share/crengine", readingFontDirs(), "
 const char* kCaBundle = "";
 const EngineEnv kEngineEnv{"third_party/crengine/cr3gui/data", readingFontDirs(), "local/cache/cre"};
 #endif
+
+// The plugin host's settings for this run. Seams for later: --plugins-dir (Task 19) picks the
+// folder, safe mode (Task 18) decides whether start() is called at all.
+PluginHostDeps pluginHostDeps(const Paths& paths, const std::optional<Config>& config) {
+    PluginHostDeps d;
+    d.pluginsDir = paths.pluginsDir;
+    d.dbPath = paths.dbPath;
+    d.engineEnv = kEngineEnv;
+    d.crashMarker = paths.pluginsDir + "/.running";
+    d.appVersion = appVersion();
+    d.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
+    d.webdavHost = config ? config->webdavUrl : "";  // zk.fetch never reaches it (setWebdavHost on changes)
+    return d;
+}
 
 // The lifecycle talks to whichever sync is current (none before Setup, the service after).
 class CurrentSync final : public SyncControl {
@@ -292,8 +308,14 @@ int main(int argc, char** argv) {
         }
     }
     Updater updater(updaterConfig);
+    // Plugins: one thread for all of them (src/plugins/host.h), started once the first screen is
+    // drawn and stopped before the app exits. Its events are routed every loop iteration.
+    PluginHost plugins(pluginHostDeps(paths, config));
+    PluginEvents pluginEvents(plugins);
+    app.setPollHook([&] { pluginEvents.poll(app); });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     auto startService = [&](const Config& c) {
+        plugins.setWebdavHost(c.webdavUrl);  // the account (and its WebDAV server) may have changed
         if (service) service->stop();
         app.setSync(nullSync);
         status.reset();  // the old worker's sync and downloads are gone
@@ -419,6 +441,7 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    plugins.start();  // after the first screen: plugins load lazily, at the first event
     switch (const Confirmed c = confirmStartup(installPaths); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;
         case StartupNote::RolledBack:
@@ -440,6 +463,8 @@ int main(int argc, char** argv) {
     const int rc = app.run();
     watchdog.beat("shutting down");
     log(LogLevel::Info, "zotero exiting");
+    watchdog.beat("stopping plugins");
+    plugins.stop();  // interrupts what runs; within 2 s
     if (service) service->stop();
     keyboard->hide();
     watchdog.beat("closing books");  // a reader may wait for its handwriting (ReaderScreen::kInkFlushMs)

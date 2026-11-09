@@ -84,6 +84,7 @@ public:
     Rect endPromptRect() const;
     Rect endPromptButtonRect() const;
     bool turning() const { return turning_; }
+    bool midTurn() const override { return turning_; }
 
     static Rect pageArea();    // the window above the footer (1236 × 1487 on the PW5)
     static Rect footerArea();  // the 60 px below it

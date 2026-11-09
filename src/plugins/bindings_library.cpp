@@ -49,22 +49,26 @@ struct LibState {
     std::unordered_map<std::string, std::vector<std::string>> byDoi, byArxiv, byIsbn;
 };
 
-// The shared state, with a connection; null with a JS error thrown if there is no library.
-LibState* stateOf(JSContext* c, PluginCtx& p) {
+// The shared state, with a connection; null if there is no library.
+LibState* openState(PluginCtx& p) {
     auto& slot = librarySlot(p);
     if (!slot) {
         const std::string& path = depsOf(p).dbPath;
         std::error_code ec;
-        if (path.empty() || !fs::exists(path, ec)) {
-            JS_ThrowPlainError(c, "zk.library: the library isn't available");
-            return nullptr;
-        }
+        if (path.empty() || !fs::exists(path, ec)) return nullptr;
         auto st = std::make_shared<LibState>();
         st->db = std::make_unique<Db>(Db::open(path));
         st->lib = std::make_unique<Library>(*st->db);
         slot = st;
     }
     return static_cast<LibState*>(slot.get());
+}
+
+// The same, with a JS error thrown if there is no library.
+LibState* stateOf(JSContext* c, PluginCtx& p) {
+    LibState* st = openState(p);
+    if (!st) JS_ThrowPlainError(c, "zk.library: the library isn't available");
+    return st;
 }
 
 struct Op {
@@ -518,6 +522,12 @@ return library;
 }))JS";
 
 }  // namespace
+
+Library* sharedLibrary(PluginCtx& p, std::string* why) {
+    LibState* st = openState(p);
+    if (!st && why) *why = "the library isn't available";
+    return st ? st->lib.get() : nullptr;
+}
 
 void installLibrary(PluginCtx& p) {
     JSContext* c = p.cx.raw();

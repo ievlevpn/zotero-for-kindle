@@ -3,11 +3,14 @@
 // damaged regions -> one present per waveform (spec §7.6).
 
 #include <array>
+#include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <memory>
 #include <vector>
 
+#include "screens/plugin_confirm.h"
 #include "screens/screen.h"
 
 namespace zk {
@@ -80,6 +83,20 @@ public:
 
     // Called with every sync event before the screens see it (the open flow's download states).
     void setEventHook(std::function<void(const SyncEvent&, Nav&)> hook) { hook_ = std::move(hook); }
+    // Called every loop iteration after the sync events (the plugin host's events).
+    void setPollHook(std::function<void()> hook) { pollHook_ = std::move(hook); }
+
+    // The app's own confirmation (a plugin's removal): drawn over whatever screen shows, taking
+    // every gesture, key and pen stroke until one of its buttons answers it; `answered` is then
+    // called once. It waits while a page turn is under way (at most kTurnWaitMs) or a system dialog
+    // is over the app; more questions wait their turn, each shown one step after the last went.
+    // A tap in the first kConfirmGuardMs it shows is ignored (it was meant for what was there).
+    static constexpr int64_t kTurnWaitMs = 3000;
+    static constexpr int64_t kConfirmGuardMs = 500;
+    void confirm(uint64_t id, PluginConfirm, std::function<void(bool yes)> answered);
+    // Takes the question away unanswered (waiting or shown); nothing if it is gone already.
+    void withdrawConfirm(uint64_t id);
+    const PluginConfirm* confirmShown() const;
 
 private:
     Screen* visibleTop() const;
@@ -147,6 +164,18 @@ private:
     bool background_ = false;  // a system dialog or the screensaver is over the app
     Rect inkDirty_;
     int64_t lastInkPresentMs_ = -1'000'000;
+    std::function<void()> pollHook_;
+    struct Question {
+        uint64_t id = 0;
+        PluginConfirm view;
+        std::function<void(bool)> answered;
+        int64_t readyMs = -1;  // first seen waiting on a page turn
+    };
+    std::deque<Question> questions_;  // the front one is shown when shownSince_ >= 0
+    int64_t shownSince_ = -1;
+    bool answeredThisStep_ = false;   // the rest of this step's gestures are not for the next one
+    void showQuestion();              // the front question, if nothing stops it now
+    bool questionTakes(const Gesture&);  // true if the shown question took the gesture
 };
 
 }  // namespace zk

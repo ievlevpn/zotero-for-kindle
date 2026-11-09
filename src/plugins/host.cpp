@@ -280,6 +280,20 @@ struct PluginHost::Impl {
         events.push_back(std::move(ev));
     }
 
+    // Drops the plugin's questions owned by `callId` (0: all of them) and tells the screen, which
+    // takes them away unanswered.
+    void withdrawAsks(PluginCtx& p, uint64_t callId) {
+        auto& asks = p.run->asks;
+        for (auto it = asks.begin(); it != asks.end();) {
+            if (callId != 0 && it->second.owner != callId) {
+                ++it;
+                continue;
+            }
+            postEvent({PluginHostEvent::Kind::Withdrawn, p.manifest.id, p.manifest.name, "", {}, it->first, ""});
+            it = asks.erase(it);
+        }
+    }
+
     void setLoaded(const std::string& id, bool on) {
         std::lock_guard<std::mutex> lock(mu);
         if (on) loadedIds.insert(id);
@@ -309,7 +323,7 @@ struct PluginHost::Impl {
         state.recordFailure(id, text);
         state.setEnabled(id, false);
         log(id, LogLevel::Error, text);
-        postEvent({PluginHostEvent::Kind::Disabled, id, name, text, {}, 0});
+        postEvent({PluginHostEvent::Kind::Disabled, id, name, text, {}, 0, ""});
     }
 
     void writeMarker(const std::string& id) {
@@ -455,6 +469,7 @@ struct PluginHost::Impl {
             installStorage(p);
             installFetch(p);
             installLibrary(p);
+            installZotero(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -489,6 +504,7 @@ struct PluginHost::Impl {
         auto it = loaded.find(id);
         if (it == loaded.end()) return;
         for (auto& [wid, w] : it->second->run->work) w.cancel->store(true);
+        withdrawAsks(*it->second, 0);
         if (net) net->sweep();  // its queued fetches (and their bodies) go now
         loaded.erase(it);  // the runtime and everything in it
         setLoaded(id, false);
@@ -517,7 +533,7 @@ struct PluginHost::Impl {
             state.setEnabled(id, false);
             const std::string name = nameOf(id);
             log(id, LogLevel::Error, name + " stopped working — turned off after 3 failures in a row");
-            postEvent({PluginHostEvent::Kind::Disabled, id, name, name + " stopped working — turned off", {}, 0});
+            postEvent({PluginHostEvent::Kind::Disabled, id, name, name + " stopped working — turned off", {}, 0, ""});
         }
     }
 
@@ -682,7 +698,7 @@ struct PluginHost::Impl {
 
         auto& run = *p.run;
         for (auto it = run.timers.begin(); it != run.timers.end();) it = it->second.owner == callId ? run.timers.erase(it) : std::next(it);
-        for (auto it = run.asks.begin(); it != run.asks.end();) it = it->second.owner == callId ? run.asks.erase(it) : std::next(it);
+        withdrawAsks(p, callId);
         bool doomed = false;
         for (auto it = run.work.begin(); it != run.work.end();) {
             if (it->second.owner != callId) {
@@ -713,7 +729,7 @@ struct PluginHost::Impl {
         p.run->calls.erase(callId);
         auto& run = *p.run;
         for (auto it = run.timers.begin(); it != run.timers.end();) it = it->second.owner == callId ? run.timers.erase(it) : std::next(it);
-        for (auto it = run.asks.begin(); it != run.asks.end();) it = it->second.owner == callId ? run.asks.erase(it) : std::next(it);
+        withdrawAsks(p, callId);
         for (auto it = run.work.begin(); it != run.work.end();) {
             if (it->second.owner != callId) {
                 ++it;

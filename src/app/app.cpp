@@ -68,6 +68,54 @@ void App::toast(const std::string& text) {
     pending_.push_back({toastRect(), Waveform::Ui});
 }
 
+void App::confirm(uint64_t id, PluginConfirm view, std::function<void(bool)> answered) {
+    questions_.push_back({id, std::move(view), std::move(answered), -1});
+}
+
+void App::withdrawConfirm(uint64_t id) {
+    for (auto it = questions_.begin(); it != questions_.end(); ++it) {
+        if (it->id != id) continue;
+        if (it == questions_.begin() && shownSince_ >= 0) {
+            pending_.push_back({it->view.rect(), Waveform::Quality});  // what was under it, without ghosts
+            shownSince_ = -1;
+        }
+        questions_.erase(it);
+        return;
+    }
+}
+
+const PluginConfirm* App::confirmShown() const {
+    return shownSince_ >= 0 && !questions_.empty() ? &questions_.front().view : nullptr;
+}
+
+void App::showQuestion() {
+    if (shownSince_ >= 0 || answeredThisStep_ || questions_.empty() || background_ || !visibleTop()) return;
+    Question& q = questions_.front();
+    const int64_t now = clock_();
+    if (visibleTop()->midTurn()) {  // never over a page turn: once it has landed (or it is stuck)
+        if (q.readyMs < 0) q.readyMs = now;
+        if (now - q.readyMs < kTurnWaitMs) return;
+    }
+    shownSince_ = now;
+    setSystemInk(false);  // the pen answers it like a finger
+    pending_.push_back({q.view.rect(), Waveform::Ui});
+}
+
+bool App::questionTakes(const Gesture& g) {
+    if (!confirmShown()) return answeredThisStep_;  // the rest of an answering tap's step
+    if (g.type != GestureType::Tap || clock_() - shownSince_ < kConfirmGuardMs) return true;
+    const std::optional<bool> yes = questions_.front().view.onTap(g.pos);
+    if (!yes) return true;
+    Question q = std::move(questions_.front());
+    questions_.pop_front();
+    shownSince_ = -1;
+    answeredThisStep_ = true;
+    pending_.push_back({q.view.rect(), Waveform::Quality});
+    log(LogLevel::Info, "confirmation %llu: %s", static_cast<unsigned long long>(q.id), *yes ? "yes" : "no");
+    if (q.answered) guard([&] { q.answered(*yes); });
+    return true;
+}
+
 Rect App::toastRect() const { return {kMargin, canvas_.height() - kTabBarH - 130, canvas_.width() - 2 * kMargin, 100}; }
 
 Rect App::tabBar() const { return {0, canvas_.height() - kTabBarH, canvas_.width(), kTabBarH}; }
@@ -258,9 +306,11 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     Screen* s = visibleTop();
     if (!s) return;
     bool took = false;
-    caller_ = s;
-    guard([&] { took = s->onPen(p, *this); });
-    caller_ = nullptr;
+    if (!confirmShown()) {  // else a stroke is a finger for the question
+        caller_ = s;
+        guard([&] { took = s->onPen(p, *this); });
+        caller_ = nullptr;
+    }
     if (p.type == PenEvent::Type::Down) penAsTouch_ = !took;  // decided for the whole stroke
     if (!penAsTouch_ || p.type == PenEvent::Type::Near) return;
     TouchEvent t{TouchEvent::Type::Move, kPenFinger, p.pos, p.t_ms ? p.t_ms : clock_()};
@@ -307,6 +357,7 @@ void App::handle(const Gesture& g) {
         static const char* names[] = {"tap", "long press", "drag start", "drag move", "drag end", "swipe", "lift"};
         log(LogLevel::Info, "%s at %d,%d", names[static_cast<int>(g.type)], g.pos.x, g.pos.y);
     }
+    if (questionTakes(g)) return;
     Screen* s = visibleTop();
     if (!s) return;
     if (s->showsTabBar() && tabBar().contains(g.pos)) {
@@ -340,6 +391,7 @@ void App::beat(const char* doing) {
 
 void App::step(int timeout_ms) {
     beat("idle");
+    answeredThisStep_ = false;
     // Wet ink on where no screen takes handwriting (a pause that failed, e.g. the handler was
     // busy): ask again, whichever screen is showing.
     if (systemInkOn_) {
@@ -363,6 +415,7 @@ void App::step(int timeout_ms) {
                 break;
             }
             case InputEvent::Kind::Key:
+                if (confirmShown()) break;  // it waits for its answer
                 if (Screen* s = visibleTop()) {
                     caller_ = s;
                     guard([&] { s->onKey(e.key, *this); });
@@ -431,6 +484,11 @@ void App::step(int timeout_ms) {
                 caller_ = nullptr;
             }
     }
+    if (pollHook_) {
+        beat("plugin events");
+        caller_ = nullptr;
+        guard(pollHook_);
+    }
     if (toastShown_ && clock_() >= toastUntil_) {
         toast_.clear();
         toastShown_ = false;
@@ -446,6 +504,7 @@ void App::step(int timeout_ms) {
         lastWatchdogMs_ = clock_();
         if (!watchdog_()) quit_ = true;
     }
+    showQuestion();  // after the tick: a page turn may just have landed
     auto deferred = std::move(deferred_);
     deferred_.clear();
     for (auto& f : deferred) guard(f);
@@ -475,6 +534,7 @@ void App::flush() {
         drawToast(canvas_.cr(), toastRect(), toast_);
         toastShown_ = true;
     }
+    if (const PluginConfirm* question = confirmShown()) question->draw(canvas_.cr());
     if (!full.empty()) {
         const Rect shown = full.united(quality).united(ui).united(fast);
         display_.present(canvas_, shown, Waveform::Full);

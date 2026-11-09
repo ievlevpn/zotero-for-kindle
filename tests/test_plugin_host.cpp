@@ -57,7 +57,7 @@ JSValue testLater(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 JSValue testAsk(JSContext* c, JSValueConst, int, JSValueConst*) {
     auto& p = plugins::ctxOf(c);
     auto holder = std::make_shared<std::shared_ptr<plugins::Work>>();
-    PluginHostEvent ev{PluginHostEvent::Kind::Confirm, "", "", "ask", {}, 0};
+    PluginHostEvent ev{PluginHostEvent::Kind::Confirm, "", "", "ask", {}, 0, ""};
     uint64_t id = plugins::askUser(p, ev, [holder](bool yes) {
         if (*holder) (*holder)->resolve(nlohmann::json(yes));
     });
