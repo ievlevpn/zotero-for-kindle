@@ -6,8 +6,8 @@
 //   /mnt/us/zotero/plugins/highlights-to-markdown/data/adler2007.md
 //
 // Copy the folder off over USB and the files drop into Obsidian or any notes app. A book's file
-// is named after its citation key (the `Citation Key:` line Better BibTeX writes into Zotero's
-// Extra field) or, without one, after its title.
+// is named after its citation key (Zotero's, or Better BibTeX's) or, without one, after its
+// title.
 //
 // Read this file top to bottom: it is a walk-through of the plugin API. Every `zk.…` call is
 // documented, with an example, in sdk/types/zk.d.ts.
@@ -35,32 +35,30 @@
 interface State {
   /** Every book written so far: item key → its file. Lets us rename or remove a file later. */
   books: Record<string, { file: string; highlights: number; written: string }>;
-  /** Item keys of books to write at the next chance (changes that came in with a sync). */
+  /** Item keys of books to write at the next chance. */
   todo: string[];
-  /** When the background task last finished (ISO 8601); absent before its first run. */
+  /** When the background task last looked for changes (ISO 8601); absent before its first run. */
   lastRun?: string;
 }
 
+const empty = (): State => ({ books: {}, todo: [] });
+
 async function loadState(): Promise<State> {
   // get<T>() returns what was stored, or undefined the first time.
-  return (await zk.storage.get<State>("state")) ?? { books: {}, todo: [] };
-}
-
-async function saveState(state: State): Promise<void> {
-  await zk.storage.set("state", state);
+  return (await zk.storage.get<State>("state")) ?? empty();
 }
 
 // Event handlers and the background task can run at the same time: each `await` lets another
-// one in. Two of them loading the state, changing it and saving it would lose one change. So
-// everything that touches the state goes through `serially`, which runs one job after another.
-// Keep each job short — one book — because an event handler waiting its turn behind a long job
-// would run out of its 5 seconds. (If a call is stopped by a limit, what it started rejects with
-// zk.LimitError, so a stopped job never blocks the queue.)
-let queue: Promise<unknown> = Promise.resolve();
-function serially<T>(job: () => Promise<T>): Promise<T> {
-  const result = queue.then(job, job);
-  queue = result.catch(() => {}); // a failed job must not block the next one
-  return result;
+// one in. Two of them loading the state, changing it and saving it with get and set would lose
+// one change. So every change goes through zk.storage.update, which hands `change` the stored
+// state and stores what it returns, one update at a time. Keep each update short — one book —
+// because an event handler waiting its turn behind a long one would run out of its 5 seconds.
+async function updateState(change: (state: State) => void | Promise<void>): Promise<void> {
+  await zk.storage.update<State>("state", async (old) => {
+    const state = old ?? empty(); // a fresh copy each time, parsed from storage
+    await change(state);
+    return state;
+  });
 }
 
 // ───────────────────────────── 2. Writing one book ─────────────────────────────
@@ -112,21 +110,17 @@ async function exportBook(itemKey: string, state: State): Promise<void> {
  */
 async function exportBooks(itemKeys: Iterable<string>): Promise<void> {
   for (const key of new Set(itemKeys)) {
-    await serially(async () => {
-      const state = await loadState();
+    await updateState(async (state) => {
       await exportBook(key, state);
       state.todo = state.todo.filter((k) => k !== key);
-      await saveState(state);
     });
   }
 }
 
 /** Notes books to write. Cheap, so it can always run first. */
 async function addTodo(itemKeys: Iterable<string>): Promise<void> {
-  await serially(async () => {
-    const state = await loadState();
+  await updateState((state) => {
     state.todo = [...new Set([...state.todo, ...itemKeys])];
-    await saveState(state);
   });
 }
 
@@ -180,11 +174,9 @@ zk.background(async () => {
   const { lastRun } = await loadState();
   const changed = new Set<string>();
   for await (const a of zk.library.recentAnnotations({ since: lastRun })) changed.add(a.itemKey);
-  await serially(async () => {
-    const state = await loadState();
+  await updateState((state) => {
     state.todo = [...new Set([...state.todo, ...changed])];
     state.lastRun = started;
-    await saveState(state);
   });
 
   await exportBooks((await loadState()).todo);
@@ -192,17 +184,12 @@ zk.background(async () => {
 
 // ───────────────────────────── Markdown ─────────────────────────────
 
-/** The `Citation Key:` line of Zotero's Extra field, as Better BibTeX writes it. */
-function citationKey(item: zk.Item): string | null {
-  return item.extra?.match(/^Citation Key:\s*(\S+)\s*$/im)?.[1] ?? null;
-}
-
 /**
  * A file name for the book: `<citation key>.md`, else `<title>.md`, made safe for FAT32 (the
  * Kindle's USB drive). If another book already has that name, the item key is added.
  */
 function fileNameFor(item: zk.Item, state: State): string {
-  const base = (citationKey(item) ?? item.title)
+  const base = (item.citationKey ?? item.title)
     .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
@@ -232,7 +219,7 @@ function toMarkdown(item: zk.Item, parts: { attachment: zk.Attachment; annotatio
   const byline = [
     [authors(item), item.year ? `(${item.year})` : ""].filter(Boolean).join(" "),
     item.publication ? `*${item.publication}*` : "",
-    citationKey(item) ? `Citation key: \`${citationKey(item)}\`` : "",
+    item.citationKey ? `Citation key: \`${item.citationKey}\`` : "",
   ].filter(Boolean);
   const lines = [`# ${item.title || item.key}`, ""];
   if (byline.length) lines.push(`${byline.join(". ")}`, "");

@@ -33,7 +33,7 @@ cp -R test-fixtures/bundles-a-package "$tmp/plugin"
 mkdir -p "$tmp/plugin/node_modules"
 cp -R test-fixtures/main-only-package "$tmp/plugin/node_modules/"
 node template/build.mjs "$tmp/plugin"
-out=$(node --input-type=module -e "globalThis.zk = { log: (...a) => console.log(...a) };
+out=$(node --input-type=module -e "globalThis.zk = {};
   await import('$tmp/plugin/dist/bundles-a-package/main.js');")
 [ "$out" = "bundled hello, Kindle" ] || { echo "bundled plugin printed: $out" >&2; exit 1; }
 echo "$out"

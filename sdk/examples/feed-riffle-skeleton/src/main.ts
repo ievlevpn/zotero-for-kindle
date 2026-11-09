@@ -68,33 +68,30 @@ interface State {
 
 const LIMITS = { seen: 5000, undo: 50, recent: 9 };
 
-// Calls interleave at each `await` (a background refresh can run while the user is deciding),
-// so every read-modify-write of the state runs through `serially`, one after another. Slow work —
-// the network, the user's confirmation — is done outside it. (A call stopped by a limit has what
-// it started rejected with zk.LimitError, so a stopped job never blocks the queue.)
-let queue: Promise<unknown> = Promise.resolve();
-function serially<T>(job: () => Promise<T>): Promise<T> {
-  const result = queue.then(job, job);
-  queue = result.catch(() => {});
-  return result;
-}
+const empty = (): State => ({ deck: [], seen: [], undo: [], recent: [] });
 
 async function load(): Promise<State> {
-  return (await zk.storage.get<State>("state")) ?? { deck: [], seen: [], undo: [], recent: [] };
+  return (await zk.storage.get<State>("state")) ?? empty();
 }
 
-/** Loads the state, lets `change` modify it, saves it, and returns what `change` returned. */
-function withState<T>(change: (state: State) => T | Promise<T>): Promise<T> {
-  return serially(async () => {
-    const state = await load();
-    const result = await change(state);
+/**
+ * Lets `change` modify the stored state and returns what `change` returned. Calls interleave at
+ * each `await` (a background refresh can run while the user is deciding), so this goes through
+ * zk.storage.update, which runs one update at a time and never loses a change. Slow work — the
+ * network, the user's confirmation — is done outside it, so it doesn't hold up the next update.
+ */
+async function withState<T>(change: (state: State) => T | Promise<T>): Promise<T> {
+  let result!: T;
+  const state = await zk.storage.update<State>("state", async (old) => {
+    const state = old ?? empty();
+    result = await change(state);
     state.seen = state.seen.slice(-LIMITS.seen);
     state.undo = state.undo.slice(-LIMITS.undo);
-    await zk.storage.set("state", state);
-    const left = state.deck.length;
-    zk.setBadge(left ? `${left} card${left === 1 ? "" : "s"}` : null);
-    return result;
+    return state;
   });
+  const left = state?.deck.length ?? 0;
+  zk.setBadge(left ? `${left} card${left === 1 ? "" : "s"}` : null);
+  return result;
 }
 
 // ───────────────────────────── Background: fetch, parse, dedupe ─────────────────────────────

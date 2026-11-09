@@ -20,8 +20,8 @@ Robert J. Adler, Jonathan Taylor (2007). Citation key: `adler2007`
 Key definition. — p. 12
 ```
 
-A file is named after the book's citation key (the `Citation Key:` line Better BibTeX keeps in
-Zotero's *Extra* field), or after its title. Copy the folder off over USB.
+A file is named after the book's citation key (Zotero's own, or the `Citation Key:` line Better
+BibTeX keeps in *Extra*), or after its title. Copy the folder off over USB.
 
 - A highlight you make, change or delete on the Kindle rewrites that book's file at once.
 - Highlights that arrive with a sync (made in Zotero on the desktop) are noted; a few books are

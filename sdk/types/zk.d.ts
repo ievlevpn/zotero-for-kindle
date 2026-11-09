@@ -19,8 +19,13 @@
  * last from one call to the next (but not across restarts: keep what must last in
  * {@link zk.storage}). Calls into the plugin (event handlers, the background task, actions) may
  * interleave at each `await`, as in any async JavaScript: a read-modify-write of storage that
- * awaits in between can lose another call's write, so run such updates one after another
- * (`sdk/examples/` show a five-line way).
+ * awaits in between can lose another call's write, so do it with {@link zk.Storage.update},
+ * which runs a plugin's updates strictly one after another.
+ *
+ * Each call has a time budget (event handlers 5 s, the background task 30 s, actions at least
+ * 30 s). It counts from when the call starts running: time queued behind other plugins' calls
+ * doesn't count, and neither does time waiting for the user to answer a confirmation. A call
+ * that goes over is stopped (see {@link zk.LimitError}).
  *
  * What a plugin may do is declared in `plugin.json` under `"permissions"`. Calling something not
  * declared rejects (or throws) with a {@link zk.PermissionError} that names what to add. Each
@@ -36,8 +41,8 @@
 /**
  * Writes to the plugin's log (Settings → Plugins → the plugin, and the terminal of the desktop
  * build). Arguments are joined with spaces; objects are shown as JSON. `warn` and `error` are
- * marked as such in the log. The preferred way to log: it is standard, has levels, and is what
- * bundled libraries call. No permission.
+ * marked as such in the log. The one way to log: standard, with levels, and what bundled
+ * libraries call. No permission.
  *
  * @example
  * console.log("filed", change.key, "into", collection.path.join(" / "));
@@ -208,24 +213,17 @@ declare namespace zk {
     [key: string]: Json | undefined;
   }
 
-  /**
-   * The same as `console.log`, which is preferred (see {@link console}). No permission.
-   *
-   * @example
-   * zk.log("filed", change.key, "into", collection.path.join(" / "));
-   */
-  function log(...data: unknown[]): void;
-
   // ───────────────────────────── Storage and files ─────────────────────────────
 
   /**
    * A private key-value store, kept in the plugin's own folder. Values are JSON (stored as with
-   * `JSON.stringify`). Survives app restarts and updates; emptied by Settings → Plugins → *Reset
+   * `JSON.stringify`); what `get` and `update` hand back is a fresh copy, so changing it changes
+   * nothing until it is stored. Survives app restarts and updates; emptied by Settings → Plugins → *Reset
    * its data*. No permission.
    *
    * @example
-   * const seen = (await zk.storage.get<string[]>("seen")) ?? [];
-   * await zk.storage.set("seen", [...seen, entry.id]);
+   * await zk.storage.set("lastRun", new Date().toISOString());
+   * const seen = await zk.storage.update<string[]>("seen", (seen = []) => [...seen, entry.id]);
    */
   const storage: Storage;
 
@@ -247,6 +245,35 @@ declare namespace zk {
      * await zk.storage.set("lastRun", new Date().toISOString());
      */
     set(key: string, value: unknown): Promise<void>;
+
+    /**
+     * Reads, changes and writes `key` as one step: the way to do a read-modify-write. `fn` gets
+     * the stored value (`undefined` if there is none) and returns the new one; returning
+     * `undefined` deletes the key. Resolves with what was stored.
+     *
+     * A plugin's updates run strictly in order, one at a time (the app keeps a queue per plugin):
+     * an update's `fn` starts only when the previous update has finished, however its calls
+     * interleave. So two event handlers updating the same key can't lose each other's change.
+     * `fn` may be `async` and may await other calls (the library, files, `zk.zotero`) — the next
+     * update waits for it, so keep it short. If `fn` throws, or its call is stopped by a limit,
+     * nothing is stored, the update rejects, and the next one runs.
+     *
+     * `set` and `delete` aren't queued: don't mix them with `update` on the same key. Inside `fn`,
+     * don't call `update` (it would wait for itself until the call's time runs out).
+     *
+     * @example
+     * // count, safely from any number of handlers at once
+     * await zk.storage.update<number>("finished", (n = 0) => n + 1);
+     *
+     * @example
+     * // file a card and remember it, as one step
+     * const deck = await zk.storage.update<Card[]>("deck", async (deck = []) => {
+     *   const [card, ...rest] = deck;
+     *   if (card) await zk.zotero.createItem(fieldsOf(card));
+     *   return rest;
+     * });
+     */
+    update<T = Json>(key: string, fn: (old: T | undefined) => T | undefined | Promise<T | undefined>): Promise<T | undefined>;
 
     /**
      * Removes `key`. Resolves `true` if it was there.
@@ -756,8 +783,10 @@ declare namespace zk {
 
   /**
    * Runs `handler` whenever `event` happens. Register handlers when the plugin loads (at the top
-   * level of `main.js`). A handler has 5 seconds; going over stops it (see {@link LimitError}:
-   * what it started is cancelled). An error it throws is logged with its stack.
+   * level of `main.js`). A handler has 5 seconds from when it starts running (not counting time
+   * queued behind other plugins or waiting for the user's confirmation); going over stops it
+   * (see {@link LimitError}: what it started is cancelled). An error it throws is logged with
+   * its stack.
    *
    * Every event says where the change was made: `origin: "kindle"` (the user did it on this
    * Kindle, one event per change, as it happens) or `origin: "zotero"` (it came in with a sync:
@@ -837,8 +866,9 @@ declare namespace zk {
   /**
    * Registers the plugin's background task (one per plugin; registering again replaces it). The
    * app runs it after a successful sync, at most once an hour, while the Kindle is awake and
-   * online; it never wakes a sleeping Kindle. A run has 30 seconds; going over stops it (see
-   * {@link LimitError}: what it started is cancelled). Three failed runs in a row
+   * online; it never wakes a sleeping Kindle. A run has 30 seconds from when it starts running;
+   * going over stops it (see {@link LimitError}: what it started is cancelled). Three failed runs
+   * in a row
    * turn the plugin off. A background task can't show anything or ask the user: removals resolve
    * `null`; use {@link setBadge} to say there is something to see.
    *
@@ -869,6 +899,9 @@ declare namespace zk {
    * **Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear;
    * plugins written now keep working when it does.
    *
+   * `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
+   * waiting for the user's confirmation doesn't count.
+   *
    * No permission: the selection and its item are handed over because the user chose the action.
    *
    * @example
@@ -887,6 +920,9 @@ declare namespace zk {
    * Adds an action to an item's *More…* menu.
    *
    * **Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear.
+   *
+   * `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
+   * waiting for the user's confirmation doesn't count.
    *
    * No permission: the item is handed over because the user chose the action.
    *
@@ -981,6 +1017,11 @@ declare namespace zk {
     read: boolean;
     /** Zotero's *Extra* field. */
     extra: string | null;
+    /**
+     * The citation key: Zotero's own `citationKey` field when it has one, else the
+     * `Citation Key:` line Better BibTeX writes into *Extra*.
+     */
+    citationKey: string | null;
   }
 
   /** Zotero item types. Others exist; these are the common ones. */
@@ -1137,10 +1178,14 @@ declare namespace zk {
    * it. `time`, `memory` and `stack` stop the running handler or task; the fetch limits only fail
    * that fetch.
    *
+   * `time` is the call's budget: event handlers 5 s, the background task 30 s, actions at least
+   * 30 s. It counts from when the call starts running; time queued behind other plugins' calls
+   * and time waiting for the user to answer a confirmation never count.
+   *
    * When a call is stopped, the work it started in the app (fetches, library reads, storage and
    * file operations, timers) is cancelled, and every promise of that work still pending rejects
-   * with a `LimitError` — none is left pending forever. So a queue that chains calls one after
-   * another (`queue.then(job, job)`) moves on to the next job instead of hanging. Changes to Zotero
+   * with a `LimitError` — none is left pending forever. So {@link Storage.update}'s queue, or any
+   * queue a plugin keeps itself, moves on to the next job instead of hanging. Changes to Zotero
    * already asked for stay asked for (each resolved at once); a removal still waiting for the
    * user's answer is withdrawn.
    *
