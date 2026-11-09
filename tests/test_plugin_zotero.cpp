@@ -474,8 +474,19 @@ TEST_CASE("zotero: what the plugin and the library put in the question is on one
     auto m = parseManifest(R"({"id":"riffle","name":"Feed\n\tRiffle\u2028 ","version":"1.0.0","api":0,"main":"main.js","permissions":[]})", &why);
     REQUIRE(m);
     CHECK(m->name == "Feed Riffle");
-    CHECK(oneLine("  a\r\n\u0085b  c\x7f ") == "a b c");
-    CHECK(oneLine("​x　y") == "x y");
+    CHECK(oneLine("  a\r\n\u0085b\u00a0\u00a0c\x7f ") == "a b c");
+    CHECK(oneLine("\u200bx\u3000y") == "x y");
+    // Invisible format characters go: soft hyphen, bidi marks, embeddings, isolates, tags.
+    CHECK(oneLine("ab\u00adc\u200ed\u200fe") == "abcde");
+    CHECK(oneLine("\u202ex\u202ay\u202c\u2066z\u2069\u2067w\u2068") == "xyzw");
+    CHECK(oneLine("flag\U000E0067\U000E0062\U000E007F!") == "flag!");
+    // Malformed UTF-8 becomes U+FFFD, one per bad byte; what follows is read again.
+    CHECK(oneLine("a\xff" "b") == "a\uFFFD" "b");
+    CHECK(oneLine("a\xc3(b") == "a\uFFFD(b");           // a lead byte without its continuation
+    CHECK(oneLine("a\xe2\x82") == "a\uFFFD\uFFFD");      // cut short
+    CHECK(oneLine("\xc0\xaf") == "\uFFFD");              // overlong '/'
+    CHECK(oneLine("\xed\xa0\x80x") == "\uFFFDx");        // a surrogate
+    CHECK(oneLine("\x80lone") == "\uFFFDlone");          // a stray continuation byte
 
     Rig rig;
     ItemRecord messy = record("DDDDDDD1", "Gaussian\n\n random\tfields\r\n(v1)");

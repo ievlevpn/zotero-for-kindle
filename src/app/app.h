@@ -88,8 +88,8 @@ public:
 
     // The app's own confirmation (a plugin's removal): drawn over whatever screen shows, taking
     // every gesture, key and pen stroke until one of its buttons answers it; `answered` is then
-    // called once. It waits while a page turn is under way (at most kTurnWaitMs) or a system dialog
-    // is over the app; more questions wait their turn, each shown one step after the last went.
+    // called once. It waits while a page turn is under way or the pen is on the glass (at most
+    // kTurnWaitMs; a stroke still open then gets its lift first) or a system dialog is over the app; more questions wait their turn, each shown one step after the last went.
     // Only a finger tap answers (never the pen), and only one that went down kConfirmGuardMs or
     // more after the box was first presented (one that went down earlier was meant for what was
     // there). No system ink while it shows.
@@ -160,6 +160,11 @@ private:
     bool palmBlocked(const TouchEvent&);
     bool penNear_ = false;
     bool penDown_ = false;  // on the glass
+    // A stroke the screen took (writing, erasing) and hasn't had its lift yet; where the pen was
+    // last, with which end: a question showing mid-stroke gives the screen a lift there.
+    bool penOwned_ = false;
+    Point penAt_;
+    bool penEraser_ = false;
     int64_t penLeftMs_ = -1;
     std::vector<int> palmFingers_;  // fingers that went down while the pen was near
     void presentInk(bool force);

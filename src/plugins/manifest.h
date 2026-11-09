@@ -29,8 +29,10 @@ struct PluginManifest {
 std::optional<PluginManifest> parseManifest(const std::string& json, UserError* why);
 
 // `s` on one line: every run of whitespace or control characters (line breaks, tabs, Unicode
-// spaces and separators, C0/C1 controls, zero-width spaces) becomes one space; none at the ends.
-// For text a plugin puts in the app's own UI (its name, titles and tags in a confirmation).
+// spaces and separators, C0/C1 controls) becomes one space, none at the ends; invisible format
+// characters (soft hyphen, zero-width, bidi marks, embeddings and isolates, tag characters, BOM)
+// are dropped; malformed UTF-8 becomes U+FFFD. For text a plugin puts in the app's own UI (its
+// name, titles and tags in a confirmation).
 std::string oneLine(const std::string& s);
 
 struct PluginFolder {

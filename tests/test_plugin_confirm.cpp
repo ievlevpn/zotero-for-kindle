@@ -75,6 +75,33 @@ struct PageScreen : Screen {
     bool showsTabBar() const override { return false; }
 };
 
+// A PDF page that writes and erases with the pen, as the reader does: a stroke ends (committed, or
+// its eraser path applied) when the screen gets its lift.
+struct InkScreen : PageScreen {
+    bool inkDown = false, erasing = false;
+    std::vector<Point> current;
+    std::vector<std::vector<Point>> strokes, erased;
+    bool onPen(const PenEvent& p, Nav&) override {
+        ++pens;
+        if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) {
+            if (inkDown) strokes.push_back(current);
+            if (erasing) erased.push_back(current);
+            inkDown = erasing = false;
+            current.clear();
+            return false;
+        }
+        if (p.type == PenEvent::Type::Near) return false;
+        if (p.type == PenEvent::Type::Down) {
+            (p.eraser ? erasing : inkDown) = true;
+            current = {p.pos};
+            return true;
+        }
+        if (!inkDown && !erasing) return false;  // a stroke it never saw go down
+        current.push_back(p.pos);
+        return true;
+    }
+};
+
 ItemRecord record(const std::string& key, const std::string& title) {
     ItemRecord r;
     r.key = key;
@@ -96,10 +123,11 @@ struct Rig {
     int64_t now = 1000;
     App app{display, lib, sync, keyboard, [this] { return now; }};
     PageScreen* page = nullptr;
+    InkScreen* ink = nullptr;
     std::unique_ptr<PluginHost> host;
     std::unique_ptr<PluginEvents> events;
 
-    Rig() {
+    explicit Rig(bool inkScreen = false) {
         lib.upsertItem(record("AAAAAAA1", "Gaussian random fields (v1)"));
         lib.upsertItem(record("BBBBBBB1", "Attention is all you need"));
         fp.add("riffle", R"(
@@ -115,7 +143,14 @@ struct Rig {
         host->start();
         events = std::make_unique<PluginEvents>(host.get());
         app.setPollHook([this] { events->poll(app); });
-        auto s = std::make_unique<PageScreen>();
+        std::unique_ptr<PageScreen> s;
+        if (inkScreen) {
+            auto i = std::make_unique<InkScreen>();
+            ink = i.get();
+            s = std::move(i);
+        } else {
+            s = std::make_unique<PageScreen>();
+        }
         page = s.get();
         for (int i = 0; i < App::kTabs; ++i) app.setRoot(i, i == 0 ? std::move(s) : std::make_unique<PageScreen>());
         app.start();
@@ -135,6 +170,17 @@ struct Rig {
         display.tap(p, now);
         step();
         step();
+    }
+    void pen(PenEvent::Type type, Point p, bool eraser = false) {
+        display.pen(type, p, now, eraser);
+        step();
+    }
+    void stroke(Point from, bool eraser = false) {
+        pen(PenEvent::Type::Near, from, eraser);
+        pen(PenEvent::Type::Down, from, eraser);
+        pen(PenEvent::Type::Move, {from.x + 60, from.y}, eraser);
+        pen(PenEvent::Type::Up, {from.x + 60, from.y}, eraser);
+        pen(PenEvent::Type::Leave, {from.x + 60, from.y}, eraser);
     }
     std::string log() const { return fp.log("riffle"); }
 };
@@ -270,6 +316,80 @@ TEST_CASE("confirm: the pen never answers it, and no wet ink shows while it does
     REQUIRE(rig.until([&] { return contains(rig.log(), "OUT AAAAAAA1 {"); }));
     for (int i = 0; i < 3; ++i) rig.step();
     CHECK(rig.display.inkOn);  // the page may have it again
+}
+
+// Answers the shown question with a finger (Cancel), once the pen is away and the guard is over.
+void answerNo(Rig& rig) {
+    REQUIRE(rig.app.confirmShown());
+    rig.now += 1500;
+    rig.tap(centre(rig.app.confirmShown()->noRect()));
+    REQUIRE(rig.app.confirmShown() == nullptr);
+}
+
+TEST_CASE("confirm: a question waits for the pen to lift; the stroke is kept and the next one draws") {
+    for (const bool eraser : {false, true}) {
+        CAPTURE(eraser);
+        Rig rig(true);
+        rig.pen(PenEvent::Type::Near, {300, 900}, eraser);
+        rig.pen(PenEvent::Type::Down, {300, 900}, eraser);
+        rig.pen(PenEvent::Type::Move, {340, 900}, eraser);
+        rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});
+        REQUIRE(eventually([&] {
+            rig.step();
+            return rig.events->waiting() == 1;
+        }));
+        for (int i = 0; i < 5; ++i) rig.step();
+        CHECK(rig.app.confirmShown() == nullptr);  // the pen is on the glass
+        rig.pen(PenEvent::Type::Move, {380, 900}, eraser);
+        rig.pen(PenEvent::Type::Up, {380, 900}, eraser);
+        rig.pen(PenEvent::Type::Leave, {380, 900}, eraser);
+        rig.step();
+        REQUIRE(rig.app.confirmShown() != nullptr);
+        CHECK(rig.ink->strokes.size() == (eraser ? 0u : 1u));
+        CHECK(rig.ink->erased.size() == (eraser ? 1u : 0u));
+        const auto& ended = eraser ? rig.ink->erased : rig.ink->strokes;
+        CHECK((!ended.empty() && ended.back().size() == 3));  // all of it
+        answerNo(rig);
+        rig.stroke({300, 1100});  // the next stroke writes
+        CHECK(rig.ink->strokes.size() == (eraser ? 1u : 2u));
+        CHECK(rig.ink->erased.size() == (eraser ? 1u : 0u));  // and erases nothing
+    }
+}
+
+TEST_CASE("confirm: a stroke still open when the wait runs out ends there; the next one draws, not erases") {
+    for (const bool eraser : {false, true}) {
+        CAPTURE(eraser);
+        Rig rig(true);
+        rig.pen(PenEvent::Type::Near, {300, 900}, eraser);
+        rig.pen(PenEvent::Type::Down, {300, 900}, eraser);
+        rig.pen(PenEvent::Type::Move, {340, 900}, eraser);
+        rig.host->dispatch({"bookOpened", {{"key", "AAAAAAA1"}}, true});
+        REQUIRE(eventually([&] {
+            rig.step();
+            return rig.events->waiting() == 1;
+        }));
+        const int64_t from = rig.now;
+        // The pen stays down (still reporting) past the wait.
+        while (rig.app.confirmShown() == nullptr && rig.now - from < App::kTurnWaitMs + 1000)
+            rig.pen(PenEvent::Type::Move, {340, 900}, eraser);
+        REQUIRE(rig.app.confirmShown() != nullptr);
+        CHECK(rig.now - from >= App::kTurnWaitMs);
+        // The screen got its lift: the stroke ended as drawn so far.
+        CHECK_FALSE(rig.ink->inkDown);
+        CHECK_FALSE(rig.ink->erasing);
+        CHECK(rig.ink->strokes.size() == (eraser ? 0u : 1u));
+        CHECK(rig.ink->erased.size() == (eraser ? 1u : 0u));
+        // The rest of that stroke goes nowhere.
+        const int pens = rig.ink->pens;
+        rig.pen(PenEvent::Type::Move, {420, 900}, eraser);
+        rig.pen(PenEvent::Type::Up, {420, 900}, eraser);
+        rig.pen(PenEvent::Type::Leave, {420, 900}, eraser);
+        CHECK(rig.ink->pens == pens);
+        answerNo(rig);
+        rig.stroke({300, 1100});  // the pen's next stroke writes ink
+        CHECK(rig.ink->strokes.size() == (eraser ? 1u : 2u));
+        CHECK(rig.ink->erased.size() == (eraser ? 1u : 0u));
+    }
 }
 
 TEST_CASE("confirm: a tap that went down before the guard ran out doesn't answer, however late it is handled") {

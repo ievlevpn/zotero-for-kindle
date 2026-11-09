@@ -93,9 +93,25 @@ void App::showQuestion() {
     if (questionShown_ || answeredThisStep_ || questions_.empty() || background_ || !visibleTop()) return;
     Question& q = questions_.front();
     const int64_t now = clock_();
-    if (visibleTop()->midTurn()) {  // never over a page turn: once it has landed (or it is stuck)
+    // Never over a page turn or a pen on the glass: once it has landed or lifted (or seems stuck).
+    const bool penOnGlass = penDown_ && now - penLastMs_ < kPenDownStaleMs;
+    if (visibleTop()->midTurn() || penOnGlass) {
         if (q.readyMs < 0) q.readyMs = now;
         if (now - q.readyMs < kTurnWaitMs) return;
+    }
+    // A stroke the screen is writing or erasing is still open (the wait ran out): the screen gets
+    // its lift now, so it ends as the user drew it; the rest of the stroke goes nowhere.
+    if (penOwned_) {
+        penOwned_ = false;
+        PenEvent lift;
+        lift.type = PenEvent::Type::Leave;
+        lift.pos = penAt_;
+        lift.eraser = penEraser_;
+        lift.t_ms = now;
+        Screen* s = visibleTop();
+        caller_ = s;
+        guard([&] { s->onPen(lift, *this); });
+        caller_ = nullptr;
     }
     questionShown_ = true;
     shownSince_ = -1;     // stamped by flush() once the box is on the screen
@@ -324,6 +340,10 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     caller_ = s;
     guard([&] { took = s->onPen(p, *this); });
     caller_ = nullptr;
+    if (p.type == PenEvent::Type::Down) penOwned_ = took;
+    if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) penOwned_ = false;
+    penAt_ = p.pos;
+    penEraser_ = p.eraser;
     if (p.type == PenEvent::Type::Down) penAsTouch_ = !took;  // decided for the whole stroke
     if (!penAsTouch_ || p.type == PenEvent::Type::Near) return;
     TouchEvent t{TouchEvent::Type::Move, kPenFinger, p.pos, p.t_ms ? p.t_ms : clock_()};

@@ -147,22 +147,35 @@ std::string oneLine(const std::string& s) {
     bool gap = false;
     for (size_t i = 0; i < s.size();) {
         const unsigned char b = static_cast<unsigned char>(s[i]);
-        size_t n = b < 0x80 ? 1 : (b >> 5) == 0x6 ? 2 : (b >> 4) == 0xE ? 3 : (b >> 3) == 0x1E ? 4 : 1;
-        if (i + n > s.size()) n = 1;
-        uint32_t cp = b;
-        if (n == 2) cp = ((b & 0x1Fu) << 6) | (s[i + 1] & 0x3F);
-        if (n == 3) cp = ((b & 0x0Fu) << 12) | ((s[i + 1] & 0x3Fu) << 6) | (s[i + 2] & 0x3F);
-        if (n == 4) cp = ((b & 0x07u) << 18) | ((s[i + 1] & 0x3Fu) << 12) | ((s[i + 2] & 0x3Fu) << 6) | (s[i + 3] & 0x3F);
-        const bool blank = cp <= 0x20 || cp == 0x7F || (cp >= 0x80 && cp <= 0xA0) || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200F) ||
-                           (cp >= 0x2028 && cp <= 0x202F) || cp == 0x205F || cp == 0x2060 || cp == 0x3000 || cp == 0xFEFF;
-        if (blank) {
-            gap = true;
+        size_t n = b < 0x80 ? 1 : (b & 0xE0) == 0xC0 ? 2 : (b & 0xF0) == 0xE0 ? 3 : (b & 0xF8) == 0xF0 ? 4 : 0;
+        bool valid = n > 0 && i + n <= s.size();
+        for (size_t k = 1; valid && k < n; ++k) valid = (static_cast<unsigned char>(s[i + k]) & 0xC0) == 0x80;
+        uint32_t cp = 0xFFFD;
+        if (valid) {
+            cp = n == 1 ? b : n == 2 ? (b & 0x1Fu) : n == 3 ? (b & 0x0Fu) : (b & 0x07u);
+            for (size_t k = 1; k < n; ++k) cp = (cp << 6) | (static_cast<unsigned char>(s[i + k]) & 0x3Fu);
+            static const uint32_t least[] = {0, 0, 0x80, 0x800, 0x10000};
+            if (cp < least[n] || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;  // overlong, surrogate
         } else {
-            if (gap && !out.empty()) out += ' ';
-            gap = false;
-            out.append(s, i, n);
+            n = 1;  // a malformed byte: one U+FFFD each
         }
         i += n;
+        // Invisible format characters (soft hyphen, zero-width, direction marks and embeddings,
+        // isolates, tags, BOM) go; whitespace and controls become one space.
+        const bool invisible = cp == 0xAD || (cp >= 0x200B && cp <= 0x200F) || (cp >= 0x202A && cp <= 0x202E) ||
+                               (cp >= 0x2060 && cp <= 0x2064) || (cp >= 0x2066 && cp <= 0x2069) || cp == 0xFEFF ||
+                               (cp >= 0xE0000 && cp <= 0xE007F);
+        if (invisible) continue;
+        const bool blank = cp <= 0x20 || cp == 0x7F || (cp >= 0x80 && cp <= 0xA0) || cp == 0x1680 || (cp >= 0x2000 && cp <= 0x200A) ||
+                           cp == 0x2028 || cp == 0x2029 || cp == 0x202F || cp == 0x205F || cp == 0x3000;
+        if (blank) {
+            gap = true;
+            continue;
+        }
+        if (gap && !out.empty()) out += ' ';
+        gap = false;
+        if (cp == 0xFFFD) out += "\xEF\xBF\xBD";  // also what malformed UTF-8 becomes
+        else out.append(s, i - n, n);
     }
     return out;
 }
