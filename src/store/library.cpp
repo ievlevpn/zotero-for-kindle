@@ -97,7 +97,7 @@ CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags,
 
 const char* kItemColumns =
     "items.key, items.version, items.itemType, items.title, items.date, items.publication, items.parentKey, "
-    "items.creators, items.collections, items.tags, items.dateAdded, items.dateModified, items.json";
+    "items.creators, items.collections, items.tags, items.dateAdded, items.dateModified, items.json, items.year";
 
 std::vector<std::string> strings(const std::string& text) {
     auto j = json::parse(text, nullptr, false);
@@ -132,6 +132,7 @@ ItemRecord readItem(const Stmt& st) {
     r.dateAdded = st.text(10);
     r.dateModified = st.text(11);
     r.json = st.text(12);
+    r.year = st.text(13);
     return r;
 }
 
@@ -636,6 +637,20 @@ LibraryStats Library::stats() {
             "(SELECT count(*) FROM annotations WHERE dirty = 1 AND conflict = 0)");
         st.step();
         return LibraryStats{st.integer(0), st.integer(1), st.integer(2), st.integer(3), st.integer(4), st.integer(5)};
+    });
+}
+
+void Library::forEachItemData(const std::function<void(const std::string&, const std::string&)>& fn) {
+    guarded([&] {
+        Stmt st = db_.prepare("SELECT key, json FROM items WHERE parentKey = ''");
+        while (st.step()) fn(st.text(0), st.text(1));
+    });
+}
+
+int64_t Library::dataVersion() {
+    return guarded([&] {
+        Stmt st = db_.prepare("PRAGMA data_version");
+        return st.step() ? st.integer(0) : int64_t{0};
     });
 }
 

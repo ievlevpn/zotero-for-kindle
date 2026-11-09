@@ -6,6 +6,7 @@
 #include "store/db.h"
 #include "store/records.h"
 
+#include <functional>
 #include <optional>
 #include <set>
 #include <string>
@@ -195,6 +196,12 @@ public:
     std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB/PDF files only
 
     LibraryStats stats();
+
+    // Every top-level item's key and raw data JSON, one at a time (identifier indexes: no records built).
+    void forEachItemData(const std::function<void(const std::string& key, const std::string& json)>&);
+    // SQLite's data_version for this connection: it changes when another connection commits to the
+    // database (never for this one's own writes), so a reader can tell the library changed under it.
+    int64_t dataVersion();
 
     // Small app state kept with the library (settings JSON, ...).
     std::string metaValue(const std::string& key);

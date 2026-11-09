@@ -147,6 +147,12 @@ std::shared_ptr<Work> startWork(PluginCtx&, JSValue* promise);
 // The host's network workers (zk.fetch), made at the first use; nullptr if the host has no makeHttp.
 PluginNet* netOf(PluginCtx&);
 
+// The host's settings (database path, engine environment, plugins folder).
+const PluginHostDeps& depsOf(PluginCtx&);
+// One slot per host for state shared by its plugins (all on the plugin thread): zk.library's
+// database connection and identifier index.
+std::shared_ptr<void>& librarySlot(PluginCtx&);
+
 // ---- The user -----------------------------------------------------------------------------
 
 // Posts `confirm` (kind Confirm; plugin id, name and request id are filled in) and pauses the
@@ -187,6 +193,8 @@ void installStorage(PluginCtx&);
 // zk.fetch (bindings_fetch.cpp; the guard and workers are plugin_http.h). Throws std::runtime_error
 // on an internal error.
 void installFetch(PluginCtx&);
+// zk.library (bindings_library.cpp). Throws std::runtime_error on an internal error.
+void installLibrary(PluginCtx&);
 // Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
 // are dropped and its storage closed (it reopens, empty, at the next use).
 void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);

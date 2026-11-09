@@ -13,6 +13,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "docs/document.h"
 #include "plugins/manifest.h"
 #include "update/version.h"
 
@@ -25,7 +26,11 @@ struct PluginCtx;
 }
 
 struct PluginHostDeps {
-    std::string pluginsDir, dbPath;
+    std::string pluginsDir;
+    // The library database. Plugins open their own connection (on the plugin thread), like the sync worker.
+    std::string dbPath;
+    // Where the engines find their data (zk.library.fullText opens its own engine).
+    EngineEnv engineEnv;
     // Names the plugin whose code is running (written before a plugin's code runs, removed when
     // the plugin thread goes idle). Empty: no marker.
     std::string crashMarker;

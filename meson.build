@@ -126,22 +126,6 @@ update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], includ
   dependencies : [net_dep, sqlite_dep, miniz_dep])
 
 
-# Plugin runtime (JavaScript): grows file by file as the plugin tasks land.
-plugins_lib = static_library('zk-plugins',
-  'src/plugins/js.cpp',
-  'src/plugins/manifest.cpp',
-  'src/plugins/state.cpp',
-  'src/plugins/plugin_log.cpp',
-  'src/plugins/host.cpp',
-  'src/plugins/bindings_core.cpp',
-  'src/plugins/bindings_storage.cpp',
-  'src/plugins/bindings_fetch.cpp',
-  'src/plugins/plugin_http.cpp',
-  include_directories : [inc, include_directories('third_party', is_system : true)],
-  dependencies : [core_dep, quickjs_dep])
-plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, quickjs_dep],
-  include_directories : include_directories('third_party', is_system : true))
-
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 
@@ -175,6 +159,24 @@ docs_lib = static_library('zk-docs', 'src/docs/engine_factory.cpp', 'src/docs/sh
   'src/docs/annotation_text.cpp', 'src/plugins/fulltext.cpp',
   include_directories : inc, dependencies : [core_dep, cxx.find_library('dl', required : false)])
 docs_dep = declare_dependency(link_with : docs_lib, dependencies : [core_dep, dependency('threads'), cxx.find_library('dl', required : false)])
+
+# Plugin runtime (JavaScript): grows file by file as the plugin tasks land.
+plugins_lib = static_library('zk-plugins',
+  'src/plugins/js.cpp',
+  'src/plugins/manifest.cpp',
+  'src/plugins/state.cpp',
+  'src/plugins/plugin_log.cpp',
+  'src/plugins/host.cpp',
+  'src/plugins/bindings_core.cpp',
+  'src/plugins/bindings_storage.cpp',
+  'src/plugins/bindings_fetch.cpp',
+  'src/plugins/bindings_library.cpp',
+  'src/plugins/identifiers.cpp',
+  'src/plugins/plugin_http.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [core_dep, store_dep, docs_dep, quickjs_dep])
+plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep],
+  include_directories : include_directories('third_party', is_system : true))
 
 screens_lib = static_library('zk-screens',
   'src/screens/home.cpp',

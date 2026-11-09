@@ -243,6 +243,8 @@ struct PluginHost::Impl {
     std::string markerId;  // what the crash marker says now ("" = no marker)
     // zk.fetch's workers: made on the plugin thread at the first fetch; shut down by stop().
     std::unique_ptr<plugins::PluginNet> net;
+    // zk.library's connection and identifier index, made at the first library call (bindings_library.cpp).
+    std::shared_ptr<void> library;
 
     explicit Impl(PluginHostDeps d) : deps(std::move(d)), state(deps.pluginsDir + "/.state.json") {
         webdavHost = deps.webdavHost;
@@ -452,6 +454,7 @@ struct PluginHost::Impl {
             installCore(p);
             installStorage(p);
             installFetch(p);
+            installLibrary(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -932,6 +935,10 @@ PluginNet* netOf(PluginCtx& p) {
         });
     return h.net.get();
 }
+
+const PluginHostDeps& depsOf(PluginCtx& p) { return p.host.deps; }
+
+std::shared_ptr<void>& librarySlot(PluginCtx& p) { return p.host.library; }
 
 CallInfo currentCall(PluginCtx& p) {
     auto it = p.run->calls.find(p.run->current);
