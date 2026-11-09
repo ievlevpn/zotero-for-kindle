@@ -8,6 +8,7 @@
 #include "app/plugin_background.h"
 #include "fake_lipc.h"
 #include "fake_plugins.h"
+#include "fn_http.h"
 #include "platform/power.h"
 #include "plugins/host.h"
 #include "plugins/state.h"
@@ -68,7 +69,8 @@ TEST_CASE("background: runs after a successful sync, not after a failed one") {
     FakeLipc lipc;
     KeepAwake awake(lipc);
     int runs = 0, cancels = 0;
-    BackgroundRound round(awake, [&] { ++runs; }, [&] { ++cancels; });
+    uint64_t last = 0;
+    BackgroundRound round(awake, [&](uint64_t r) { ++runs; last = r; }, [&] { ++cancels; });
 
     round.onSyncEvent(syncFinished(true), true, 0);
     CHECK(runs == 0);
@@ -89,10 +91,10 @@ TEST_CASE("background: runs after a successful sync, not after a failed one") {
     CHECK(lipc.sets == std::vector<std::string>{"com.lab126.powerd preventScreenSaver 1"});
 
     // The hold ends when the host reports the round done ...
-    round.done();
+    round.done(last);
     CHECK_FALSE(round.holding());
     CHECK(lipc.sets.back() == "com.lab126.powerd preventScreenSaver 0");
-    round.done();  // a stray report changes nothing
+    round.done(last);  // a stray report changes nothing
     CHECK(lipc.sets.size() == 2);
 
     // ... or at the cap (35 s) ...
@@ -110,8 +112,183 @@ TEST_CASE("background: runs after a successful sync, not after a failed one") {
     round.onSleep();
     CHECK_FALSE(round.holding());
     CHECK(cancels == 1);
-    round.onSleep();  // nothing running: nothing to cut
-    CHECK(cancels == 1);
+
+    // Tasks still running past the cap are cut short by sleep too.
+    round.onSyncEvent(syncFinished(false), true, 300'000);
+    round.tick(300'000 + BackgroundRound::kCapMs);
+    CHECK_FALSE(round.holding());
+    round.onSleep();
+    CHECK(cancels == 2);
+}
+
+TEST_CASE("background: no round while offline or when no task is due") {
+    FakeLipc lipc;
+    KeepAwake awake(lipc);
+    int runs = 0;
+    bool ready = false;
+    BackgroundRound round(awake, [&](uint64_t) { ++runs; }, [] {}, [&] { return ready; });
+    round.onSyncEvent(syncFinished(false), true, 0);
+    CHECK(runs == 0);
+    CHECK_FALSE(round.holding());
+    CHECK(lipc.sets.empty());
+    ready = true;
+    round.onSyncEvent(syncFinished(false), true, 0);
+    CHECK(runs == 1);
+    CHECK(round.holding());
+}
+
+TEST_CASE("background: nothing due: no hold and no plugin loaded") {
+    FakePlugins fp;
+    fp.add("nopermission", R"(console.log("loaded");)");  // enabled, but no background permission
+    fp.add("off", R"(zk.background(() => {});)", {"background"});  // has it, but turned off
+    Clocked clk;
+    PluginHost host(clk.deps(fp));
+    host.setEnabled("nopermission", true);
+    host.start();
+    FakeLipc lipc;
+    KeepAwake awake(lipc);
+    BackgroundRound round(awake, [&](uint64_t r) { host.runBackground(r); }, [] {}, [&] { return host.backgroundDue(); });
+    CHECK_FALSE(host.backgroundDue());
+    round.onSyncEvent(syncFinished(false), true, 0);
+    CHECK_FALSE(round.holding());
+    CHECK(lipc.sets.empty());
+    REQUIRE(host.waitIdle(3000));
+    CHECK_FALSE(contains(fp.log("nopermission"), "loaded"));
+    for (const auto& st : host.status()) CHECK_FALSE(st.loaded);
+
+    // A plugin with the permission that has never run counts as possibly due, once; after its run
+    // it is due again an hour later. A loaded plugin that registered no task is never due.
+    fp.add("b", R"(zk.background(() => {});)", {"background"});
+    fp.add("c", R"(console.log("no task");)", {"background"});
+    host.reload();
+    host.setEnabled("b", true);
+    host.setEnabled("c", true);
+    REQUIRE(host.waitIdle(3000));
+    CHECK(host.backgroundDue());
+    host.runBackground(1);
+    REQUIRE(host.waitIdle(3000));
+    CHECK_FALSE(host.backgroundDue());
+    clk.now += kHour;
+    CHECK(host.backgroundDue());
+}
+
+TEST_CASE("background: a late report of an earlier round doesn't end the next one") {
+    FakeLipc lipc;
+    KeepAwake awake(lipc);
+    std::vector<uint64_t> rounds;
+    BackgroundRound round(awake, [&](uint64_t r) { rounds.push_back(r); }, [] {});
+    round.onSyncEvent(syncFinished(false), true, 0);
+    REQUIRE(rounds.size() == 1);
+    round.done(rounds[0]);
+    CHECK_FALSE(round.holding());
+    round.onSyncEvent(syncFinished(false), true, 1000);
+    REQUIRE(rounds.size() == 2);
+    CHECK(rounds[1] != rounds[0]);
+    round.done(rounds[0]);  // round 1's report, arriving late
+    CHECK(round.holding());
+    round.done(rounds[1]);
+    CHECK_FALSE(round.holding());
+}
+
+TEST_CASE("background: the host's Done carries the round it answers") {
+    FakePlugins fp;
+    fp.add("a", R"(zk.background(() => {});)", {"background"});
+    Clocked clk;
+    PluginHost host(clk.deps(fp));
+    host.setEnabled("a", true);
+    host.start();
+    host.runBackground(7);
+    host.runBackground(8);  // nothing due: Done at once
+    REQUIRE(host.waitIdle(3000));
+    std::vector<uint64_t> ids;
+    for (const auto& e : drain(host))
+        if (e.kind == PluginHostEvent::Kind::BackgroundDone) ids.push_back(e.requestId);
+    REQUIRE(ids.size() == 2);
+    CHECK(ids[0] == 7);
+    CHECK(ids[1] == 8);
+}
+
+// A plugin whose task fetches; `answer` is what the network gives.
+struct FetchRig {
+    FakePlugins fp;
+    Clocked clk;
+    std::atomic<int> curlCode{7};  // couldn't connect
+    std::atomic<long> status{200};
+    PluginHostDeps deps(const std::string& body) {
+        fp.add("a", "zk.background(async () => {\n" + body + "\n});", {"background", "net:example.org"});
+        PluginHostDeps d = clk.deps(fp);
+        d.makeHttp = [this] {
+            return std::make_unique<FnHttp>([this](const HttpRequest&) {
+                HttpResponse r;
+                r.curlCode = curlCode;
+                r.status = status;
+                return r;
+            });
+        };
+        return d;
+    }
+};
+
+TEST_CASE("background: a task that dies of a lost connection is not counted and runs again") {
+    FetchRig rig;
+    PluginHost host(rig.deps(R"(console.log("try"); await zk.fetch("https://example.org/x"); console.log("fetched");)"));
+    host.setEnabled("a", true);
+    host.start();
+    host.runBackground(1);
+    REQUIRE(host.waitIdle(5000));
+    CHECK(count(rig.fp.log("a"), "try") == 1);
+    CHECK(failuresNow(rig.fp, "a") == 0);
+    {
+        PluginState s(rig.fp.path(".state.json"));
+        CHECK(s.lastBackgroundMs("a") == 0);
+    }
+    CHECK(ofKind(drain(host), PluginHostEvent::Kind::BackgroundDone) == 1);
+    // Many flaky hours never turn it off.
+    for (int i = 0; i < 4; ++i) {
+        host.runBackground(2 + i);
+        REQUIRE(host.waitIdle(5000));
+    }
+    CHECK(count(rig.fp.log("a"), "try") == 5);
+    CHECK(failuresNow(rig.fp, "a") == 0);
+
+    // The connection is back: it runs, and now the hour is used.
+    rig.curlCode = 0;
+    host.runBackground(10);
+    REQUIRE(host.waitIdle(5000));
+    CHECK(contains(rig.fp.log("a"), "fetched"));
+    PluginState s(rig.fp.path(".state.json"));
+    CHECK(s.lastBackgroundMs("a") == rig.clk.now.load());
+}
+
+TEST_CASE("background: an HTTP 500 the plugin throws still counts") {
+    FetchRig rig;
+    rig.curlCode = 0;
+    rig.status = 500;
+    PluginHost host(rig.deps(R"(const r = await zk.fetch("https://example.org/x"); if (r.status >= 500) throw new Error("HTTP " + r.status);)"));
+    host.setEnabled("a", true);
+    host.start();
+    host.runBackground(1);
+    REQUIRE(host.waitIdle(5000));
+    CHECK(failuresNow(rig.fp, "a") == 1);
+    PluginState s(rig.fp.path(".state.json"));
+    CHECK(s.lastBackgroundMs("a") == rig.clk.now.load());
+}
+
+TEST_CASE("background: a task awaiting something slow is stopped at its budget and counted") {
+    FakePlugins fp;
+    fp.add("a", R"(zk.background(async () => { await new Promise((r) => setTimeout(r, 60000)); });)", {"background"});
+    Clocked clk;
+    PluginHost host(clk.deps(fp));
+    host.setEnabled("a", true);
+    host.start();
+    host.runBackground(1);
+    REQUIRE(host.waitIdle(5000));
+    CHECK(failuresNow(fp, "a") == 1);
+    PluginState s(fp.path(".state.json"));
+    CHECK(s.lastBackgroundMs("a") == clk.now.load());
+    auto all = host.status();
+    REQUIRE(statusOf(all, "a"));
+    CHECK(contains(statusOf(all, "a")->errors.back(), "took longer than"));
 }
 
 TEST_CASE("background: at most once an hour per plugin") {

@@ -44,7 +44,7 @@ void PluginEvents::poll(App& app) {
                 app.sync().pushSoon();
                 break;
             case PluginHostEvent::Kind::BackgroundDone:
-                if (backgroundDone_) backgroundDone_();
+                if (backgroundDone_) backgroundDone_(ev.requestId);
                 break;
             case PluginHostEvent::Kind::Badge:
                 badges_[ev.pluginId] = ev.text;

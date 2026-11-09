@@ -26,24 +26,33 @@ class BackgroundRound {
 public:
     static constexpr int64_t kCapMs = 35'000;
 
-    // `run`: queue the host's background round; `cancel`: cut a running one short.
-    BackgroundRound(KeepAwake&, std::function<void()> run, std::function<void()> cancel);
+    // `run(round)`: queue the host's background round, numbered; `cancel`: cut a running one short;
+    // `ready`: is a round worth starting now (the app isn't known to be offline, and some
+    // plugin's task is due)? Without it, always.
+    BackgroundRound(KeepAwake&, std::function<void(uint64_t round)> run, std::function<void()> cancel,
+                    std::function<bool()> ready = {});
     ~BackgroundRound();
     BackgroundRound(const BackgroundRound&) = delete;
     BackgroundRound& operator=(const BackgroundRound&) = delete;
 
-    // Starts a round after a SyncFinished without error while `awake`; anything else is ignored.
-    // A round already under way is extended to a fresh cap, not doubled.
+    // Starts a round after a SyncFinished without error while `awake` and `ready`; anything else
+    // is ignored (no hold, nothing loaded). A round already under way is extended to a fresh cap,
+    // not doubled; each round has its own number.
     void onSyncEvent(const SyncEvent&, bool awake, int64_t nowMs);
-    void done();                 // the host reports the round done
+    // The host reports `round` done. A late report of an earlier round changes nothing.
+    void done(uint64_t round);
+    void abandon() { release(); }  // the host is gone: no report will come
     void tick(int64_t nowMs);    // releases at the cap
-    void onSleep();              // cancels a running round and releases
+    void onSleep();              // cuts running tasks short (also ones past the cap) and releases
     bool holding() const { return holding_; }
 
 private:
     void release();
     KeepAwake& keep_;
-    std::function<void()> run_, cancel_;
+    std::function<void(uint64_t)> run_;
+    std::function<void()> cancel_;
+    std::function<bool()> ready_;
+    uint64_t round_ = 0;
     bool holding_ = false;
     int64_t endsAt_ = 0;
 };

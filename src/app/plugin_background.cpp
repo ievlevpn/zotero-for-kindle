@@ -2,8 +2,9 @@
 
 namespace zk {
 
-BackgroundRound::BackgroundRound(KeepAwake& keep, std::function<void()> run, std::function<void()> cancel)
-    : keep_(keep), run_(std::move(run)), cancel_(std::move(cancel)) {}
+BackgroundRound::BackgroundRound(KeepAwake& keep, std::function<void(uint64_t)> run, std::function<void()> cancel,
+                                 std::function<bool()> ready)
+    : keep_(keep), run_(std::move(run)), cancel_(std::move(cancel)), ready_(std::move(ready)) {}
 
 BackgroundRound::~BackgroundRound() { release(); }
 
@@ -15,22 +16,24 @@ void BackgroundRound::release() {
 
 void BackgroundRound::onSyncEvent(const SyncEvent& e, bool awake, int64_t nowMs) {
     if (e.kind != SyncEvent::Kind::SyncFinished || e.error || !awake) return;
+    if (ready_ && !ready_()) return;
     if (!holding_) {
         keep_.acquire();
         holding_ = true;
     }
     endsAt_ = nowMs + kCapMs;
-    run_();
+    run_(++round_);
 }
 
-void BackgroundRound::done() { release(); }
+void BackgroundRound::done(uint64_t round) {
+    if (round == round_) release();
+}
 
 void BackgroundRound::tick(int64_t nowMs) {
     if (holding_ && nowMs >= endsAt_) release();
 }
 
 void BackgroundRound::onSleep() {
-    if (!holding_) return;
     cancel_();
     release();
 }

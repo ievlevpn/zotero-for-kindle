@@ -326,14 +326,18 @@ int main(int argc, char** argv) {
     // hour) inside a keep-awake hold of the screen thread's: see app/plugin_background.h.
     BackgroundRound backgroundRound(
         keepAwake,
-        [&] {
-            if (plugins && pluginsRunning) plugins->runBackground();
-            else backgroundRound.done();
+        [&](uint64_t round) {
+            if (plugins && pluginsRunning) plugins->runBackground(round);
+            else backgroundRound.done(round);
         },
         [&] {
             if (plugins && pluginsRunning) plugins->cancelBackground();
+        },
+        [&] {  // not while the app knows it is offline; not when no plugin has a task due
+            if (status.hasError() && status.error().kind == ErrorKind::NoWifi) return false;
+            return plugins && pluginsRunning && plugins->backgroundDue();
         });
-    pluginEvents.onBackgroundDone([&] { backgroundRound.done(); });
+    pluginEvents.onBackgroundDone([&](uint64_t round) { backgroundRound.done(round); });
     app.setPollHook([&] {
         pluginEvents.poll(app);
         backgroundRound.tick(app.nowMs());
@@ -387,7 +391,7 @@ int main(int argc, char** argv) {
                 if (service) service->stop();
                 app.setSync(nullSync);
                 pluginsRunning = false;
-                backgroundRound.done();
+                backgroundRound.abandon();
                 if (plugins) plugins->stop();
                 pluginEvents.rebind(nullptr, app);  // its questions go, unanswered
             },

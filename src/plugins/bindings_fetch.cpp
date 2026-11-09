@@ -65,6 +65,13 @@ Settle settleFor(FetchResult result) {
                 if (JS_IsException(le)) return le;
                 return JS_Throw(c, le);
             }
+            case FetchError::Kind::Network: {
+                // Marked, so a background task that dies of it isn't held against the plugin.
+                JS_ThrowPlainError(c, "%s", e.what());
+                JSValue ex = JS_GetException(c);
+                JS_SetPropertyStr(c, ex, "network", JS_TRUE);
+                return JS_Throw(c, ex);
+            }
             default: return JS_ThrowPlainError(c, "%s", e.what());
         }
     };

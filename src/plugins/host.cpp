@@ -240,6 +240,8 @@ struct PluginHost::Impl {
     std::set<std::string> turnOffs;    // three failures in a row: off at the next safe point
     std::set<std::string> restarts;    // stopped mid-run: a fresh runtime at the next safe point
     bool backgroundOpen = false;       // a runBackground() whose tasks haven't all ended: BackgroundDone is due
+    uint64_t backgroundRound = 0;      // the round that Done reports (the latest asked for)
+    std::set<std::string> withTask;    // loaded plugins that registered a background task (under mu)
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
     std::string markerId;  // what the crash marker says now ("" = no marker)
     // zk.fetch's workers: made on the plugin thread at the first fetch; shut down by stop().
@@ -298,7 +300,10 @@ struct PluginHost::Impl {
     void setLoaded(const std::string& id, bool on) {
         std::lock_guard<std::mutex> lock(mu);
         if (on) loadedIds.insert(id);
-        else loadedIds.erase(id);
+        else {
+            loadedIds.erase(id);
+            withTask.erase(id);
+        }
     }
 
     void setProblem(const std::string& id, std::string problem) {
@@ -678,7 +683,7 @@ struct PluginHost::Impl {
             for (const auto& [cid, c] : p->run->calls)
                 if (c.kind == CallKind::Background) return;
         backgroundOpen = false;
-        postEvent({PluginHostEvent::Kind::BackgroundDone, "", "", "", {}, 0, ""});
+        postEvent({PluginHostEvent::Kind::BackgroundDone, "", "", "", {}, backgroundRound, ""});
     }
 
     void succeed(PluginCtx& p, Call& c) {
@@ -691,6 +696,13 @@ struct PluginHost::Impl {
     void failCall(PluginCtx& p, Call& c, const js::JsError& e) {
         const std::string text = capitalised(c.what) + " failed: " + describeError(e);
         const bool quiet = c.kind == CallKind::Cleanup;
+        if (c.kind == CallKind::Background && e.network && !stopping) {
+            // The connection was lost under the task: not the plugin's fault, so not a failure and
+            // not a run for the hour; it is due again at the next round.
+            log(p.manifest.id, LogLevel::Warn, text + " (no connection: not counted, tried again next time)");
+            p.run->calls.erase(c.id);
+            return;
+        }
         if (c.kind == CallKind::Load) p.run->loadFailed = true;
         backgroundEnded(p, c.kind);
         p.run->calls.erase(c.id);
@@ -820,6 +832,8 @@ struct PluginHost::Impl {
         if (JS_IsObject(reason.raw())) {
             js::Value name = reason.get("name"), message = reason.get("message"), stack = reason.get("stack");
             if (JS_IsString(name.raw())) e.name = jsString(c, name.raw());
+            js::Value net = reason.get("network");
+            e.network = JS_IsBool(net.raw()) && JS_ToBool(c, net.raw()) == 1;
             e.message = message.isUndefined() ? jsString(c, reason.raw()) : jsString(c, message.raw());
             if (JS_IsString(stack.raw())) e.stack = jsString(c, stack.raw());
         } else {
@@ -902,9 +916,10 @@ struct PluginHost::Impl {
     // Runs each loaded plugin's background task that is due: not run, failed or stopped for time
     // in the last hour (a task cut short counts as not run). Exactly one BackgroundDone follows
     // once they have all ended (at once if none was due).
-    void runBackground() {
+    void runBackground(uint64_t round) {
         activate();
         backgroundOpen = true;
+        backgroundRound = round;
         std::vector<std::string> ids;
         for (const auto& [id, p] : loaded) ids.push_back(id);
         const int64_t now = deps.clock();
@@ -1143,7 +1158,11 @@ void clearTimer(PluginCtx& p, uint64_t id) { p.run->timers.erase(id); }
 
 void addHandler(PluginCtx& p, const std::string& event, js::Value handler) { p.run->handlers[event].push_back(std::move(handler)); }
 
-void setBackgroundTask(PluginCtx& p, js::Value task) { p.run->background = std::move(task); }
+void setBackgroundTask(PluginCtx& p, js::Value task) {
+    p.run->background = std::move(task);
+    std::lock_guard<std::mutex> lock(p.host.mu);
+    p.host.withTask.insert(p.manifest.id);
+}
 
 }  // namespace plugins
 
@@ -1204,8 +1223,22 @@ void PluginHost::dispatch(PluginEvent ev) {
     impl_->post([ev = std::move(ev)](Impl& h) { h.dispatch(ev); });
 }
 
-void PluginHost::runBackground() {
-    impl_->post([](Impl& h) { h.runBackground(); });
+void PluginHost::runBackground(uint64_t round) {
+    impl_->post([round](Impl& h) { h.runBackground(round); });
+}
+
+bool PluginHost::backgroundDue() const {
+    Impl& h = *impl_;
+    const int64_t now = h.deps.clock();
+    std::lock_guard<std::mutex> lock(h.mu);
+    for (const auto& f : h.folders) {
+        if (!f.manifest || !f.problem.empty() || !f.manifest->permissions.count(Permission::Background)) continue;
+        if (!h.state.enabled(f.dir)) continue;
+        if (h.loadedIds.count(f.dir) && !h.withTask.count(f.dir)) continue;  // loaded, and registered none
+        const int64_t last = h.state.lastBackgroundMs(f.dir);
+        if (last == 0 || last > now || now - last >= Impl::kBackgroundEveryMs) return true;
+    }
+    return false;
 }
 
 void PluginHost::cancelBackground() {
