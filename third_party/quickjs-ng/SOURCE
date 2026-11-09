@@ -1,0 +1,1 @@
+QuickJS-ng v0.18.0 (https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.18.0.tar.gz, sha256 28bcd89aa3683fd2a946537e5ce3f11cc46b5cbf3383c7561aaef3df5ff9f1dd; tag commit d7215b0ad3fc2c562e8317fd9bca058fd4863804): the engine library sources only (quickjs, libregexp, libunicode, dtoa and their headers), unchanged. No qjs, qjsc, quickjs-libc (std/os).

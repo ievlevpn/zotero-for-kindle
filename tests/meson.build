@@ -86,6 +86,7 @@ test_sources = files(
   'test_book_search.cpp',
   'test_reader_real.cpp',
   'test_review_fixes4.cpp',
+  'test_js.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
@@ -99,7 +100,7 @@ else
 endif
 
 zk_tests = executable('zk-tests', test_sources,
-  dependencies : [core_dep, ui_dep, screens_dep, doctest_dep, sqlite_dep, miniz_dep, md5_dep, net_dep, store_dep, zotero_dep, sync_dep, services_dep, app_dep, docs_dep, update_dep] + test_extra_deps)
+  dependencies : [core_dep, ui_dep, screens_dep, doctest_dep, sqlite_dep, miniz_dep, md5_dep, net_dep, store_dep, zotero_dep, sync_dep, services_dep, app_dep, docs_dep, update_dep, plugins_dep] + test_extra_deps)
 
 test('zk-tests', zk_tests, workdir : meson.project_source_root(),
   env : ['ZK_LIB_DIR=' + meson.project_build_root()])

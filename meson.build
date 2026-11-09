@@ -44,6 +44,16 @@ md5_lib = static_library('zk-md5', 'third_party/md5/md5.c', c_args : ['-w'])
 md5_dep = declare_dependency(link_with : md5_lib,
   include_directories : include_directories('third_party/md5', is_system : true))
 
+# QuickJS-ng (plugin runtime): engine sources only, no qjs/qjsc/std/os modules. C11, gnu mode.
+quickjs_lib = static_library('zk-quickjs',
+  'third_party/quickjs-ng/quickjs.c', 'third_party/quickjs-ng/libregexp.c',
+  'third_party/quickjs-ng/libunicode.c', 'third_party/quickjs-ng/dtoa.c',
+  c_args : ['-w', '-DQUICKJS_NG_BUILD', '-funsigned-char', '-D_GNU_SOURCE'],
+  override_options : ['c_std=gnu11'])
+quickjs_dep = declare_dependency(link_with : quickjs_lib,
+  include_directories : include_directories('third_party/quickjs-ng', is_system : true),
+  dependencies : [dependency('threads'), meson.get_compiler('c').find_library('m', required : false)])
+
 # libcurl: Homebrew/system on the desktop; on the Kindle our static curl 8.11 + mbedTLS 3.6
 # (tools/build-net-deps.sh), because the firmware's libcurl/OpenSSL are too old.
 if backend == 'kindle'
@@ -115,6 +125,14 @@ update_lib = static_library('zk-update',
 update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], include_directories : inc,
   dependencies : [net_dep, sqlite_dep, miniz_dep])
 
+
+# Plugin runtime (JavaScript): grows file by file as the plugin tasks land.
+plugins_lib = static_library('zk-plugins',
+  'src/plugins/js.cpp',
+  include_directories : [inc, include_directories('third_party', is_system : true)],
+  dependencies : [core_dep, quickjs_dep])
+plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, quickjs_dep],
+  include_directories : include_directories('third_party', is_system : true))
 
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]

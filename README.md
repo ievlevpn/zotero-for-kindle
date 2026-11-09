@@ -73,4 +73,6 @@ The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built
 AGPL-3.0-or-later. An unofficial project for personal use, with no affiliation to Zotero or Amazon.
 The Fast reading fonts are [Fast Font](https://github.com/chelaxian/Fast-Font) by Born2Root (MIT, see
 `assets/fonts-fast/`).
+The plugin runtime embeds [QuickJS-ng](https://github.com/quickjs-ng/quickjs) (MIT, see
+`third_party/quickjs-ng/LICENSE`).
 Zotero is a trademark of the Corporation for Digital Scholarship. Kindle is a trademark of Amazon.
