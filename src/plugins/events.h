@@ -15,6 +15,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -81,10 +82,26 @@ void itemMarked(PluginSink&, Library&, const std::string& itemKey, bool read);
 void bookEvent(PluginSink&, Library&, const char* event, const std::string& itemKey, const std::string& attachmentKey);
 
 // ---- Pulled by a sync (origin "zotero", userCaused false) ------------------------------------
+// Keys in the order they were added; add, erase and lookup are O(1) (a pull may bring tens of
+// thousands), the order is put together once when the events are built.
+class KeySet {
+public:
+    bool has(const std::string& k) const { return seq_.count(k) != 0; }
+    void add(const std::string& k) { seq_.emplace(k, next_++); }  // already there: keeps its place
+    void erase(const std::string& k) { seq_.erase(k); }
+    bool empty() const { return seq_.empty(); }
+    size_t size() const { return seq_.size(); }
+    std::vector<std::string> ordered() const;
+
+private:
+    std::unordered_map<std::string, size_t> seq_;
+    size_t next_ = 0;
+};
+
 struct Pulled {
-    std::vector<std::string> created, changed;  // annotation keys
+    KeySet created, changed;  // annotation keys
     std::vector<AnnotationRef> deleted;
-    std::vector<std::string> markedRead, markedUnread;  // item keys
+    KeySet markedRead, markedUnread;  // item keys
 
     // A key seen twice in one pull counts once: created and then changed is created; created and
     // then deleted never happened; changed and then deleted is deleted.
@@ -95,7 +112,7 @@ struct Pulled {
     bool empty() const;
 };
 // The events for `p`, annotations and items read from `lib` as they are after the pull, in this
-// order: highlightCreated, highlightChanged, highlightDeleted, itemMarkedRead, itemMarkedUnread.
+// order, each cut into events of at most kMaxListed entries built one after the other: highlightCreated, highlightChanged, highlightDeleted, itemMarkedRead, itemMarkedUnread.
 std::vector<PluginEvent> pulledEvents(Library& lib, const Pulled& p);
 
 }  // namespace plugins

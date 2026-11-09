@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 
 namespace zk {
@@ -77,6 +78,8 @@ private:
     Library& lib_;
     plugins::Pulled pulled_;  // this pull's changes for plugins; kept only when collecting_
     bool collecting_ = false;
+    bool annotationEvents_ = true;  // false while annotations are only caught up on
+    std::set<std::string> refetched_;  // Zotero's copies fetched again after a replaced file: not new to plugins
     std::vector<std::string> refetch_;  // annotations to download again at the end of this pull
 };
 

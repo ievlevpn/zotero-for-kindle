@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <map>
+#include <optional>
 
 #include "plugins/identifiers.h"
 #include "store/library.h"
@@ -36,19 +37,23 @@ bool downloaded(const AttachmentRecord& a) {
 
 PluginEvent kindle(const char* name, json payload) { return PluginEvent{name, std::move(payload), true}; }
 
-template <class T>
-void drop(std::vector<T>& v, const T& x) {
-    v.erase(std::remove(v.begin(), v.end(), x), v.end());
-}
-bool has(const std::vector<std::string>& v, const std::string& x) { return std::find(v.begin(), v.end(), x) != v.end(); }
-
-// Emits `list` as events of at most kMaxListed entries each.
-void batched(std::vector<PluginEvent>& out, const char* name, const char* field, const std::vector<json>& list) {
-    for (size_t i = 0; i < list.size(); i += kMaxListed) {
-        json arr = json::array();
-        for (size_t j = i; j < std::min(list.size(), i + kMaxListed); ++j) arr.push_back(list[j]);
+// Events of at most kMaxListed entries each from `source`; `build` makes an entry's JSON (nullopt:
+// leave it out). Each event is built on its own, so the whole list never exists twice.
+template <class Source, class Build>
+void batched(std::vector<PluginEvent>& out, const char* name, const char* field, const Source& source, Build build) {
+    json arr = json::array();
+    auto flush = [&] {
+        if (arr.empty()) return;
         out.push_back(PluginEvent{name, json{{"origin", "zotero"}, {field, std::move(arr)}}, false});
+        arr = json::array();
+    };
+    for (const auto& x : source) {
+        std::optional<json> j = build(x);
+        if (!j) continue;
+        arr.push_back(std::move(*j));
+        if (arr.size() >= kMaxListed) flush();
     }
+    flush();
 }
 
 }  // namespace
@@ -126,27 +131,38 @@ void bookEvent(PluginSink& sink, Library& lib, const char* event, const std::str
     sink.emit(kindle(event, json{{"origin", "kindle"}, {"item", itemJson(*it, lib.isRead(itemKey))}, {"attachment", attachmentJson(*att)}}));
 }
 
+std::vector<std::string> KeySet::ordered() const {
+    std::vector<std::pair<size_t, const std::string*>> by;
+    by.reserve(seq_.size());
+    for (const auto& [k, n] : seq_) by.emplace_back(n, &k);
+    std::sort(by.begin(), by.end());
+    std::vector<std::string> out;
+    out.reserve(by.size());
+    for (const auto& p : by) out.push_back(*p.second);
+    return out;
+}
+
 void Pulled::annotationCreated(const std::string& key) {
-    if (has(created, key)) return;
-    drop(changed, key);
-    created.push_back(key);
+    if (created.has(key)) return;
+    changed.erase(key);
+    created.add(key);
 }
 void Pulled::annotationChanged(const std::string& key) {
-    if (has(created, key) || has(changed, key)) return;
-    changed.push_back(key);
+    if (created.has(key)) return;
+    changed.add(key);
 }
 void Pulled::annotationRemoved(const AnnotationRef& r) {
-    const bool newHere = has(created, r.key);
-    drop(created, r.key);
-    drop(changed, r.key);
+    const bool newHere = created.has(r.key);
+    created.erase(r.key);
+    changed.erase(r.key);
     if (!newHere) deleted.push_back(r);
 }
 void Pulled::itemRead(const std::string& key, bool read) {
     // Marked one way and then back in one pull: no change at all.
-    auto& same = read ? markedRead : markedUnread;
-    auto& other = read ? markedUnread : markedRead;
-    if (has(other, key)) drop(other, key);
-    else if (!has(same, key)) same.push_back(key);
+    KeySet& same = read ? markedRead : markedUnread;
+    KeySet& other = read ? markedUnread : markedRead;
+    if (other.has(key)) other.erase(key);
+    else same.add(key);
 }
 bool Pulled::empty() const {
     return created.empty() && changed.empty() && deleted.empty() && markedRead.empty() && markedUnread.empty();
@@ -160,29 +176,22 @@ std::vector<PluginEvent> pulledEvents(Library& lib, const Pulled& p) {
         if (it == itemOfAttachment.end()) it = itemOfAttachment.emplace(attachmentKey, itemKeyOfAttachment(lib, attachmentKey)).first;
         return it->second;
     };
-    auto annotations = [&](const std::vector<std::string>& keys) {
-        std::vector<json> list;
-        for (const std::string& key : keys) {
-            auto a = lib.annotation(key);
-            if (!a || a->deletedHere || !a->conflictOf.empty() || a->conflict) continue;
-            list.push_back(annotationJson(*a, itemKeyOf(a->parentKey)));
-        }
-        return list;
+    auto annotation = [&](const std::string& key) -> std::optional<json> {
+        auto a = lib.annotation(key);
+        if (!a || a->deletedHere || !a->conflictOf.empty() || a->conflict) return std::nullopt;
+        return annotationJson(*a, itemKeyOf(a->parentKey));
     };
-    batched(out, "highlightCreated", "annotations", annotations(p.created));
-    batched(out, "highlightChanged", "annotations", annotations(p.changed));
-    std::vector<json> gone;
-    for (const AnnotationRef& r : p.deleted)
-        gone.push_back(json{{"key", r.key}, {"attachmentKey", r.attachmentKey}, {"itemKey", r.itemKey}});
-    batched(out, "highlightDeleted", "annotations", gone);
-    auto items = [&](const std::vector<std::string>& keys) {
-        std::vector<json> list;
-        for (const std::string& key : keys)
-            if (auto it = lib.item(key)) list.push_back(itemJson(*it, lib.isRead(key)));
-        return list;
+    batched(out, "highlightCreated", "annotations", p.created.ordered(), annotation);
+    batched(out, "highlightChanged", "annotations", p.changed.ordered(), annotation);
+    batched(out, "highlightDeleted", "annotations", p.deleted, [](const AnnotationRef& r) -> std::optional<json> {
+        return json{{"key", r.key}, {"attachmentKey", r.attachmentKey}, {"itemKey", r.itemKey}};
+    });
+    auto item = [&](const std::string& key) -> std::optional<json> {
+        if (auto it = lib.item(key)) return itemJson(*it, lib.isRead(key));
+        return std::nullopt;
     };
-    batched(out, "itemMarkedRead", "items", items(p.markedRead));
-    batched(out, "itemMarkedUnread", "items", items(p.markedUnread));
+    batched(out, "itemMarkedRead", "items", p.markedRead.ordered(), item);
+    batched(out, "itemMarkedUnread", "items", p.markedUnread.ordered(), item);
     return out;
 }
 

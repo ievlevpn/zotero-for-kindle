@@ -88,6 +88,8 @@ SyncEngine::SyncEngine(ZoteroApi& api, Library& lib) : api_(api), lib_(lib) {}
 SyncReport SyncEngine::pull(std::function<void(const SyncProgress&)> progress) {
     SyncReport rep;
     pulled_ = {};
+    refetched_.clear();
+    annotationEvents_ = true;
     collecting_ = false;
     try {
         pullInto(rep, progress ? progress : [](const SyncProgress&) {});
@@ -134,6 +136,9 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         std::vector<std::string> changed;
         for (const auto& [key, version] : listing->versions)
             if (lib_.objectVersion(key) < version) changed.push_back(key);
+        // Annotations that are only being caught up on (the "Keep all highlights offline" setting was
+        // just switched on, or its full download is behind) are not news: no events for them.
+        annotationEvents_ = !(std::string(phase.name) == "annotations" && allOffline && lib_.annotationsVersion() < from);
         std::function<bool(const json&)> accept;
         if (std::string(phase.name) == "annotations" && !allOffline)
             accept = [&](const json& obj) {
@@ -141,7 +146,9 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
                 const std::string parent = d.is_object() ? d.value("parentItem", "") : "";
                 return lib_.isTracked(parent) || lib_.annotation(obj.value("key", "")).has_value();
             };
-        if (!fetchAndApply(kind, phase.name, changed, rep, progress, accept)) return;
+        const bool done = fetchAndApply(kind, phase.name, changed, rep, progress, accept);
+        annotationEvents_ = true;
+        if (!done) return;
     }
 
     if (lib_.metaValue("notesBackfill") == "1") {
@@ -161,6 +168,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
         std::vector<std::string> keys;
         keys.swap(refetch_);
+        refetched_.insert(keys.begin(), keys.end());
         if (!fetchAndApply("items", "annotations", keys, rep, progress)) return;
     }
     auto gone = api_.deleted(from, &err);
@@ -354,7 +362,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                 if (local->deletedHere) {
                     lib_.upsertAnnotation(incoming);
                     ++rep.annotations;
-                    if (collecting_) pulled_.annotationCreated(key);  // it was hidden here, and is back
+                    if (collecting_ && annotationEvents_) pulled_.annotationCreated(key);  // it was hidden here, and is back
                     break;
                 }
                 if (local->createdHere && local->dirty && local->version == 0) {
@@ -384,11 +392,18 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
                     break;  // our unsent edit is newer than what the server listed
                 }
             }
-            const bool isNew = !lib_.annotation(key).has_value();
+            const std::optional<AnnotationRecord> before = lib_.annotation(key);
             lib_.upsertAnnotation(incoming);
             ++rep.annotations;
-            if (collecting_ && incoming.conflictOf.empty() && !incoming.conflict)
-                isNew ? pulled_.annotationCreated(key) : pulled_.annotationChanged(key);
+            // Told to plugins: new here, or different from what plugins last saw. Not Zotero's copy
+            // fetched again after a replaced file (they knew it), nor one listed again unchanged.
+            if (collecting_ && annotationEvents_ && incoming.conflictOf.empty() && !incoming.conflict) {
+                if (!before) {
+                    if (!refetched_.count(key)) pulled_.annotationCreated(key);
+                } else if (!sameContent(*before, incoming) || before->pageLabel != incoming.pageLabel) {
+                    pulled_.annotationChanged(key);
+                }
+            }
             break;
         }
         case ObjectKind::Note:

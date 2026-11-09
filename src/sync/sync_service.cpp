@@ -241,8 +241,8 @@ void SyncService::run() {
                     if (!rep.error && !stopping_) pushChanges(w);  // e.g. conflicts re-applied meanwhile
                     SyncEvent done;
                     done.kind = SyncEvent::Kind::SyncFinished;
-                    done.report = rep;
                     done.error = rep.error;
+                    done.report = std::move(rep);  // may carry thousands of plugin events: not copied
                     if (!stopping_) emit(std::move(done));
                     break;
                 }
@@ -337,8 +337,8 @@ void SyncService::pushChanges(Worker& w) {
     SyncReport rep = w.engine->push();
     SyncEvent done;
     done.kind = SyncEvent::Kind::PushFinished;
-    done.report = rep;
     done.error = rep.error;
+    done.report = std::move(rep);
     if (!stopping_) emit(std::move(done));
 }
 

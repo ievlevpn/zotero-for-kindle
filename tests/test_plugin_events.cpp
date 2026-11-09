@@ -10,6 +10,8 @@
 #include "fixture_library.h"
 #include "screens/annotation_bar.h"
 #include "screens/item_sheet.h"
+#include "screens/notes.h"
+#include "ui/widgets.h"
 #include "screens/reader.h"
 #include "store/db.h"
 #include "sync/sync_engine.h"
@@ -94,7 +96,7 @@ TEST_CASE("events: a highlight made in the reader emits highlightCreated with or
     CHECK(rig.lib.annotation(key).has_value());
 }
 
-TEST_CASE("events: bookOpened carries the item and the file when a book opens") {
+TEST_CASE("events: bookOpened carries the item and the file once the book has opened") {
     Db db = Db::open(":memory:");
     Library lib(db);
     fillFixtureLibrary(lib, 10);
@@ -103,6 +105,12 @@ TEST_CASE("events: bookOpened carries the item and the file when a book opens") 
         return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
     }, 6);
     r.onShow(nav);
+    CHECK(nav.pluginSink.named("bookOpened").empty());  // showing is not opening
+    for (int i = 0; i < 400 && !r.ready(); ++i) {
+        r.onTick(nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(r.ready());
     const auto opened = nav.pluginSink.named("bookOpened");
     REQUIRE(opened.size() == 1);
     CHECK(opened[0].userCaused);
@@ -111,7 +119,29 @@ TEST_CASE("events: bookOpened carries the item and the file when a book opens") 
     CHECK(opened[0].payload["attachment"]["key"] == "EP000003");
     CHECK(opened[0].payload["attachment"]["contentType"] == "application/epub+zip");
     r.onShow(nav);  // back from a panel: not opened again
+    r.onTick(nav);
     CHECK(nav.pluginSink.named("bookOpened").size() == 1);
+}
+
+TEST_CASE("events: a book that fails to open emits no bookOpened") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    fillFixtureLibrary(lib, 10);
+    FakeNav nav(lib);
+    ReaderScreen r(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) {
+            auto e = std::make_unique<FakeEngine>();
+            e->failOpen = true;
+            return std::unique_ptr<DocumentEngine>(std::move(e));
+        });
+    }, 6);
+    r.onShow(nav);
+    for (int i = 0; i < 200 && !r.error(); ++i) {
+        r.onTick(nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(r.error());
+    CHECK(nav.pluginSink.named("bookOpened").empty());
 }
 
 TEST_CASE("events: editing and deleting a highlight emit highlightChanged and highlightDeleted") {
@@ -315,4 +345,252 @@ TEST_CASE("events: an annotation created and deleted within one pull is never to
     CHECK(p.changed.empty());
     REQUIRE(p.deleted.size() == 1);
     CHECK(p.deleted[0].key == "B");
+}
+
+// ---- Ink, Notes ---------------------------------------------------------------------------
+
+namespace {
+PenEvent pen(PenEvent::Type type, Point p, bool eraser = false) {
+    PenEvent e;
+    e.type = type;
+    e.pos = p;
+    e.eraser = eraser;
+    return e;
+}
+}  // namespace
+
+TEST_CASE("events: ink saved emits highlightCreated; erasing a stroke emits highlightChanged, the last one highlightDeleted") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    fillFixtureLibrary(lib, 10);
+    FakeNav nav(lib);
+    ReaderScreen r(*lib.rowFor("IT000003"), "book.pdf", DocType::Pdf, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+    }, 6);
+    nav.visible = &r;
+    r.onShow(nav);
+    auto settle = [&](const std::function<bool()>& done) {
+        for (int i = 0; i < 400; ++i) {
+            r.onTick(nav);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    };
+    auto stroke = [&](std::initializer_list<Point> pts, bool eraser = false) {
+        auto it = pts.begin();
+        r.onPen(pen(PenEvent::Type::Near, *it, eraser), nav);
+        r.onPen(pen(PenEvent::Type::Down, *it, eraser), nav);
+        for (++it; it != pts.end(); ++it) r.onPen(pen(PenEvent::Type::Move, *it, eraser), nav);
+        r.onPen(pen(PenEvent::Type::Up, *(pts.end() - 1), eraser), nav);
+    };
+    REQUIRE(settle([&] { return r.ready(); }));
+    stroke({{300, 400}, {380, 400}});
+    stroke({{300, 900}, {380, 900}});
+    nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(settle([&] { return !nav.pluginSink.named("highlightCreated").empty(); }));
+    const auto made = nav.pluginSink.named("highlightCreated");
+    REQUIRE(made.size() == 1);
+    CHECK(made[0].userCaused);
+    CHECK(made[0].payload["annotations"][0]["type"] == "ink");
+    const std::string key = made[0].payload["annotations"][0]["key"];
+    REQUIRE(settle([&] { return !r.highlights().empty(); }));
+    stroke({{340, 380}, {340, 420}}, /*eraser*/ true);  // one of the two strokes
+    const auto changed = nav.pluginSink.named("highlightChanged");
+    REQUIRE(changed.size() == 1);
+    CHECK(changed[0].payload["annotations"][0]["key"] == key);
+    CHECK(nav.pluginSink.named("highlightDeleted").empty());
+    stroke({{340, 880}, {340, 920}}, /*eraser*/ true);  // the other
+    const auto gone = nav.pluginSink.named("highlightDeleted");
+    REQUIRE(gone.size() == 1);
+    CHECK(gone[0].payload["annotations"][0]["key"] == key);
+    CHECK(gone[0].userCaused);
+}
+
+TEST_CASE("events: re-applying a conflict in Notes emits highlightChanged (original there) or highlightCreated") {
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    NotesScreen notes;
+    addFontDir("assets/fonts-device");
+    ItemRecord item;
+    item.key = "BOOK0001";
+    item.itemType = "book";
+    item.title = "A book with conflicts";
+    lib.upsertItem(item);
+    AttachmentRecord att;
+    att.key = "EPUB0001";
+    att.parentKey = "BOOK0001";
+    att.contentType = "application/epub+zip";
+    lib.upsertAttachment(att);
+    auto make = [&](const std::string& key, const std::string& text, const std::string& when) {
+        AnnotationRecord a;
+        a.key = key;
+        a.parentKey = "EPUB0001";
+        a.type = "highlight";
+        a.text = text;
+        a.color = "#ffd400";
+        a.dateModified = when;
+        return a;
+    };
+    AnnotationRecord original = make("ORIG0001", "zotero's version", "2026-11-07T09:00:00Z");
+    original.version = 4;
+    lib.upsertAnnotation(original);
+    AnnotationRecord c1 = make("CONFLIC1", "my version", "2026-11-07T10:00:00Z");
+    c1.conflict = true;
+    c1.createdHere = true;
+    c1.conflictOf = "ORIG0001";
+    lib.upsertAnnotation(c1);
+    AnnotationRecord c2 = make("CONFLIC2", "orphan version", "2026-11-07T11:00:00Z");
+    c2.conflict = true;
+    c2.createdHere = true;
+    lib.upsertAnnotation(c2);
+    nav.visible = &notes;
+    notes.onShow(nav);
+    auto tapReapply = [&](const std::string& key) {
+        auto rects = notes.lineRects();
+        for (size_t i = 0; i < notes.page().size(); ++i)
+            if (!notes.page()[i].header && notes.page()[i].note.annotation.key == key) {
+                notes.onGesture(tapAt(noteRowButtonRect(rects[i], 0).center()), nav);
+                return true;
+            }
+        return false;
+    };
+    REQUIRE(tapReapply("CONFLIC1"));
+    const auto changed = nav.pluginSink.named("highlightChanged");
+    REQUIRE(changed.size() == 1);
+    CHECK(changed[0].userCaused);
+    CHECK(changed[0].payload["annotations"][0]["key"] == "ORIG0001");
+    CHECK(changed[0].payload["annotations"][0]["text"] == "my version");
+    REQUIRE(tapReapply("CONFLIC2"));
+    const auto created = nav.pluginSink.named("highlightCreated");
+    REQUIRE(created.size() == 1);
+    CHECK(created[0].payload["annotations"][0]["text"] == "orphan version");
+}
+
+// ---- Sync: no event for what plugins already know ------------------------------------------
+
+namespace {
+AnnotationRecord kindleHighlight(const std::string& key) {
+    AnnotationRecord a;
+    a.key = key;
+    a.parentKey = "EPUB0001";
+    a.type = "highlight";
+    a.text = "kindle highlight";
+    a.color = "#ffd400";
+    a.sortIndex = "00001|00000099";
+    a.position = R"j({"type":"FragmentSelector","value":"epubcfi(/6/2!/4/2/1:0)"})j";
+    a.createdHere = true;
+    a.dirty = true;
+    return a;
+}
+}  // namespace
+
+TEST_CASE("events: a Kindle highlight pushed and pulled back emits no zotero event, also when the answer was lost") {
+    SyncRig rig;
+    rig.lib.upsertAnnotation(kindleHighlight("LOCAL001"));
+    REQUIRE_FALSE(rig.engine.push().error);
+    CHECK(rig.engine.pull(nullptr).pluginEvents.empty());
+
+    rig.lib.upsertAnnotation(kindleHighlight("LOCAL002"));
+    rig.server.loseNextWriteResponse = true;
+    REQUIRE(rig.engine.push().error);  // applied on the server, answer lost
+    const SyncReport again = rig.engine.push();  // 412, pulls our own write, nothing left to send
+    REQUIRE_FALSE(again.error);
+    CHECK(again.pluginEvents.empty());
+    const SyncReport later = rig.engine.pull(nullptr);
+    CHECK(later.pluginEvents.empty());
+}
+
+TEST_CASE("events: a push that has to pull first reports what that pull brought in") {
+    SyncRig rig;
+    rig.lib.upsertAnnotation(kindleHighlight("LOCAL001"));
+    rig.server.put(FakeZotero::annotation("DESKTOP1", "EPUB0001", "made on the desktop meanwhile"));
+    const SyncReport rep = rig.engine.push();  // 412, then the pull, then the push
+    REQUIRE_FALSE(rep.error);
+    REQUIRE(rep.pluginEvents.size() == 1);
+    CHECK(rep.pluginEvents[0].name == "highlightCreated");
+    CHECK(rep.pluginEvents[0].payload["origin"] == "zotero");
+    CHECK(rep.pluginEvents[0].payload["annotations"][0]["key"] == "DESKTOP1");
+    SyncEvent done;
+    done.kind = SyncEvent::Kind::PushFinished;
+    done.report = rep;
+    RecordingSink sink;
+    forwardSyncToPlugins(done, sink);
+    CHECK(sink.events.size() == 1);  // PushFinished is not a sync: no syncFinished
+}
+
+TEST_CASE("events: an annotation listed again with the same content is not a highlightChanged") {
+    SyncRig rig;
+    rig.server.put(FakeZotero::annotation("ANNO0001", "EPUB0001", "same"));
+    REQUIRE_FALSE(rig.engine.pull(nullptr).error);
+    rig.server.put(FakeZotero::annotation("ANNO0001", "EPUB0001", "same"));  // a new version, nothing different
+    CHECK(rig.engine.pull(nullptr).pluginEvents.empty());
+    rig.server.put(FakeZotero::annotation("ANNO0001", "EPUB0001", "different"));
+    const SyncReport rep = rig.engine.pull(nullptr);
+    REQUIRE(rep.pluginEvents.size() == 1);
+    CHECK(rep.pluginEvents[0].name == "highlightChanged");
+}
+
+TEST_CASE("events: Zotero's copy fetched again after the file was replaced is not a highlightCreated") {
+    SyncRig rig;
+    rig.server.put(FakeZotero::annotation("ANNO0001", "EPUB0001", "one"));
+    REQUIRE_FALSE(rig.engine.pull(nullptr).error);
+    AnnotationRecord edit = *rig.lib.annotation("ANNO0001");
+    edit.comment = "my edit";
+    rig.lib.editAnnotation(edit);  // an unsent Kindle edit of an annotation on Zotero
+    rig.server.put(FakeZotero::attachment("EPUB0001", "BOOK0001", "md5-two"));  // the file was replaced
+    const SyncReport rep = rig.engine.pull(nullptr);
+    REQUIRE_FALSE(rep.error);
+    CHECK(rep.conflicts == 1);
+    for (const auto& e : rep.pluginEvents) CHECK(e.name != "highlightCreated");
+}
+
+TEST_CASE("events: catching up on annotations after \"Keep all highlights offline\" is switched on tells nothing") {
+    FakeZotero server;
+    ZoteroApi api{server, 1, "k3y"};
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    api.setSleeper([](int) {});
+    server.put(FakeZotero::item("BOOK0001", "A book"));
+    server.put(FakeZotero::attachment("EPUB0001", "BOOK0001"));
+    SyncEngine engine(api, lib);
+    REQUIRE_FALSE(engine.pull(nullptr).error);  // first sync, the setting off
+    for (const char* k : {"OLD00001", "OLD00002"}) server.put(FakeZotero::annotation(k, "EPUB0001", "old"));
+    lib.setAllAnnotationsOffline(true);
+    const SyncReport catchUp = engine.pull(nullptr);
+    REQUIRE_FALSE(catchUp.error);
+    CHECK(lib.annotationsFor("EPUB0001").size() == 2);  // downloaded...
+    CHECK(catchUp.pluginEvents.empty());                // ...but not news
+    server.put(FakeZotero::annotation("NEW00001", "EPUB0001", "genuinely new"));
+    const SyncReport next = engine.pull(nullptr);
+    REQUIRE(next.pluginEvents.size() == 1);
+    CHECK(next.pluginEvents[0].name == "highlightCreated");
+    CHECK(next.pluginEvents[0].payload["annotations"].size() == 1);
+    CHECK(next.pluginEvents[0].payload["annotations"][0]["key"] == "NEW00001");
+    // Off and on again: the download is caught up on again, silently.
+    engine.setAllHighlightsOffline(false);
+    lib.setAllAnnotationsOffline(false);
+    lib.setAllAnnotationsOffline(true);
+    server.put(FakeZotero::item("BOOK0002", "Another"));
+    const SyncReport again = engine.pull(nullptr);
+    for (const auto& e : again.pluginEvents) CHECK(e.name != "highlightCreated");
+}
+
+TEST_CASE("events: collecting 20,000 pulled annotations is fast") {
+    plugins::Pulled p;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < 20000; ++i) {
+        const std::string key = "A" + std::to_string(i);
+        p.annotationCreated(key);
+        if (i % 3 == 0) p.annotationChanged(key);
+        if (i % 5 == 0) p.annotationRemoved({key, "att", "item"});
+    }
+    for (int i = 20000; i < 30000; ++i) p.annotationChanged("A" + std::to_string(i));
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(ms < 500);
+    CHECK(p.created.size() == 16000);
+    CHECK(p.changed.size() == 10000);
+    const auto order = p.created.ordered();
+    CHECK(order.front() == "A1");  // pulled order kept
 }

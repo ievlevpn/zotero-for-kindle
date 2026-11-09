@@ -153,6 +153,7 @@ private:
     void onSelection(const RenderEvent&, Nav&);
     void onBarTap(Point, Nav&);
     void showBar(Nav&);
+    bool openedSent_ = false;    // bookOpened went to the plugins already
     bool finishedSent_ = false;  // bookFinished went to the plugins already
     void saveSelection(const std::string& type, const std::string& comment, Nav&);
     void closeSelection(Nav&);

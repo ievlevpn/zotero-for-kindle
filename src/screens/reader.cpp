@@ -289,7 +289,6 @@ void ReaderScreen::onShow(Nav& nav) {
     }
     worker_ = makeWorker_();
     worker_->open(path_, type_, layout_, start, zoteroStart);
-    plugins::bookEvent(nav.plugins(), nav.library(), "bookOpened", row_.key, row_.attachmentKey);
     marks_ = nav.library().bookmarks(row_.attachmentKey);
     sendBookmarks();
     if (openAt_) {
@@ -315,6 +314,10 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 pageCount_ = e.pageCount;
                 views_ = std::max(1, e.viewsPerPage);
                 toc_ = e.toc;
+                if (!openedSent_) {  // the book really opened (not again after a re-layout)
+                    openedSent_ = true;
+                    plugins::bookEvent(nav.plugins(), nav.library(), "bookOpened", row_.key, row_.attachmentKey);
+                }
                 break;
             case RenderEvent::Kind::Error:
                 error_ = e.error;
