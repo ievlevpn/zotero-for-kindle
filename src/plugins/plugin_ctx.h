@@ -5,7 +5,9 @@
 //
 // Adding a binding (Tasks 6, 7, 10, 13–16):
 //  1. Write `void installStorage(PluginCtx&)` in its own bindings_*.cpp, adding members to `p.zk`
-//     with defineFunction(); declare it below next to installCore().
+//     with defineFunction<native>() — the one way to define a native: it catches every C++
+//     exception at the boundary (QuickJS's C frames can't unwind one). Declare it below next to
+//     installCore().
 //  2. Call it from installBindings() in host.cpp (the list of built-in installers, in order).
 //  3. Native functions find their plugin with ctxOf(cx). Check permissions first with
 //     requirePermission(); it throws the plugin-facing PermissionError. Inside a native, call
@@ -23,6 +25,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <string>
@@ -62,8 +65,29 @@ struct PluginCtx {
 // The plugin a native function was called for.
 PluginCtx& ctxOf(JSContext*);
 
-// obj[name] = a native function.
-void defineFunction(JSContext*, JSValueConst obj, const char* name, JSCFunction*, int length);
+// What a native's C++ exception becomes in JS: std::bad_alloc the memory limit (an out-of-memory
+// error the host counts as a memory stop), anything else an Error("The app failed doing this: …").
+JSValue nativeFailed(JSContext*, const char* what, bool outOfMemory) noexcept;
+
+// Every native runs inside this: no C++ exception ever crosses into QuickJS.
+template <JSCFunction* F>
+JSValue guardedNative(JSContext* c, JSValueConst self, int argc, JSValueConst* argv) noexcept {
+    try {
+        return F(c, self, argc, argv);
+    } catch (const std::bad_alloc&) {
+        return nativeFailed(c, "out of memory", true);
+    } catch (const std::exception& e) {
+        return nativeFailed(c, e.what(), false);
+    } catch (...) {
+        return nativeFailed(c, "an unknown error", false);
+    }
+}
+
+// obj[name] = native F, behind guardedNative.
+template <JSCFunction* F>
+void defineFunction(JSContext* c, JSValueConst obj, const char* name, int length) {
+    JS_SetPropertyStr(c, obj, name, JS_NewCFunction(c, guardedNative<F>, name, length));
+}
 
 // ---- Permissions and errors ---------------------------------------------------------------
 
@@ -121,6 +145,7 @@ std::shared_ptr<Work> startWork(PluginCtx&, JSValue* promise);
 // Posts `confirm` (kind Confirm; plugin id, name and request id are filled in) and pauses the
 // running call's budget until the answer. `answered` runs on the plugin thread, outside any JS:
 // settle a Work from it. Dropped (never called) if the call is stopped or the plugin unloaded.
+// Returns 0 (nothing posted, `answered` never called) when asked from a stopped call's code.
 uint64_t askUser(PluginCtx&, PluginHostEvent confirm, std::function<void(bool yes)> answered);
 // Any other event for the screen (plugin id and name filled in).
 void post(PluginCtx&, PluginHostEvent);
@@ -130,7 +155,8 @@ void post(PluginCtx&, PluginHostEvent);
 // A line in the plugin's log (and the log sink).
 void log(PluginCtx&, LogLevel, const std::string& text);
 // setTimeout/clearTimeout: a timer belongs to the running call (dropped if that call is stopped;
-// run in its budget while it is running, else as a call of its own with the event budget).
+// run in its budget while it is running, else as a call of its own with the event budget). A
+// timer set by a stopped call's cleanup code belongs to no call: it runs as a call of its own.
 uint64_t addTimer(PluginCtx&, js::Value callback, int64_t delayMs);
 void clearTimer(PluginCtx&, uint64_t id);
 // zk.on / zk.background registrations.

@@ -61,7 +61,9 @@ public:
     static int64_t nowMs();  // the clock the deadline is compared with
     bool deadlineHit() const { return hit_; }
     bool memoryLimitHit() const { return oom_; }
-    bool poolLimitHit() const { return poolHit_; }  // the refusal was the pool's (memoryLimitHit too)
+    bool poolLimitHit() const { return poolHit_; }
+    // The host ran out of memory serving a script (a native's std::bad_alloc): counts as the limit.
+    void noteOutOfMemory() { oom_ = true; }  // the refusal was the pool's (memoryLimitHit too)
     // Forget the limit events seen so far (the Context does this at the start of each operation).
     void clearLimitEvents() { hit_ = false; oom_ = false; poolHit_ = false; }
 

@@ -22,8 +22,11 @@
 // (fresh runtime, main.js again): quickjs-ng leaves an interrupted async function's promise
 // pending forever, which would hang anything chained on it.
 //
-// Every task, timer pass and budget check runs behind an exception barrier; a C++ exception inside
-// an entry ends that call without counting it (the app's fault) and is logged.
+// No C++ exception crosses into QuickJS: every native is defined through guardedNative
+// (plugin_ctx.h), which turns std::bad_alloc into the memory limit and anything else into a JS
+// Error. Host code around the natives that still throws into an entry poisons it: the call is
+// dropped with its timers, questions and work, counted, and the plugin restarts. Every task, timer
+// pass and budget check also runs behind an exception barrier that logs to the app log.
 //
 // Crash marker. While a plugin's code runs, <crashMarker> holds its id (written and synced before
 // its entry, rewritten only when another plugin's code runs next, removed before the thread
@@ -575,12 +578,10 @@ struct PluginHost::Impl {
         }
         auto err = p.cx.takeError();
         if (stopping) return;
-        if (!internal.empty()) {  // the app's fault, not the plugin's: end the call uncounted
-            if ((c = findCall(p, callId))) {
-                log(p.manifest.id, LogLevel::Error, "The app hit an internal error while running " + c->what + ": " + internal);
-                p.run->calls.erase(callId);
-            }
-            err.reset();
+        if (!internal.empty()) {
+            poisoned(p, callId, internal);
+            p.run->unhandled.clear();  // no more JS on this runtime: it is replaced at the next safe point
+            return;
         }
         c = findCall(p, callId);
         // Quiet: a cleanup's rejections are the stop already reported; a failed load's module
@@ -679,6 +680,30 @@ struct PluginHost::Impl {
         // plugins, turning this one off) runs in between.
         if (doomed) inbox->post([serial = run.serial](Impl& h) { h.rejectDoomed(serial); });
         if (interrupted && kind != CallKind::Load) restarts.insert(p.manifest.id);
+    }
+
+    // A C++ exception escaped into the entry (natives can't throw, see guardedNative; this is host
+    // code around them). The runtime's state is no longer trusted: the call is dropped with its
+    // timers, questions and work, counted, and the plugin restarts (a load just fails).
+    void poisoned(PluginCtx& p, uint64_t callId, const std::string& internal) {
+        Call* c = findCall(p, callId);
+        const std::string what = c ? c->what : "the plugin's code";
+        const bool load = c && c->kind == CallKind::Load;
+        if (load) p.run->loadFailed = true;
+        p.run->calls.erase(callId);
+        auto& run = *p.run;
+        for (auto it = run.timers.begin(); it != run.timers.end();) it = it->second.owner == callId ? run.timers.erase(it) : std::next(it);
+        for (auto it = run.asks.begin(); it != run.asks.end();) it = it->second.owner == callId ? run.asks.erase(it) : std::next(it);
+        for (auto it = run.work.begin(); it != run.work.end();) {
+            if (it->second.owner != callId) {
+                ++it;
+                continue;
+            }
+            it->second.cancel->store(true);
+            it = run.work.erase(it);
+        }
+        recordFailure(p.manifest.id, "Stopped: the app hit an internal error while running " + what + ": " + internal);
+        if (!load) restarts.insert(p.manifest.id);
     }
 
     // Rejects the stopped calls' work with LimitError, so whatever awaited it moves on. The code
@@ -973,6 +998,7 @@ std::shared_ptr<Work> startWork(PluginCtx& p, JSValue* promise) {
 
 uint64_t askUser(PluginCtx& p, PluginHostEvent confirm, std::function<void(bool)> answered) {
     auto& h = p.host;
+    if (Call* c = h.findCall(p, p.run->current); c && c->kind == CallKind::Cleanup) return 0;  // a stopped call can't ask
     const uint64_t id = ++h.nextRequest;
     confirm.kind = PluginHostEvent::Kind::Confirm;
     confirm.requestId = id;
@@ -994,12 +1020,12 @@ void log(PluginCtx& p, LogLevel level, const std::string& text) { p.host.log(p.m
 uint64_t addTimer(PluginCtx& p, js::Value callback, int64_t delayMs) {
     auto& h = p.host;
     auto owner = p.run->calls.find(p.run->current);
-    if (owner != p.run->calls.end() && owner->second.kind == CallKind::Cleanup) return ++h.nextTimer;  // a stopped call's: never fires
+    const bool cleanup = owner != p.run->calls.end() && owner->second.kind == CallKind::Cleanup;
     Timer t;
     t.dueMs = steadyMs() + delayMs;
-    t.owner = p.run->current;
-    auto it = p.run->calls.find(t.owner);
-    t.ownerWhat = it == p.run->calls.end() ? "the plugin" : it->second.what;
+    // A stopped call's cleanup code owns nothing: its timer runs as a call of its own.
+    t.owner = cleanup ? 0 : p.run->current;
+    t.ownerWhat = owner == p.run->calls.end() ? "the plugin" : owner->second.what;
     t.callback = std::move(callback);
     const uint64_t id = ++h.nextTimer;
     p.run->timers.emplace(id, std::move(t));

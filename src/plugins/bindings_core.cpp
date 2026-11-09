@@ -1058,8 +1058,13 @@ JSValue jsBackground(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 
 // ---- Helpers for every binding --------------------------------------------------------------
 
-void defineFunction(JSContext* c, JSValueConst obj, const char* name, JSCFunction* fn, int length) {
-    JS_SetPropertyStr(c, obj, name, JS_NewCFunction(c, fn, name, length));
+JSValue nativeFailed(JSContext* c, const char* what, bool outOfMemory) noexcept {
+    auto* p = static_cast<PluginCtx*>(JS_GetContextOpaque(c));
+    if (outOfMemory) {
+        if (p) p->rt.noteOutOfMemory();
+        return JS_ThrowOutOfMemory(c);
+    }
+    return JS_ThrowPlainError(c, "The app failed doing this: %s", what);
 }
 
 std::string permissionName(Permission p) {
@@ -1113,8 +1118,8 @@ JSValue newLimitError(PluginCtx& p, const std::string& limit, const std::string&
 bool installStandardGlobals(js::Context& cx) {
     JSContext* c = cx.raw();
     js::Value natives(c, JS_NewObject(c));
-    defineFunction(c, natives.raw(), "utf8Encode", jsUtf8Encode, 1);
-    defineFunction(c, natives.raw(), "utf8Decode", jsUtf8Decode, 3);
+    defineFunction<jsUtf8Encode>(c, natives.raw(), "utf8Encode", 1);
+    defineFunction<jsUtf8Decode>(c, natives.raw(), "utf8Decode", 3);
     try {
         runPrelude(cx, kStandardGlobals, sizeof kStandardGlobals - 1, "<standard globals>", {natives});
     } catch (const std::exception&) {
@@ -1128,7 +1133,7 @@ void installCore(PluginCtx& p) {
     if (!installStandardGlobals(p.cx)) throw std::runtime_error("the standard globals failed to install");
 
     js::Value natives(c, JS_NewObject(c));
-    defineFunction(c, natives.raw(), "log", jsLog, 2);
+    defineFunction<jsLog>(c, natives.raw(), "log", 2);
     nlohmann::json info = {{"id", p.manifest.id}, {"version", p.manifest.version}, {"dataDir", p.dataDir},
                            {"settings", p.settings.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace)}};
     js::Value made = runPrelude(p.cx, kCore, sizeof kCore - 1, "<zk core>", {natives, p.zk, js::Value::fromJson(p.cx, info)});
@@ -1136,11 +1141,11 @@ void installCore(PluginCtx& p) {
     p.makeLimitError = made.get("limitError");
 
     JSValue global = JS_GetGlobalObject(c);
-    defineFunction(c, global, "setTimeout", jsSetTimeout, 2);
-    defineFunction(c, global, "clearTimeout", jsClearTimeout, 1);
+    defineFunction<jsSetTimeout>(c, global, "setTimeout", 2);
+    defineFunction<jsClearTimeout>(c, global, "clearTimeout", 1);
     JS_FreeValue(c, global);
-    defineFunction(c, p.zk.raw(), "on", jsOn, 2);
-    defineFunction(c, p.zk.raw(), "background", jsBackground, 1);
+    defineFunction<jsOn>(c, p.zk.raw(), "on", 2);
+    defineFunction<jsBackground>(c, p.zk.raw(), "background", 1);
 }
 
 }  // namespace zk::plugins

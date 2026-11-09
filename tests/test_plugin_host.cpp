@@ -56,12 +56,27 @@ JSValue testLater(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
 
 JSValue testAsk(JSContext* c, JSValueConst, int, JSValueConst*) {
     auto& p = plugins::ctxOf(c);
-    JSValue promise;
-    auto work = plugins::startWork(p, &promise);
+    auto holder = std::make_shared<std::shared_ptr<plugins::Work>>();
     PluginHostEvent ev{PluginHostEvent::Kind::Confirm, "", "", "ask", {}, 0};
-    uint64_t id = plugins::askUser(p, ev, [work](bool yes) { work->resolve(nlohmann::json(yes)); });
+    uint64_t id = plugins::askUser(p, ev, [holder](bool yes) {
+        if (*holder) (*holder)->resolve(nlohmann::json(yes));
+    });
+    if (id == 0) return JS_NewString(c, "not asked");
+    JSValue promise;
+    *holder = plugins::startWork(p, &promise);
     std::lock_guard<std::mutex> lock(testWork().mu);
     testWork().asks.push_back(id);
+    return promise;
+}
+
+JSValue testNativeThrows(JSContext*, JSValueConst, int, JSValueConst*) { throw std::runtime_error("native boom"); }
+JSValue testNativeBadAlloc(JSContext*, JSValueConst, int, JSValueConst*) { throw std::bad_alloc(); }
+
+// Host work whose settling throws something that isn't a std::exception: it reaches the entry.
+JSValue testPoison(JSContext* c, JSValueConst, int, JSValueConst*) {
+    JSValue promise;
+    auto work = plugins::startWork(plugins::ctxOf(c), &promise);
+    work->finish([](JSContext*) -> JSValue { throw 42; });
     return promise;
 }
 
@@ -75,10 +90,13 @@ JSValue testThrowing(JSContext* c, JSValueConst, int, JSValueConst*) {
 void installTestBindings(plugins::PluginCtx& p) {
     JSContext* c = p.cx.raw();
     JSValue t = JS_NewObject(c);
-    plugins::defineFunction(c, t, "hang", testHang, 0);
-    plugins::defineFunction(c, t, "later", testLater, 1);
-    plugins::defineFunction(c, t, "ask", testAsk, 0);
-    plugins::defineFunction(c, t, "throwing", testThrowing, 0);
+    plugins::defineFunction<testHang>(c, t, "hang", 0);
+    plugins::defineFunction<testLater>(c, t, "later", 1);
+    plugins::defineFunction<testAsk>(c, t, "ask", 0);
+    plugins::defineFunction<testThrowing>(c, t, "throwing", 0);
+    plugins::defineFunction<testNativeThrows>(c, t, "nativeThrows", 0);
+    plugins::defineFunction<testNativeBadAlloc>(c, t, "nativeBadAlloc", 0);
+    plugins::defineFunction<testPoison>(c, t, "poison", 0);
     JS_SetPropertyStr(c, p.zk.raw(), "test", t);
 }
 
@@ -302,6 +320,94 @@ TEST_CASE("host: recursion through a caught PermissionError still meets the stac
     host.dispatch(kSync);
     REQUIRE(host.waitIdle(3000));
     CHECK(contains(fp.log("a"), "ran out of stack"));
+}
+
+TEST_CASE("host: a C++ exception in a native becomes a JS Error; bad_alloc is the memory limit") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        zk.on("syncFinished", ({ n }) => {
+          if (n === 1) {
+            try { zk.test.nativeThrows(); } catch (e) { console.log("caught", e instanceof Error, e.message); }
+          }
+          if (n === 2) zk.test.nativeBadAlloc();
+          if (n === 3) console.log("still working");
+        });
+    )");
+    PluginHost host(withTestBindings(fp.deps()));
+    host.setEnabled("a", true);
+    host.start();
+    for (int i = 1; i <= 3; ++i) host.dispatch({"syncFinished", {{"n", i}}, false});
+    REQUIRE(host.waitIdle(3000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "caught true The app failed doing this: native boom"));
+    CHECK(contains(log, "Stopped: the syncFinished handler used more than 32 MB of memory"));
+    CHECK(contains(log, "still working"));
+    CHECK(failuresOf(fp, "a") == 0);  // the last call succeeded
+}
+
+TEST_CASE("host: an exception that reaches the entry counts, drops the call's work and restarts the plugin") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        console.log("main.js evaluated");
+        zk.on("syncFinished", async ({ n }) => {
+          if (n === 1) {
+            setTimeout(() => console.log("timer of the poisoned call"), 100);
+            await zk.test.poison();
+            console.log("never");
+          }
+          if (n === 2) console.log("second event ran");
+        });
+    )");
+    PluginHost host(withTestBindings(fp.deps()));
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch({"syncFinished", {{"n", 1}}, false});
+    REQUIRE(host.waitIdle(3000));
+    CHECK(failuresOf(fp, "a") == 1);
+    host.dispatch({"syncFinished", {{"n", 2}}, false});
+    REQUIRE(host.waitIdle(3000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "internal error"));
+    CHECK(contains(log, "restarted"));
+    CHECK(log.find("main.js evaluated") != log.rfind("main.js evaluated"));
+    CHECK(contains(log, "second event ran"));
+    CHECK_FALSE(contains(log, "never"));
+    CHECK_FALSE(contains(log, "timer of the poisoned call"));
+}
+
+TEST_CASE("host: a stopped call's cleanup code can set timers, but can't ask the user") {
+    // A queue that pauses after a LimitError must move on; asking from a stopped call is refused.
+    FakePlugins fp;
+    fp.add("a", R"(
+        let chain = Promise.resolve();
+        const serially = (fn) => (chain = chain.then(fn, fn));
+        const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        zk.on("syncFinished", ({ hang }) => serially(async () => {
+          if (hang) {
+            try { await zk.test.hang(); }
+            catch (e) {
+              console.log("ask from a stopped call:", await zk.test.ask());
+              await pause(50);
+              console.log("paused after", e.limit);
+            }
+            return;
+          }
+          console.log("next job ran");
+        }));
+    )");
+    PluginHost host(withTestBindings(fp.deps()));
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch({"syncFinished", {{"hang", true}}, false});
+    REQUIRE(eventually([&] { return contains(fp.log("a"), "paused after time"); }));
+    host.dispatch({"syncFinished", {{"hang", false}}, false});
+    REQUIRE(host.waitIdle(3000));
+    std::string log = fp.log("a");
+    CHECK(contains(log, "ask from a stopped call: not asked"));
+    CHECK(contains(log, "next job ran"));
+    PluginHostEvent ev;
+    while (host.poll(ev)) CHECK(ev.kind != PluginHostEvent::Kind::Confirm);
 }
 
 TEST_CASE("host: time waiting for the user's answer doesn't count against the budget") {
