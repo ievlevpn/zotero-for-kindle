@@ -1,0 +1,16 @@
+{
+  "name": "zotero-for-kindle-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Types, template and checks for Zotero for Kindle plugins (plugin API v0, unstable).",
+  "type": "module",
+  "types": "types/zk.d.ts",
+  "scripts": {
+    "check": "sh check.sh"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  }
+}

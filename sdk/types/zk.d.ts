@@ -1,0 +1,967 @@
+/**
+ * Zotero for Kindle — plugin API v0.
+ *
+ * **v0 is unstable**: names and shapes may still change; every change is listed in the API
+ * changelog. A plugin declares the version it was written for in `plugin.json` (`"api": 0`).
+ *
+ * A plugin is one ES module (`main.js`) run by the app on QuickJS-ng (ES2023). It is neither Node
+ * nor a browser: there is no `require`, no `process`, no `window` or DOM, and no timers. Rely on
+ * standard ES2023 and on what this file declares: the one global `zk`, plus `console`. Libraries
+ * bundled into `main.js` are fine if they need nothing else.
+ *
+ * Everything is plain data: items, notes and annotations are JSON-like objects, the same shape
+ * wherever they come from (a query, an event, an action). Everything that touches the library,
+ * the network or files is `async`, because plugins run on their own thread and the screen never
+ * waits for them.
+ *
+ * What a plugin may do is declared in `plugin.json` under `"permissions"`. Calling something not
+ * declared rejects (or throws) with a {@link zk.PermissionError} that names what to add. Each
+ * member below says which permission it needs.
+ *
+ * @example
+ * // main.ts — log every book finished on the Kindle (needs "library:read")
+ * zk.on("bookFinished", ({ item }) => {
+ *   zk.log(`Finished ${item.title} (${item.year ?? "n.d."})`);
+ * });
+ */
+
+/**
+ * Writes to the plugin's log (Settings → Plugins → the plugin, and the terminal of the desktop
+ * build). `console.log` is the same as {@link zk.log}. No permission.
+ *
+ * @example
+ * console.warn("feed returned no entries", url);
+ */
+declare var console: {
+  log(...data: unknown[]): void;
+  warn(...data: unknown[]): void;
+  error(...data: unknown[]): void;
+};
+
+declare namespace zk {
+  // ───────────────────────────── Plugin, settings, log ─────────────────────────────
+
+  /**
+   * This plugin, as installed. No permission.
+   *
+   * @example
+   * zk.log(`${zk.plugin.id} ${zk.plugin.version}, data in ${zk.plugin.dataDir}`);
+   */
+  const plugin: {
+    /** The plugin's id from `plugin.json`; also its folder name. */
+    readonly id: string;
+    /** The plugin's version from `plugin.json`. */
+    readonly version: string;
+    /**
+     * Where its `data/` folder is on the device (e.g. `/mnt/us/zotero/plugins/<id>/data`). For
+     * telling the user where an export went; files are read and written with {@link zk.files}.
+     */
+    readonly dataDir: string;
+  };
+
+  /**
+   * The user's settings for this plugin: the parsed `settings.json` next to `plugin.json`, or `{}`
+   * if there is none. Read-only; the user edits the file over USB. Read when the plugin loads.
+   * No permission.
+   *
+   * To type your settings, add their fields to {@link zk.Settings}.
+   *
+   * @example
+   * const apiKey = zk.settings.apiKey;
+   * if (typeof apiKey !== "string") throw new Error('Put your key in settings.json: { "apiKey": "…" }');
+   */
+  const settings: Readonly<Settings>;
+
+  /**
+   * The shape of `settings.json`. Untyped by default; a plugin describes its own by merging fields
+   * into this interface.
+   *
+   * @example
+   * // main.ts
+   * declare global {
+   *   namespace zk {
+   *     interface Settings { apiKey?: string; language?: string }
+   *   }
+   * }
+   * const lang = zk.settings.language ?? "English"; // string
+   */
+  interface Settings {
+    [key: string]: Json | undefined;
+  }
+
+  /**
+   * Writes to the plugin's log. Arguments are joined with spaces; objects are shown as JSON.
+   * No permission.
+   *
+   * @example
+   * zk.log("filed", change.key, "into", collection.path.join(" / "));
+   */
+  function log(...data: unknown[]): void;
+
+  // ───────────────────────────── Storage and files ─────────────────────────────
+
+  /**
+   * A private key-value store, kept in the plugin's own folder. Values are JSON (stored as with
+   * `JSON.stringify`). Survives app restarts and updates; emptied by Settings → Plugins → *Reset
+   * its data*. No permission.
+   *
+   * @example
+   * const seen = (await zk.storage.get<string[]>("seen")) ?? [];
+   * await zk.storage.set("seen", [...seen, entry.id]);
+   */
+  const storage: Storage;
+
+  /** The type of {@link zk.storage}. */
+  interface Storage {
+    /**
+     * The value stored under `key`, or `undefined` if there is none. `T` is what you stored; it is
+     * not checked.
+     *
+     * @example
+     * const lastRun = await zk.storage.get<string>("lastRun"); // string | undefined
+     */
+    get<T = Json>(key: string): Promise<T | undefined>;
+
+    /**
+     * Stores a JSON value under `key`, replacing what was there.
+     *
+     * @example
+     * await zk.storage.set("lastRun", new Date().toISOString());
+     */
+    set(key: string, value: unknown): Promise<void>;
+
+    /**
+     * Removes `key`. Resolves `true` if it was there.
+     *
+     * @example
+     * await zk.storage.delete("draft");
+     */
+    delete(key: string): Promise<boolean>;
+
+    /**
+     * All keys, in no particular order.
+     *
+     * @example
+     * for (const key of await zk.storage.keys()) if (key.startsWith("feed:")) zk.log(key);
+     */
+    keys(): Promise<string[]>;
+  }
+
+  /**
+   * Text files in the plugin's own `data/` folder, for exports the user copies off over USB.
+   * Paths are relative to `data/` and use `/`; a path that leaves the folder (`..`, absolute
+   * paths) is refused. No permission.
+   *
+   * @example
+   * await zk.files.write("highlights/Gaussian random fields.md", markdown);
+   * zk.log("written to", `${zk.plugin.dataDir}/highlights/`);
+   */
+  namespace files {
+    /**
+     * The file's text (UTF-8). Rejects if it doesn't exist.
+     *
+     * @example
+     * const template = await zk.files.read("template.md");
+     */
+    function read(path: string): Promise<string>;
+
+    /**
+     * Writes text (UTF-8), replacing the file and creating folders on the way.
+     *
+     * @example
+     * await zk.files.write("export.md", "# My highlights\n");
+     */
+    function write(path: string, text: string): Promise<void>;
+
+    /**
+     * The names of the entries in a folder (default: `data/` itself); folders end with `/`.
+     * Resolves `[]` for a folder that doesn't exist.
+     *
+     * @example
+     * const exports = (await zk.files.list("highlights")).filter((n) => n.endsWith(".md"));
+     */
+    function list(dir?: string): Promise<string[]>;
+
+    /**
+     * Removes a file, or a folder with everything in it. Resolves `true` if it was there.
+     *
+     * @example
+     * await zk.files.remove("highlights/old.md");
+     */
+    function remove(path: string): Promise<boolean>;
+  }
+
+  // ───────────────────────────── Network ─────────────────────────────
+
+  /**
+   * Fetches a URL, like the web's `fetch`, but HTTPS only, to declared hosts only, without cookies
+   * and without any of the app's credentials. Response size and time are capped (over the cap:
+   * {@link zk.LimitError}). Zotero's own hosts (`zotero.org`, `api.zotero.org`) and the user's
+   * WebDAV host are always refused.
+   *
+   * **Permission**: `net:<host>` for the URL's host (e.g. `"net:export.arxiv.org"`; `"net:*.example.org"`
+   * covers subdomains), or `net:*` for any host. Redirects are checked the same way.
+   *
+   * Network errors reject with an `Error`; HTTP errors don't reject: check `ok` or `status`.
+   *
+   * @example
+   * const res = await zk.fetch("https://export.arxiv.org/rss/math.PR");
+   * if (!res.ok) throw new Error(`arXiv: HTTP ${res.status}`);
+   * const xml = await res.text();
+   *
+   * @example
+   * const res = await zk.fetch("https://api.example.org/v1/explain", {
+   *   method: "POST",
+   *   headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
+   *   body: JSON.stringify({ text }),
+   * });
+   * const { answer } = await res.json<{ answer: string }>();
+   */
+  function fetch(url: string, init?: FetchInit): Promise<Response>;
+
+  /** Options for {@link zk.fetch}. */
+  interface FetchInit {
+    /** Default `"GET"`. */
+    method?: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
+    /** Request headers. `Cookie` is not allowed. */
+    headers?: Record<string, string>;
+    /** Request body; send JSON with `JSON.stringify` and a `content-type` header. */
+    body?: string;
+  }
+
+  /** The answer to {@link zk.fetch}. The body is read whole (it is capped), and can be read again. */
+  interface Response {
+    /** `true` for status 200–299. */
+    readonly ok: boolean;
+    /** The HTTP status, e.g. `200`, `404`. */
+    readonly status: number;
+    /** The URL answered, after redirects. */
+    readonly url: string;
+    /** Response headers, names in lower case: `res.headers["content-type"]`. */
+    readonly headers: Readonly<Record<string, string>>;
+    /** The body as text (decoded as UTF-8 unless the response says otherwise). */
+    text(): Promise<string>;
+    /** The body parsed as JSON. `T` is not checked. Rejects if it isn't JSON. */
+    json<T = Json>(): Promise<T>;
+  }
+
+  // ───────────────────────────── Reading the library ─────────────────────────────
+
+  /**
+   * Reads the library as it is on the Kindle (synced from Zotero, plus changes not sent yet).
+   * Everything comes back as plain objects; nothing is live.
+   */
+  namespace library {
+    /**
+     * Every item matching `query` (all items if none), in the library's order, fetched lazily —
+     * so a whole library can be walked without loading it at once. Filters combine (AND).
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * for await (const item of zk.library.items({ collection: inbox.key })) {
+     *   if (!item.read) zk.log(item.title);
+     * }
+     *
+     * @example
+     * // first ten items tagged "to-read"
+     * for await (const item of zk.library.items({ tag: "to-read", limit: 10 })) zk.log(item.title);
+     */
+    function items(query?: ItemsQuery): AsyncIterable<Item>;
+
+    /**
+     * One item by its key, or `null` if there is none (or it is in the trash).
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * const item = await zk.library.item(annotation.itemKey);
+     */
+    function item(key: string): Promise<Item | null>;
+
+    /**
+     * The items with a DOI, arXiv id or ISBN — the way to ask "is this paper already in my
+     * library?". DOIs match case-insensitively and with or without a `https://doi.org/` prefix;
+     * arXiv ids match whatever the version suffix (`2401.01234v3` finds `2401.01234v1`); ISBNs
+     * match as ISBN-10 or ISBN-13. Several identifiers match any of them. Usually zero or one item;
+     * more if the library has duplicates.
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * const [existing] = await zk.library.findByIdentifier({ arxiv: "2401.01234v2" });
+     * if (existing) zk.log("already have", existing.title);
+     */
+    function findByIdentifier(id: { doi?: string; arxiv?: string; isbn?: string }): Promise<Item[]>;
+
+    /**
+     * All collections, each with its full path, sorted by path.
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * const inbox = (await zk.library.collections()).find((c) => c.path.join("/") === "Reading/Inbox");
+     */
+    function collections(): Promise<Collection[]>;
+
+    /**
+     * All tags in the library, by name.
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * const names = (await zk.library.tags()).map((t) => t.name);
+     */
+    function tags(): Promise<Tag[]>;
+
+    /**
+     * Searches like the app's search box (title, creators, year, publication, tags), best matches
+     * first, at most one screenful of results. To go through *every* match, use
+     * `items({ text })`.
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * const [best] = await zk.library.search("gaussian random fields adler");
+     */
+    function search(text: string): Promise<Item[]>;
+
+    /**
+     * An item's attachments (PDFs, EPUBs, …), whether downloaded to the Kindle or not.
+     *
+     * **Permission**: `library:read`.
+     *
+     * @example
+     * const pdf = (await zk.library.attachments(item.key)).find((a) => a.downloaded);
+     */
+    function attachments(itemKey: string): Promise<Attachment[]>;
+
+    /**
+     * An attachment's annotations (highlights, notes, …) in reading order.
+     *
+     * **Permission**: `annotations:read`.
+     *
+     * @example
+     * const highlights = (await zk.library.annotations(pdf.key)).filter((a) => a.type === "highlight");
+     */
+    function annotations(attachmentKey: string): Promise<Annotation[]>;
+
+    /**
+     * Annotations across the library, newest change first, fetched lazily. `since` (an ISO date)
+     * stops at annotations last changed before it.
+     *
+     * **Permission**: `annotations:read`.
+     *
+     * @example
+     * const lastExport = await zk.storage.get<string>("lastExport");
+     * for await (const a of zk.library.recentAnnotations({ since: lastExport })) touched.add(a.itemKey);
+     */
+    function recentAnnotations(query?: { since?: string; limit?: number }): AsyncIterable<Annotation>;
+
+    /**
+     * An item's child notes (Zotero note items), as HTML, oldest first.
+     *
+     * **Permission**: `notes:read`.
+     *
+     * @example
+     * for (const note of await zk.library.notes(old.key)) await zk.zotero.addNote(replacement.key, note.html);
+     */
+    function notes(itemKey: string): Promise<Note[]>;
+
+    /**
+     * The text of a downloaded book or paper (PDF, EPUB, …), extracted by the app's own engines.
+     * Rejects if the attachment isn't downloaded to the Kindle (see {@link Attachment.downloaded})
+     * or isn't a document. Can take a few seconds for a long book.
+     *
+     * **Permission**: `fulltext:read`.
+     *
+     * @example
+     * const text = await zk.library.fullText(pdf.key);
+     * const words = text.split(/\s+/).length;
+     */
+    function fullText(attachmentKey: string): Promise<string>;
+  }
+
+  /** Filters for {@link zk.library.items}. They combine: an item must match all that are given. */
+  interface ItemsQuery {
+    /** Only items in this collection (its key; not its subcollections). */
+    collection?: string;
+    /** Only items with this tag (its name, exact). */
+    tag?: string;
+    /** Only items whose title, creators, year, publication or tags contain these words. */
+    text?: string;
+    /** Stop after this many items. */
+    limit?: number;
+  }
+
+  // ───────────────────────────── Changing the library ─────────────────────────────
+
+  /**
+   * Asks the app to change the Zotero library. Plugins never write to Zotero themselves: the app
+   * records each change, shows it in the library at once, and the sync sends it to Zotero later
+   * (without ever overwriting an edit made elsewhere). Settings → Plugins → *What it changed*
+   * lists every change a plugin asked for and what became of it.
+   *
+   * - **Adding** (items, collections, tags, notes) is allowed by its permission. Each add resolves
+   *   at once with a {@link Change}: the key of what changed and a `changeId` to {@link cancel} it
+   *   while it is still unsent.
+   * - **Removing** (trash, remove from a collection, remove a tag, delete a note) needs the user's
+   *   yes every time: the app shows its own confirmation and the call resolves `true` (done) or
+   *   `false` (declined, or not allowed right now). Removals are only asked in answer to
+   *   something the user just did (an action, a screen, an event they caused on the Kindle); from
+   *   a background task or an event that came in with a sync they resolve `false` without asking.
+   *   Removals asked together (before awaiting any of them) are confirmed together, in one list.
+   *   Nothing is ever deleted for good except a note this plugin created: items go to Zotero's trash.
+   * - **Editing** existing data (a title, a note, an annotation) is not possible in API v0.
+   */
+  namespace zotero {
+    /**
+     * Creates an item with the given metadata, optionally filed into collections and tagged.
+     * One change: cancelling it withdraws the item with its collections and tags. The new item
+     * is readable at once (`zk.library.item(change.key)`).
+     *
+     * **Permission**: `zotero:create-items`; also `zotero:collections` with `collections`,
+     * `zotero:tags` with `tags`.
+     *
+     * @example
+     * const change = await zk.zotero.createItem(
+     *   {
+     *     type: "preprint",
+     *     title: entry.title,
+     *     creators: entry.authors.map((name) => ({ type: "author", name })),
+     *     date: entry.date,
+     *     arxiv: entry.id,
+     *     url: `https://arxiv.org/abs/${entry.id}`,
+     *     abstract: entry.summary,
+     *   },
+     *   { collections: [inbox.key], tags: ["feed-riffle"] },
+     * );
+     * await zk.storage.set(`undo:${entry.id}`, change.changeId);
+     */
+    function createItem(fields: ItemFields, opts?: { collections?: string[]; tags?: string[] }): Promise<Change>;
+
+    /**
+     * Files an item into a collection (it stays in its other collections). `change.key` is the
+     * item's key.
+     *
+     * **Permission**: `zotero:collections`.
+     *
+     * @example
+     * await zk.zotero.addToCollection(item.key, inbox.key);
+     */
+    function addToCollection(itemKey: string, collectionKey: string): Promise<Change>;
+
+    /**
+     * Adds a tag to an item (nothing changes if it already has it). `change.key` is the item's key.
+     *
+     * **Permission**: `zotero:tags`.
+     *
+     * @example
+     * await zk.zotero.addTag(item.key, "finished-on-kindle");
+     */
+    function addTag(itemKey: string, tag: string): Promise<Change>;
+
+    /**
+     * Adds a child note to an item. `html` is Zotero note HTML (paragraphs, headings, lists,
+     * links, emphasis). `change.key` is the new note's key.
+     *
+     * **Permission**: `zotero:notes`.
+     *
+     * @example
+     * await zk.zotero.addNote(item.key, `<p>Finished on ${new Date().toDateString()}.</p>`);
+     */
+    function addNote(itemKey: string, html: string): Promise<Change>;
+
+    /**
+     * Asks the user to move items to Zotero's trash (recoverable there). One confirmation for
+     * all of them; resolves `true` if they said yes.
+     *
+     * **Permission**: `zotero:remove`, and the user's yes each time.
+     *
+     * @example
+     * // replace an old version with a new one, keeping its notes
+     * for (const note of await zk.library.notes(old.key)) await zk.zotero.addNote(fresh.key, note.html);
+     * if (!(await zk.zotero.trash([old.key]))) zk.log("kept the old version");
+     */
+    function trash(itemKeys: string[]): Promise<boolean>;
+
+    /**
+     * Asks the user to take an item out of a collection (the item stays in the library).
+     *
+     * **Permission**: `zotero:remove`, and the user's yes each time.
+     *
+     * @example
+     * const removed = await zk.zotero.removeFromCollection(item.key, inbox.key);
+     */
+    function removeFromCollection(itemKey: string, collectionKey: string): Promise<boolean>;
+
+    /**
+     * Asks the user to remove a tag from an item.
+     *
+     * **Permission**: `zotero:remove`, and the user's yes each time.
+     *
+     * @example
+     * await zk.zotero.removeTag(item.key, "to-read");
+     */
+    function removeTag(itemKey: string, tag: string): Promise<boolean>;
+
+    /**
+     * Asks the user to delete a note — only one this plugin created (see {@link Note.createdBy});
+     * any other note is refused. The one hard delete in the API.
+     *
+     * **Permission**: `zotero:remove`, and the user's yes each time.
+     *
+     * @example
+     * const mine = (await zk.library.notes(item.key)).filter((n) => n.createdBy === zk.plugin.id);
+     * for (const note of mine) await zk.zotero.deleteNote(note.key);
+     */
+    function deleteNote(noteKey: string): Promise<boolean>;
+
+    /**
+     * Withdraws one of this plugin's changes that hasn't been sent to Zotero yet — no confirmation,
+     * since nothing leaves Zotero. Withdrawing a new item also withdraws what was added to it.
+     * Resolves `false` if the change was already sent (undoing it then is a removal: ask with
+     * {@link trash} and friends) or isn't this plugin's.
+     *
+     * **Permission**: none beyond the one the change needed.
+     *
+     * @example
+     * const changeId = await zk.storage.get<string>(`undo:${entry.id}`);
+     * if (changeId && !(await zk.zotero.cancel(changeId))) {
+     *   await zk.zotero.trash([itemKey]); // already synced: ask instead
+     * }
+     */
+    function cancel(changeId: string): Promise<boolean>;
+
+    /**
+     * This plugin's changes not sent to Zotero yet, oldest first.
+     *
+     * **Permission**: none.
+     *
+     * @example
+     * const unsent = await zk.zotero.pending();
+     * zk.setBadge(unsent.length ? `${unsent.length} unsent` : null);
+     */
+    function pending(): Promise<PendingChange[]>;
+  }
+
+  /** What an add in {@link zk.zotero} resolves with. */
+  interface Change {
+    /** The key of what the change made or changed: the new item or note, or the item tagged or filed. */
+    key: string;
+    /** Identifies the change, to {@link zk.zotero.cancel} it while it is unsent. */
+    changeId: string;
+  }
+
+  /** A change of this plugin's that hasn't been sent to Zotero yet ({@link zk.zotero.pending}). */
+  type PendingChange = {
+    /** As returned by the call that asked for it; for {@link zk.zotero.cancel}. */
+    changeId: string;
+    /** When it was asked for (ISO 8601). */
+    requested: string;
+  } & (
+    | { kind: "createItem"; /** The new item. */ key: string; fields: ItemFields }
+    | { kind: "addToCollection"; /** The item. */ key: string; collection: string }
+    | { kind: "addTag"; /** The item. */ key: string; tag: string }
+    | { kind: "addNote"; /** The new note. */ key: string; itemKey: string }
+    | { kind: "trash"; /** The item. */ key: string }
+    | { kind: "removeFromCollection"; /** The item. */ key: string; collection: string }
+    | { kind: "removeTag"; /** The item. */ key: string; tag: string }
+    | { kind: "deleteNote"; /** The note. */ key: string }
+  );
+
+  // ───────────────────────────── Events ─────────────────────────────
+
+  /**
+   * Runs `handler` whenever `event` happens. Register handlers when the plugin loads (at the top
+   * level of `main.js`). A handler has 5 seconds; an error it throws is logged with its stack.
+   *
+   * Every event says where the change was made: `origin: "kindle"` (the user did it on this
+   * Kindle, one event per change, as it happens) or `origin: "zotero"` (it came in with a sync:
+   * one event per kind per sync, listing everything). So events that can arrive with a sync carry
+   * a list — `annotations` or `items` — with one entry when the change was made on the Kindle.
+   * The first full sync of a library fires only `syncFinished` (with `initial: true`).
+   *
+   * **Permission**: what the event carries — `annotations:read` for `highlight…` events,
+   * `library:read` for `book…` and `itemMarked…` events; `syncFinished` needs none.
+   *
+   * @example
+   * zk.on("highlightCreated", async ({ origin, annotations }) => {
+   *   for (const a of annotations) zk.log(origin, a.text);
+   * });
+   *
+   * @example
+   * zk.on("syncFinished", ({ initial }) => {
+   *   if (!initial) zk.log("synced");
+   * });
+   */
+  function on<K extends keyof Events>(event: K, handler: (e: Events[K]) => void | Promise<void>): void;
+
+  /** Every event {@link zk.on} can listen to, and what its handler receives. */
+  interface Events {
+    /** Highlights or other annotations were made. */
+    highlightCreated: AnnotationsEvent;
+    /** Annotations were changed (comment, colour, text). */
+    highlightChanged: AnnotationsEvent;
+    /** Annotations were deleted; only their keys are left. */
+    highlightDeleted: {
+      origin: Origin;
+      annotations: Pick<Annotation, "key" | "attachmentKey" | "itemKey">[];
+    };
+    /** A book or paper was opened on the Kindle. */
+    bookOpened: BookEvent;
+    /** The user turned past the last page of a book or paper. */
+    bookFinished: BookEvent;
+    /** Items were marked read. */
+    itemMarkedRead: ItemsEvent;
+    /** Items were marked unread. */
+    itemMarkedUnread: ItemsEvent;
+    /** A sync with Zotero finished successfully (fires after the other events of that sync). */
+    syncFinished: {
+      origin: "zotero";
+      /** `true` for the first full sync of a library, which fires no other events. */
+      initial: boolean;
+    };
+  }
+
+  /** Where a change was made: on this Kindle, or elsewhere and brought in by a sync. */
+  type Origin = "kindle" | "zotero";
+
+  /** `highlightCreated`, `highlightChanged`. */
+  interface AnnotationsEvent {
+    origin: Origin;
+    /** The annotations, as {@link zk.library.annotations} returns them. One when `origin` is `"kindle"`. */
+    annotations: Annotation[];
+  }
+
+  /** `itemMarkedRead`, `itemMarkedUnread`. */
+  interface ItemsEvent {
+    origin: Origin;
+    /** The items, after the change. One when `origin` is `"kindle"`. */
+    items: Item[];
+  }
+
+  /** `bookOpened`, `bookFinished`: these only happen on the Kindle. */
+  interface BookEvent {
+    origin: "kindle";
+    item: Item;
+    /** The file that was read. */
+    attachment: Attachment;
+  }
+
+  // ───────────────────────────── Background work ─────────────────────────────
+
+  /**
+   * Registers the plugin's background task (one per plugin; registering again replaces it). The
+   * app runs it after a successful sync, at most once an hour, while the Kindle is awake and
+   * online; it never wakes a sleeping Kindle. A run has 30 seconds. Three failed runs in a row
+   * turn the plugin off. A background task can't show anything or ask the user: removals resolve
+   * `false`; use {@link setBadge} to say there is something to see.
+   *
+   * **Permission**: `background`.
+   *
+   * @example
+   * zk.background(async () => {
+   *   const fresh = await refreshFeeds();
+   *   zk.setBadge(fresh ? `${fresh} new` : null);
+   * });
+   */
+  function background(task: () => void | Promise<void>): void;
+
+  /**
+   * Sets a short badge on the plugin, shown wherever the app lists it (e.g. `"42 new"`); `null`
+   * clears it. Kept until changed, across restarts. Long text is cut. No permission.
+   *
+   * @example
+   * zk.setBadge("3 new");
+   */
+  function setBadge(text: string | null): void;
+
+  // ───────────────────────────── Entry points (part 2: not shown yet) ─────────────────────────────
+
+  /**
+   * Adds an action to the selection bar (what appears when the user selects text in a book).
+   *
+   * **Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear;
+   * plugins written now keep working when it does.
+   *
+   * No permission: the selection and its item are handed over because the user chose the action.
+   *
+   * @example
+   * zk.selectionAction({
+   *   id: "explain",
+   *   title: "Explain",
+   *   run: async ({ text, item }) => {
+   *     const answer = await explain(text, item.title);
+   *     return answer; // shown in the result pop-up
+   *   },
+   * });
+   */
+  function selectionAction(action: Action<TextSelection>): void;
+
+  /**
+   * Adds an action to an item's *More…* menu.
+   *
+   * **Part 2: not shown yet.** In API v0 the action is checked and recorded but doesn't appear.
+   *
+   * No permission: the item is handed over because the user chose the action.
+   *
+   * @example
+   * zk.itemAction({
+   *   id: "export",
+   *   title: "Export highlights",
+   *   run: async (item) => `Written to ${await exportHighlights(item)}`,
+   * });
+   */
+  function itemAction(action: Action<Item>): void;
+
+  /**
+   * Registers a screen of the plugin's own.
+   *
+   * **Part 2: not shown yet, and provisional.** Part 2 designs screens and the building blocks
+   * they are made of; `render`'s argument and result will be typed then. In API v0 the screen is
+   * recorded but can't be opened.
+   *
+   * @example
+   * zk.screen("cards", () => ({}));
+   */
+  function screen(id: string, render: (params: ScreenParams) => ScreenContent | Promise<ScreenContent>): void;
+
+  /** An action the user starts ({@link selectionAction}, {@link itemAction}). */
+  interface Action<T> {
+    /** Unique within the plugin: lowercase letters, digits and dashes. */
+    id: string;
+    /** What the user sees, short (one or two words). */
+    title: string;
+    /**
+     * Does the work. A returned string is shown to the user in the result pop-up (part 2);
+     * a thrown error is shown as the plugin having failed.
+     */
+    run(target: T): ActionResult | Promise<ActionResult>;
+  }
+
+  /** What an action's `run` may return: text for the result pop-up, or nothing. */
+  type ActionResult = string | void;
+
+  /** What {@link selectionAction} hands to `run`. */
+  interface TextSelection {
+    /** The selected text. */
+    text: string;
+    /** The item being read. */
+    item: Item;
+    /** The file being read. */
+    attachment: Attachment;
+    /** The page label where the selection starts, if the document has pages. */
+    pageLabel: string | null;
+  }
+
+  /** **Provisional (part 2).** What a screen is opened with. */
+  type ScreenParams = Readonly<Record<string, Json>>;
+
+  /** **Provisional (part 2)**: what `render` returns; part 2 defines it. */
+  type ScreenContent = unknown;
+
+  // ───────────────────────────── Data ─────────────────────────────
+
+  /**
+   * A library item (a paper, book, …), the same shape wherever it comes from. Fields Zotero leaves
+   * empty are `null`; lists are empty arrays.
+   */
+  interface Item {
+    /** Zotero's key, e.g. `"ABCD2345"`. */
+    key: string;
+    /** Zotero's item type. */
+    type: ItemType;
+    /** The title; `""` if it has none. */
+    title: string;
+    /** Authors, editors, … in order. */
+    creators: Creator[];
+    /** The year, parsed from `date`. */
+    year: number | null;
+    /** The date as entered in Zotero (free-form, e.g. `"2024-01-03"` or `"March 2019"`). */
+    date: string | null;
+    /** Journal, book, proceedings or website title. */
+    publication: string | null;
+    /** The DOI, without a `https://doi.org/` prefix. */
+    doi: string | null;
+    /** The arXiv id, without a version suffix (`"2401.01234"`). */
+    arxiv: string | null;
+    isbn: string | null;
+    url: string | null;
+    abstract: string | null;
+    /** Tag names. */
+    tags: string[];
+    /** Keys of the collections it is in. */
+    collections: string[];
+    /** Whether it is marked read. */
+    read: boolean;
+    /** Zotero's *Extra* field. */
+    extra: string | null;
+  }
+
+  /** Zotero item types. Others exist; these are the common ones. */
+  type ItemType =
+    | "journalArticle"
+    | "preprint"
+    | "book"
+    | "bookSection"
+    | "conferencePaper"
+    | "thesis"
+    | "report"
+    | "manuscript"
+    | "webpage"
+    | "document"
+    | (string & {});
+
+  /** A creator of an item: a person (`first`, `last`) or an organisation (`name`). */
+  interface Creator {
+    /** `"author"`, `"editor"`, … */
+    type: "author" | "editor" | "contributor" | "translator" | (string & {});
+    first?: string;
+    last?: string;
+    /** A single-field name, for organisations or names that don't split. */
+    name?: string;
+  }
+
+  /** The metadata {@link zk.zotero.createItem} takes. `type` and `title` are required. */
+  interface ItemFields {
+    type: ItemType;
+    title: string;
+    creators?: Creator[];
+    /** Free-form, as in Zotero; ISO (`"2024-01-03"`) is best. */
+    date?: string;
+    publication?: string;
+    doi?: string;
+    /** The arXiv id (a version suffix is kept as given). */
+    arxiv?: string;
+    isbn?: string;
+    url?: string;
+    abstract?: string;
+    extra?: string;
+  }
+
+  /** A collection. */
+  interface Collection {
+    key: string;
+    name: string;
+    /** The parent collection's key; `null` at the top level. */
+    parent: string | null;
+    /** Names from the top level down, ending with its own: `["Reading", "arXiv"]`. */
+    path: string[];
+  }
+
+  /** A tag in the library. */
+  interface Tag {
+    name: string;
+    /** How many items have it. */
+    count: number;
+  }
+
+  /** A file attached to an item. */
+  interface Attachment {
+    key: string;
+    /** The item it belongs to. */
+    itemKey: string;
+    title: string;
+    /** E.g. `"application/pdf"`, `"application/epub+zip"`. */
+    contentType: string;
+    filename: string | null;
+    /** Whether the file is on the Kindle (needed for {@link zk.library.fullText}). */
+    downloaded: boolean;
+  }
+
+  /** An annotation in a book or paper. */
+  interface Annotation {
+    key: string;
+    /** The file it is in. */
+    attachmentKey: string;
+    /** The item that file belongs to. */
+    itemKey: string;
+    type: "highlight" | "underline" | "note" | "image" | "ink";
+    /** The highlighted text (`null` for notes and images). */
+    text: string | null;
+    /** The user's comment. */
+    comment: string | null;
+    /** As in Zotero, e.g. `"#ffd400"`. */
+    color: string;
+    /** The page label shown in the document, e.g. `"12"` or `"xii"`. */
+    pageLabel: string | null;
+    tags: string[];
+    /** ISO 8601. */
+    created: string;
+    /** ISO 8601. */
+    modified: string;
+  }
+
+  /** A Zotero note attached to an item. */
+  interface Note {
+    key: string;
+    /** The item it belongs to. */
+    itemKey: string;
+    /** The note's HTML, as Zotero stores it. */
+    html: string;
+    /** The id of the plugin that created it, or `null` (made in Zotero). */
+    createdBy: string | null;
+    /** ISO 8601. */
+    created: string;
+    /** ISO 8601. */
+    modified: string;
+  }
+
+  /** A JSON value. */
+  type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+
+  // ───────────────────────────── Permissions and errors ─────────────────────────────
+
+  /** A permission, as written in `plugin.json`. */
+  type Permission =
+    | "library:read"
+    | "annotations:read"
+    | "fulltext:read"
+    | "notes:read"
+    | `net:${string}`
+    | "zotero:create-items"
+    | "zotero:collections"
+    | "zotero:tags"
+    | "zotero:notes"
+    | "zotero:remove"
+    | "background";
+
+  /**
+   * Thrown (or rejected with) when the plugin calls something its `plugin.json` doesn't declare.
+   * The message says what to add, e.g.
+   * `zk.fetch("https://api.deepl.com/…") needs "net:api.deepl.com" in plugin.json`.
+   *
+   * @example
+   * try {
+   *   await zk.library.fullText(pdf.key);
+   * } catch (e) {
+   *   if (e instanceof zk.PermissionError) zk.log("missing", e.permission);
+   *   else throw e;
+   * }
+   */
+  class PermissionError extends Error {
+    readonly name: "PermissionError";
+    /** The permission that was missing, exactly as it must appear in `plugin.json`. */
+    readonly permission: Permission;
+  }
+
+  /**
+   * Thrown (or rejected with) when the plugin goes over one of the app's limits; the message names
+   * it. `time`, `memory` and `stack` stop the running handler or task; the fetch limits only fail
+   * that fetch.
+   *
+   * @example
+   * try {
+   *   const res = await zk.fetch(bigFeedUrl);
+   * } catch (e) {
+   *   if (e instanceof zk.LimitError && e.limit === "responseSize") zk.log("feed too large");
+   *   else throw e;
+   * }
+   */
+  class LimitError extends Error {
+    readonly name: "LimitError";
+    /** Which limit: run time, memory, stack depth, or a fetch's response size or duration. */
+    readonly limit: "time" | "memory" | "stack" | "responseSize" | "responseTime";
+  }
+}

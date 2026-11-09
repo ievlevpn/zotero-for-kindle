@@ -12,3 +12,7 @@ spikes/s1-cfi/harness/node_modules/
 spikes/s1-cfi/harness/out/
 local/
 dist/
+
+# Plugin SDK
+sdk/node_modules/
+sdk/**/dist/

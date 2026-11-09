@@ -1,0 +1,11 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "0.1.0",
+  "api": 0,
+  "minApp": "0.3.0",
+  "author": "Your Name",
+  "description": "Logs each book you finish on the Kindle.",
+  "main": "main.js",
+  "permissions": ["library:read"]
+}
