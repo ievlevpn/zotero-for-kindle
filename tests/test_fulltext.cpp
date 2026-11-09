@@ -4,6 +4,8 @@
 #include <fstream>
 #include <sstream>
 
+#include "docs/guarded_engine.h"
+#include "fake_engine.h"
 #include "plugins/fulltext.h"
 
 using namespace zk;
@@ -123,4 +125,60 @@ TEST_CASE("fulltext: a second call is served from the cache") {
     a.md5 = "md5three";
     REQUIRE(extractFullText(a, plugins, env(), &err));
     CHECK(fs::exists(plugins + "/.cache/fulltext/OTHER001-x.txt"));
+}
+
+namespace {
+
+struct FailingEngine : test::FakeEngine {
+    bool throws = false;
+    bool fullText(std::string& out, UserError* err) override {
+        out = "partial";
+        if (throws) throw std::bad_alloc();
+        if (err) *err = UserError{ErrorKind::Other, "This PDF's text can't be read.", "fake"};
+        return false;
+    }
+};
+
+EngineLoader failing(bool throws) {
+    return [throws](DocType, const EngineEnv&, UserError*) -> std::unique_ptr<DocumentEngine> {
+        auto e = std::make_unique<FailingEngine>();
+        e->throws = throws;
+        return std::make_unique<GuardedEngine>(std::move(e));
+    };
+}
+
+bool cacheEmpty(const std::string& plugins) {
+    const fs::path d = fs::path(plugins) / ".cache" / "fulltext";
+    return !fs::exists(d) || fs::is_empty(d);
+}
+
+}  // namespace
+
+TEST_CASE("fulltext: an engine failure is an error and is never cached") {
+    for (bool throws : {false, true}) {
+        const std::string plugins = freshDir("fail");
+        UserError err;
+        auto a = local("FAIL0001", "application/pdf", "tests/data/pdf/sample.pdf");
+        CHECK_FALSE(extractFullText(a, plugins, env(), &err, failing(throws)));
+        CHECK_FALSE(err.message.empty());
+        CHECK(cacheEmpty(plugins));
+        // The real engine still works afterwards: nothing wrong was left behind.
+        CHECK(extractFullText(a, plugins, env(), &err));
+    }
+}
+
+TEST_CASE("fulltext: no checksum, no cache") {
+    const std::string plugins = freshDir("nomd5");
+    UserError err;
+    auto text = extractFullText(local("NOSUM001", "application/pdf", "tests/data/pdf/sample.pdf", ""), plugins, env(), &err);
+    REQUIRE_MESSAGE(text, err.message);
+    CHECK(cacheEmpty(plugins));
+}
+
+TEST_CASE("fulltext: an unreadable cache folder doesn't make extraction throw") {
+    const std::string plugins = freshDir("badcache");
+    std::ofstream(plugins + "/.cache") << "a file where the folder should be";
+    UserError err;
+    auto text = extractFullText(local("NODIR001", "application/pdf", "tests/data/pdf/sample.pdf"), plugins, env(), &err);
+    CHECK(text);
 }

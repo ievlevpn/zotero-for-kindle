@@ -148,7 +148,12 @@ void EpubEngine::settle() {
     toc_.clear();
 }
 
-bool EpubEngine::open(const std::string& path, UserError* err) {
+bool EpubEngine::open(const std::string& path, UserError* err) { return load(path, err, false); }
+bool EpubEngine::openForText(const std::string& path, UserError* err) { return load(path, err, true); }
+
+// textOnly: just parse the book (no style sheet, layout, pagination or position index): for
+// fullText(), which must not keep the render worker out of crengine for long.
+bool EpubEngine::load(const std::string& path, UserError* err, bool textOnly) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     auto fail = [&](const char* msg, const char* detail) {
         view_.reset();
@@ -164,9 +169,10 @@ bool EpubEngine::open(const std::string& path, UserError* err) {
     std::stringstream cssText;
     cssText << css.rdbuf();
     baseCss_ = cssText.str();
-    applyLayout();  // the style sheet, with the chosen font
+    if (!textOnly) applyLayout();  // the style sheet, with the chosen font
     if (!view_->LoadDocument(path.c_str()) || !view_->getDocument())
         return fail("This EPUB is damaged and can't be opened.", "crengine: LoadDocument failed");
+    if (textOnly) return true;
     view_->setViewMode(DVM_PAGES, cols());
     settle();
     if (view_->getPageCount() <= 0) return fail("This EPUB is damaged and can't be opened.", "no pages");
@@ -608,12 +614,18 @@ void appendParagraphs(const std::string& raw, std::string& out) {
 
 // The book's chapters (crengine's DocFragments) in order, paragraphs separated by a blank line.
 // The crengine lock is taken per chapter, so the reader's render worker can run in between.
-std::string EpubEngine::fullText() {
+bool EpubEngine::fullText(std::string& out, UserError* err) {
+    out.clear();
+    auto fail = [&] {
+        out.clear();
+        if (err) *err = UserError{ErrorKind::Other, "This EPUB's text can't be read.", "crengine: no document"};
+        return false;
+    };
     std::vector<int> fragments;  // child indexes of the root's first element with DocFragments
     ldomNode* holder = nullptr;
     {
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
-        if (!view_) return {};
+        if (!view_ || !view_->getDocument()) return fail();
         ldomNode* root = view_->getDocument()->getRootNode();
         // Chapters are DocFragment elements, children of <body>; with none, the whole document is one.
         std::vector<ldomNode*> stack{root};
@@ -635,7 +647,6 @@ std::string EpubEngine::fullText() {
                 if (c && c->isElement() && nameOf(c) == "DocFragment") fragments.push_back(i);
             }
     }
-    std::string out;
     auto take = [&](ldomNode* n) {
         ldomXRange whole(n, true);
         appendParagraphs(utf8(whole.getRangeText('\n')), out);
@@ -643,15 +654,15 @@ std::string EpubEngine::fullText() {
     if (!holder) {
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
         take(view_->getDocument()->getRootNode());
-        return out;
+        return true;
     }
     for (int i : fragments) {
         if (out.size() > kMaxFullTextBytes) break;
         std::lock_guard<std::recursive_mutex> lock(crengineMutex());
-        if (!view_ || i >= (int)holder->getChildCount()) break;
+        if (!view_ || i >= (int)holder->getChildCount()) return fail();
         take(holder->getChildNode(i));
     }
-    return out;
+    return true;
 }
 
 namespace {

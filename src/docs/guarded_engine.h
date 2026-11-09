@@ -50,7 +50,23 @@ public:
     std::string zoteroPosition(int page) override { return guard([&] { return e_->zoteroPosition(page); }, std::string()); }
     int pageOfZoteroPosition(const std::string& v) override { return guard([&] { return e_->pageOfZoteroPosition(v); }, -1); }
     int64_t wordsBetween(int from, int to) override { return guard([&] { return e_->wordsBetween(from, to); }, int64_t{0}); }
-    std::string fullText() override { return guard([&] { return e_->fullText(); }, std::string()); }
+    bool openForText(const std::string& path, UserError* err) override {
+        try {
+            return e_->openForText(path, err);
+        } catch (...) {
+            if (err) *err = UserError{ErrorKind::Other, "This book is damaged and can't be opened.", "exception while opening"};
+            return false;
+        }
+    }
+    bool fullText(std::string& out, UserError* err) override {
+        try {
+            return e_->fullText(out, err);
+        } catch (...) {
+            out.clear();
+            if (err) *err = UserError{ErrorKind::Other, "The app failed reading this file's text.", "exception in fullText"};
+            return false;
+        }
+    }
     std::optional<Selection> select(int page, Point from, Point to) override {
         return guard([&] { return e_->select(page, from, to); }, std::optional<Selection>{});
     }

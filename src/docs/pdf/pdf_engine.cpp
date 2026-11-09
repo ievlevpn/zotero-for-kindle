@@ -458,7 +458,7 @@ std::string PdfEngine::chapterAt(int page) {
     return title;
 }
 
-std::string PdfEngine::pageText(int page) {
+std::string PdfEngine::pageText(int page, bool* failed) {
     fz_stext_page* st = nullptr;
     fz_buffer* buf = nullptr;
     fz_var(st);
@@ -470,6 +470,7 @@ std::string PdfEngine::pageText(int page) {
     fz_catch(ctx_) {
         fz_drop_buffer(ctx_, buf);
         fz_drop_stext_page(ctx_, st);
+        if (failed) *failed = true;
         return {};
     }
     // Copy out after fz_try: a C++ allocation must not throw inside MuPDF's setjmp scope.
@@ -827,15 +828,24 @@ int64_t PdfEngine::wordsBetween(int fromPage, int toPage) {
 
 // Pages in order, "\f" between them. This engine has its own MuPDF context, so nothing is shared
 // with the reader's engine.
-std::string PdfEngine::fullText() {
-    std::string out;
-    if (!doc_) return out;
+bool PdfEngine::fullText(std::string& out, UserError* err) {
+    out.clear();
+    if (!doc_) {
+        if (err) *err = UserError{ErrorKind::Other, "This PDF's text can't be read.", "no document"};
+        return false;
+    }
     const int pages = pdfPages();
     for (int p = 0; p < pages && out.size() <= kMaxFullTextBytes; ++p) {
         if (p) out += '\f';
-        out += pageText(p);
+        bool failed = false;
+        out += pageText(p, &failed);
+        if (failed) {
+            out.clear();
+            if (err) *err = UserError{ErrorKind::Other, "This PDF's text can't be read.", "MuPDF failed on page " + std::to_string(p + 1)};
+            return false;
+        }
     }
-    return out;
+    return true;
 }
 
 namespace {

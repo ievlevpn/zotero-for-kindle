@@ -36,8 +36,10 @@ std::optional<std::string> readAll(const fs::path& p) {
 
 }  // namespace
 
-std::optional<std::string> extractFullText(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
-                                           UserError* err) {
+namespace {
+
+std::optional<std::string> extract(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
+                                   UserError* err, const EngineLoader& loader) {
     if (a.linkMode == "linked_file" || a.linkMode == "linked_url")
         return fail(err, "This is a linked file, which the Kindle doesn't have, so its text can't be read.", "linkMode " + a.linkMode),
                std::nullopt;
@@ -50,22 +52,26 @@ std::optional<std::string> extractFullText(const AttachmentRecord& a, const std:
     if (a.state != AttachmentRecord::State::Local || a.localPath.empty() || !fs::is_regular_file(a.localPath, ec))
         return fail(err, "This file isn't on the Kindle - open it once to download it.", "no local file for " + a.key), std::nullopt;
 
-    const bool cacheable = safeName(a.key) && safeName(a.md5.empty() ? "none" : a.md5);
-    const std::string md5 = a.md5.empty() ? "none" : a.md5;
+    // Without a checksum there is nothing to tell a changed file by: no cache.
+    const bool cacheable = safeName(a.key) && safeName(a.md5);
     const fs::path dir = fs::path(pluginsDir) / ".cache" / "fulltext";
-    const fs::path entry = dir / (a.key + "-" + md5 + ".txt");
+    const fs::path entry = dir / (a.key + "-" + a.md5 + ".txt");
     if (cacheable) {
         if (auto hit = readAll(entry); hit && hit->size() <= kMaxFullTextBytes) return hit;
     }
 
     UserError e;
-    auto engine = loadEngine(type, env, &e);
+    auto engine = loader ? loader(type, env, &e) : loadEngine(type, env, &e);
     if (!engine) return fail(err, e.message.empty() ? "The reader for this file couldn't be started." : e.message, e.details), std::nullopt;
-    if (!engine->open(a.localPath, &e)) {
+    if (!engine->openForText(a.localPath, &e)) {
         if (err) *err = e;
         return std::nullopt;
     }
-    std::string text = engine->fullText();
+    std::string text;
+    if (!engine->fullText(text, &e)) {
+        if (err) *err = e.message.empty() ? UserError{ErrorKind::Other, "This file's text can't be read.", "fullText failed"} : e;
+        return std::nullopt;
+    }
     engine.reset();
     if (text.size() > kMaxFullTextBytes)
         return fail(err, "This file's text is larger than 32 MB.", "full text over limit"), std::nullopt;
@@ -85,14 +91,30 @@ std::optional<std::string> extractFullText(const AttachmentRecord& a, const std:
             fs::remove(tmp, ec);  // no cache then; the text itself is fine
         } else {
             const std::string prefix = a.key + "-", mine = entry.filename().string();
-            for (const auto& f : fs::directory_iterator(dir, ec)) {
-                const std::string name = f.path().filename().string();
+            fs::directory_iterator it(dir, ec);
+            for (; !ec && it != fs::directory_iterator(); it.increment(ec)) {
+                const std::string name = it->path().filename().string();
+                std::error_code rc;
                 if (name != mine && name.rfind(prefix, 0) == 0 && name.size() > 4 && name.substr(name.size() - 4) == ".txt")
-                    fs::remove(f.path(), ec);
+                    fs::remove(it->path(), rc);
             }
         }
     }
     return text;
+}
+
+}  // namespace
+
+std::optional<std::string> extractFullText(const AttachmentRecord& a, const std::string& pluginsDir, const EngineEnv& env,
+                                           UserError* err, const EngineLoader& loader) {
+    try {
+        return extract(a, pluginsDir, env, err, loader);
+    } catch (const std::exception& e) {
+        fail(err, "The app failed reading this file's text.", e.what());
+    } catch (...) {
+        fail(err, "The app failed reading this file's text.", "unknown exception");
+    }
+    return std::nullopt;
 }
 
 }  // namespace zk

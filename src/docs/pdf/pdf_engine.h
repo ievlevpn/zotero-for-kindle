@@ -38,7 +38,7 @@ public:
     std::vector<LinkBox> links(int page) override;
     std::optional<LinkInfo> link(int page, int index) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
-    std::string fullText() override;
+    bool fullText(std::string& out, UserError*) override;
 
 private:
     // Column view (design 2026-11-08): the engine's pages are views of the PDF's pages.
@@ -77,7 +77,7 @@ private:
         float x0, y0, x1, y1;
     };
     Area viewRect(int page);
-    std::string pageText(int page);
+    std::string pageText(int page, bool* failed = nullptr);
     // The text at a link's target (x, y in page space; NaN: the page's top): the entry that
     // starts there, in its column, as far as it goes.
     std::string textAt(int page, float x, float y);

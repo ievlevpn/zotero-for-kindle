@@ -18,6 +18,7 @@ public:
     ~EpubEngine() override;
 
     bool open(const std::string& path, UserError*) override;
+    bool openForText(const std::string& path, UserError*) override;
     void setLayout(const Layout&) override;
     int pageCount() override;
     PageImage render(int page) override;
@@ -35,7 +36,7 @@ public:
     std::string zoteroPosition(int page) override;
     int pageOfZoteroPosition(const std::string& json) override;
     int64_t wordsBetween(int fromPage, int toPage) override;
-    std::string fullText() override;
+    bool fullText(std::string& out, UserError*) override;
 
 private:
     void applyLayout();
@@ -44,6 +45,7 @@ private:
     int crPage(int spread) const { return spread * cols(); }
     int spreadOf(int crPage) const { return crPage < 0 ? crPage : crPage / cols(); }
     void settle();
+    bool load(const std::string& path, UserError*, bool textOnly);
     // The current page's <a> links (cached for one page): their element, href, text and boxes.
     struct PageLink {
         ldomNode* anchor = nullptr;

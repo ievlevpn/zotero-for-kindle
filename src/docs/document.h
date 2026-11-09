@@ -156,10 +156,17 @@ public:
     virtual std::string zoteroPosition(int /*page*/) { return ""; }
     virtual int pageOfZoteroPosition(const std::string& /*json*/) { return -1; }
     virtual int64_t wordsBetween(int fromPage, int toPage) = 0;  // for "time left"
-    // The whole document's text, UTF-8, in reading order, for plugins. EPUB: paragraphs separated
-    // by "\n\n". PDF: each page's text, pages separated by "\f". Stops (returning more than
-    // kMaxFullTextBytes) once it is over the limit. "" if nothing could be read.
-    virtual std::string fullText() { return {}; }
+    // As open(), for a caller that only wants fullText(): no layout or pagination (EPUB), so the
+    // shared crengine isn't held for seconds. The engine can then only fullText().
+    virtual bool openForText(const std::string& path, UserError* err) { return open(path, err); }
+    // The whole document's text into `out`, UTF-8, in reading order, for plugins. EPUB: paragraphs
+    // separated by "\n\n". PDF: each page's text, pages separated by "\f" (a page without text
+    // layer is empty: a scan gives only form feeds, still a success). Stops (leaving more than
+    // kMaxFullTextBytes in `out`) once over the limit. False with *err on a failure; never "".
+    virtual bool fullText(std::string& /*out*/, UserError* err) {
+        if (err) *err = UserError{ErrorKind::Other, "This file's text can't be read.", "fullText not supported"};
+        return false;
+    }
     // The whole words between two points on a page (in either order); nullopt if `from` is not on
     // text. A Selection with empty text means the page has no text layer at all (a scan).
     virtual std::optional<Selection> select(int page, Point from, Point to) = 0;
