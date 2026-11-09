@@ -135,6 +135,8 @@ plugins_lib = static_library('zk-plugins',
   'src/plugins/host.cpp',
   'src/plugins/bindings_core.cpp',
   'src/plugins/bindings_storage.cpp',
+  'src/plugins/bindings_fetch.cpp',
+  'src/plugins/plugin_http.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
   dependencies : [core_dep, quickjs_dep])
 plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, quickjs_dep],

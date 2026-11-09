@@ -381,12 +381,16 @@ declare namespace zk {
      * not allowed.
      */
     headers?: Record<string, string> | [string, string][];
-    /** Request body; send JSON with `JSON.stringify` and a `content-type` header. */
+    /**
+     * Request body (sent as UTF-8, at most 10 MB; not with GET or HEAD); send JSON with
+     * `JSON.stringify` and a `content-type` header.
+     */
     body?: string;
     /**
-     * Give up after this many milliseconds (at most, and by default, 30 000), rejecting with a
-     * {@link zk.LimitError} `"responseTime"`. For calls that share a budget, e.g. several feeds
-     * fetched in one 30-second background run.
+     * Give up after this many milliseconds (at most, and by default, 30 000; a larger value counts
+     * as 30 000), rejecting with a {@link zk.LimitError} `"responseTime"`. The time counts from the
+     * call, redirects included. For calls that share a budget, e.g. several feeds fetched in one
+     * 30-second background run.
      *
      * @example
      * const res = await zk.fetch(feedUrl, { timeout: 8000 });

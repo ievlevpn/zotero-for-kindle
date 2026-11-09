@@ -3,7 +3,7 @@
 // and the host's services — permissions, errors, host work that settles a promise later, and the
 // user's confirmation. Everything here runs on the plugin thread unless it says otherwise.
 //
-// Adding a binding (Tasks 6, 7, 10, 13–16):
+// Adding a binding (Tasks 6, 7, 10, 13–16; bindings_storage.cpp and bindings_fetch.cpp are examples):
 //  1. Write `void installStorage(PluginCtx&)` in its own bindings_*.cpp, adding members to `p.zk`
 //     with defineFunction<native>() — the one way to define a native: it catches every C++
 //     exception at the boundary (QuickJS's C frames can't unwind one). Declare it below next to
@@ -40,6 +40,7 @@
 namespace zk::plugins {
 
 struct Inbox;
+class PluginNet;   // plugin_http.h
 struct PluginRun;  // the host's bookkeeping for one loaded plugin (host.cpp)
 
 struct PluginCtx {
@@ -142,6 +143,9 @@ private:
 // Starts host work owned by the running call: *promise receives the promise to hand to JS.
 std::shared_ptr<Work> startWork(PluginCtx&, JSValue* promise);
 
+// The host's network workers (zk.fetch), made at the first use; nullptr if the host has no makeHttp.
+PluginNet* netOf(PluginCtx&);
+
 // ---- The user -----------------------------------------------------------------------------
 
 // Posts `confirm` (kind Confirm; plugin id, name and request id are filled in) and pauses the
@@ -151,6 +155,9 @@ std::shared_ptr<Work> startWork(PluginCtx&, JSValue* promise);
 uint64_t askUser(PluginCtx&, PluginHostEvent confirm, std::function<void(bool yes)> answered);
 // Any other event for the screen (plugin id and name filled in).
 void post(PluginCtx&, PluginHostEvent);
+
+// UTF-8 with every invalid byte replaced by U+FFFD.
+std::string sanitisedUtf8(const char* s, size_t n);
 
 // ---- Host services the core bindings are built on -------------------------------------------
 
@@ -176,6 +183,9 @@ bool installStandardGlobals(js::Context&);
 void installCore(PluginCtx&);
 // zk.storage and zk.files (bindings_storage.cpp). Throws std::runtime_error on an internal error.
 void installStorage(PluginCtx&);
+// zk.fetch (bindings_fetch.cpp; the guard and workers are plugin_http.h). Throws std::runtime_error
+// on an internal error.
+void installFetch(PluginCtx&);
 // Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
 // are dropped and its storage closed (it reopens, empty, at the next use).
 void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);

@@ -27,11 +27,18 @@ std::string trim(const std::string& s) {
 struct Sink {
     HttpResponse* resp;
     FILE* file;
+    size_t max;     // 0: no cap (counts the decoded body, so a compressed bomb stops too)
+    size_t written;
 };
 
 size_t onBody(char* data, size_t size, size_t n, void* user) {
     auto* sink = static_cast<Sink*>(user);
     const size_t len = size * n;
+    if (sink->max && sink->written + len > sink->max) {
+        sink->resp->tooLarge = true;
+        return 0;  // fails the transfer with CURLE_WRITE_ERROR
+    }
+    sink->written += len;
     if (sink->file) return std::fwrite(data, 1, len, sink->file);
     sink->resp->body.append(data, len);
     return len;
@@ -44,7 +51,8 @@ size_t onHeader(char* data, size_t size, size_t n, void* user) {
     if (line.rfind("HTTP/", 0) == 0) {
         resp->headers.clear();  // a new response (after a redirect or 100-continue)
     } else if (size_t colon = line.find(':'); colon != std::string::npos) {
-        resp->headers[lower(trim(line.substr(0, colon)))] = trim(line.substr(colon + 1));
+        std::string& v = resp->headers[lower(trim(line.substr(0, colon)))];
+        v += (v.empty() ? "" : ", ") + trim(line.substr(colon + 1));  // repeated: joined, as on the web
     }
     return len;
 }
@@ -89,7 +97,7 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
             return resp;
         }
     }
-    Sink sink{&resp, out};
+    Sink sink{&resp, out, req.maxBodyBytes, 0};
     char errbuf[CURL_ERROR_SIZE] = {0};
 
     curl_easy_setopt(h, CURLOPT_URL, req.url.c_str());
@@ -102,8 +110,15 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     curl_easy_setopt(h, CURLOPT_MAXREDIRS, 5L);
     curl_easy_setopt(h, CURLOPT_REDIR_PROTOCOLS_STR, "https");
     curl_easy_setopt(h, CURLOPT_ACCEPT_ENCODING, "");
-    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, static_cast<long>(req.connectTimeoutS));
-    curl_easy_setopt(h, CURLOPT_TIMEOUT, static_cast<long>(req.timeoutS));
+    // No cookie engine is ever enabled (no COOKIEFILE/COOKIEJAR/share): nothing a server sets is
+    // sent back, to it or anyone else. Plugin requests (PluginHttp) rely on this.
+    if (req.timeoutMs > 0) {
+        curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT_MS, std::min(static_cast<long>(req.connectTimeoutS) * 1000L, static_cast<long>(req.timeoutMs)));
+        curl_easy_setopt(h, CURLOPT_TIMEOUT_MS, static_cast<long>(req.timeoutMs));
+    } else {
+        curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, static_cast<long>(req.connectTimeoutS));
+        curl_easy_setopt(h, CURLOPT_TIMEOUT, static_cast<long>(req.timeoutS));
+    }
     curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, onBody);
     curl_easy_setopt(h, CURLOPT_WRITEDATA, &sink);
     curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, onHeader);
@@ -120,7 +135,8 @@ HttpResponse CurlHttp::send(const HttpRequest& req) {
     } else if (req.method != "GET") {
         curl_easy_setopt(h, CURLOPT_CUSTOMREQUEST, req.method.c_str());
     }
-    if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH" || req.method == "PROPFIND") {
+    if (req.method == "POST" || req.method == "PUT" || req.method == "PATCH" || req.method == "PROPFIND" ||
+        (req.method == "DELETE" && !req.body.empty())) {
         curl_easy_setopt(h, CURLOPT_POSTFIELDS, req.body.data());
         curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(req.body.size()));
     }

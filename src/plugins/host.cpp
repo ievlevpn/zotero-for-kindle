@@ -53,6 +53,7 @@
 #include <sstream>
 
 #include "plugins/plugin_ctx.h"
+#include "plugins/plugin_http.h"
 #include "plugins/plugin_log.h"
 #include "plugins/state.h"
 
@@ -239,6 +240,8 @@ struct PluginHost::Impl {
     std::set<std::string> restarts;    // stopped mid-run: a fresh runtime at the next safe point
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
     std::string markerId;  // what the crash marker says now ("" = no marker)
+    // zk.fetch's workers: made on the plugin thread at the first fetch; shut down by stop().
+    std::unique_ptr<plugins::PluginNet> net;
 
     explicit Impl(PluginHostDeps d) : deps(std::move(d)), state(deps.pluginsDir + "/.state.json") {
         if (!deps.clock) deps.clock = systemMs;
@@ -446,6 +449,7 @@ struct PluginHost::Impl {
         try {
             installCore(p);
             installStorage(p);
+            installFetch(p);
             for (auto& install : deps.extraBindings) install(p);
         } catch (const std::exception& e) {
             log(id, LogLevel::Error, std::string("The app couldn't prepare this plugin: ") + e.what());
@@ -914,6 +918,12 @@ PluginCtx::~PluginCtx() {
 
 PluginCtx& ctxOf(JSContext* c) { return *static_cast<PluginCtx*>(JS_GetContextOpaque(c)); }
 
+PluginNet* netOf(PluginCtx& p) {
+    auto& h = p.host;
+    if (!h.net && h.deps.makeHttp) h.net = std::make_unique<PluginNet>(h.deps.makeHttp, h.deps.webdavHost);
+    return h.net.get();
+}
+
 CallInfo currentCall(PluginCtx& p) {
     auto it = p.run->calls.find(p.run->current);
     if (it == p.run->calls.end()) return {};
@@ -1087,6 +1097,7 @@ void PluginHost::stop() {
     }
     pthread_join(h.thread, nullptr);
     h.joined = true;
+    if (h.net) h.net->shutdown();  // aborts fetches still running; their promises are gone with the thread
 }
 
 void PluginHost::reload() {

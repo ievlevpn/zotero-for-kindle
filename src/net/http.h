@@ -23,14 +23,18 @@ struct HttpRequest {
     bool followRedirects = true;  // reads only (writes never follow); false: the 3xx itself is returned
     int connectTimeoutS = 10;
     int timeoutS = 120;
+    int timeoutMs = 0;          // > 0: the whole transfer's limit in ms, instead of timeoutS
+    size_t maxBodyBytes = 0;    // > 0: the transfer fails (tooLarge) once the body would pass this
     std::function<void(int64_t done, int64_t total)> onProgress;  // download progress (bytes)
     std::shared_ptr<std::atomic<bool>> cancel;                    // set to abort the transfer
 };
 
 struct HttpResponse {
     long status = 0;
-    std::map<std::string, std::string> headers;  // names lower-cased
+    std::map<std::string, std::string> headers;  // names lower-cased; repeated ones joined with ", "
     std::string body;
+    std::string url;          // the URL that answered, when the client tracks it (PluginHttp does)
+    bool tooLarge = false;    // the body passed HttpRequest::maxBodyBytes; reading stopped there
     int curlCode = 0;
     std::string curlError;
     double seconds = 0;

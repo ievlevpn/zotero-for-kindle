@@ -71,8 +71,11 @@ int64_t& totalOf(PluginCtx& p) {
 
 JSValue fail(JSContext* c, const std::string& message) { return JS_ThrowPlainError(c, "%s", message.c_str()); }
 
-// UTF-8 with every invalid byte replaced by U+FFFD.
-std::string sanitised(const char* s, size_t n) {
+std::string sanitised(const char* s, size_t n) { return sanitisedUtf8(s, n); }
+
+}  // namespace
+
+std::string sanitisedUtf8(const char* s, size_t n) {
     std::string out;
     out.reserve(n);
     size_t i = 0;
@@ -101,6 +104,8 @@ std::string sanitised(const char* s, size_t n) {
     }
     return out;
 }
+
+namespace {
 
 bool toText(JSContext* c, JSValueConst v, std::string& out) {
     size_t len = 0;
