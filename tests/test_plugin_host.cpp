@@ -1096,3 +1096,19 @@ export function run() {
 )JS");
     CHECK_MESSAGE(failures.empty(), joined(failures));
 }
+
+TEST_CASE("host: a plugin that can't get memory for its runtime fails to load; the host runs on") {
+    FakePlugins fp;
+    fp.add("a", R"(zk.on("syncFinished", () => console.log("ran"));)");
+    auto deps = fp.deps();
+    deps.memoryTotal = 64;  // too little for any JavaScript runtime
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(3000));
+    auto st = host.status();
+    CHECK_FALSE(statusOf(st, "a")->loaded);
+    CHECK(contains(statusOf(st, "a")->problem, "not enough plugin memory"));
+    CHECK_FALSE(contains(fp.log("a"), "ran"));
+}

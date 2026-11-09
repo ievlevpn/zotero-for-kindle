@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <stdexcept>
 #include <utility>
 
 #if defined(__APPLE__)
@@ -104,6 +105,7 @@ Runtime::Runtime(size_t memoryLimit, MemoryPool* pool) : limit_(memoryLimit), po
     static const JSMallocFunctions mf = {&Runtime::allocateZeroed, &Runtime::allocate, &Runtime::release,
                                          &Runtime::reallocate, &usableSize};
     rt_ = JS_NewRuntime2(&mf, this);
+    if (!rt_) throw std::runtime_error("not enough plugin memory for a JavaScript runtime");
     JS_SetMaxStackSize(rt_, kMaxStack);
     JS_SetInterruptHandler(rt_, &Runtime::interrupt, this);
 }
@@ -195,7 +197,9 @@ Value Value::get(const char* property) const {
 
 // ---- Context ----------------------------------------------------------------------------
 
-Context::Context(Runtime& rt) : rt_(rt), cx_(JS_NewContext(rt.raw())) {}
+Context::Context(Runtime& rt) : rt_(rt), cx_(JS_NewContext(rt.raw())) {
+    if (!cx_) throw std::runtime_error("not enough plugin memory for a JavaScript context");
+}
 
 Context::~Context() {
     JS_FreeContext(cx_);

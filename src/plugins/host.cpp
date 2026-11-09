@@ -465,7 +465,17 @@ struct PluginHost::Impl {
             return;
         }
 
-        auto owned = std::make_unique<PluginCtx>(*this, *f.manifest, dir.string(), deps.memoryPerPlugin);
+        // Under pool pressure (other plugins' memory) the runtime itself may not fit: that is this
+        // plugin's load failing, not a crash on the plugin thread.
+        std::unique_ptr<PluginCtx> owned;
+        try {
+            owned = std::make_unique<PluginCtx>(*this, *f.manifest, dir.string(), deps.memoryPerPlugin);
+        } catch (const std::exception& e) {
+            log(id, LogLevel::Error, std::string("The app couldn't load this plugin: ") + e.what());
+            failedLoad.insert(id);
+            setProblem(id, "The app couldn't load this plugin: not enough plugin memory");
+            return;
+        }
         PluginCtx& p = *owned;
         p.run->serial = ++nextSerial;
         std::string settingsText;

@@ -223,3 +223,19 @@ TEST_CASE("js: stack-overflow classification is best effort, enforcement is not"
     REQUIRE(err.has_value());
     CHECK_FALSE(err->limit);
 }
+
+TEST_CASE("js: a runtime or context the memory pool can't hold throws instead of crashing") {
+    MemoryPool tiny;
+    tiny.limit = 64;
+    CHECK_THROWS_AS(Runtime(16 << 20, &tiny), std::runtime_error);
+    CHECK(tiny.used == 0);
+
+    MemoryPool justRuntime;
+    {
+        MemoryPool probe;
+        Runtime sized(16 << 20, &probe);
+        justRuntime.limit = probe.used;  // room for the runtime, none for a context
+    }
+    Runtime rt(16 << 20, &justRuntime);
+    CHECK_THROWS_AS(Context{rt}, std::runtime_error);
+}
