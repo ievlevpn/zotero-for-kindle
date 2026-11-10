@@ -15,6 +15,7 @@
 
 using namespace zk;
 using namespace zk::test;
+using json = nlohmann::json;
 namespace fs = std::filesystem;
 
 namespace {
@@ -329,4 +330,170 @@ TEST_CASE("example: --enable-plugin turns a plugin on in developer mode; the not
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     CHECK(fp.log("quiet").empty());
     host.stop();
+}
+
+// ───────────── Feed Riffle (the screens example) end to end ─────────────
+
+#include <chrono>
+#include <deque>
+#include <mutex>
+#include <set>
+#include <thread>
+
+#include "fake_http.h"
+#include "fn_http.h"
+
+namespace {
+
+const char* kFeed = R"(<?xml version="1.0"?><rss version="2.0"><channel><title>Probability</title>
+<item><title>Brownian sheets</title><link>https://arxiv.org/abs/2401.00001</link><guid>oai:arXiv.org:2401.00001</guid>
+<description>About sheets.</description></item>
+<item><title>Random fields</title><link>https://arxiv.org/abs/2401.00002</link><guid>oai:arXiv.org:2401.00002</guid>
+<description>About fields.</description></item>
+</channel></rss>)";
+
+// All the text a tree shows: text, cards, notices, buttons, list rows, chips, joined by " | ".
+void collect(const Block& b, std::string& out) {
+    auto add = [&](const std::string& x) { if (!x.empty()) out += x + " | "; };
+    add(plainText(b));
+    add(b.title);
+    add(b.body);
+    add(b.text);
+    for (const auto& r : b.rows) add(r.title + " " + r.meta);
+    for (const auto& c : b.chips) add(c.title);
+    for (const auto& c : b.children) collect(c, out);
+}
+std::string allText(const Block& b) {
+    std::string out;
+    collect(b, out);
+    return out;
+}
+
+struct Riffle {
+    FakePlugins fp;
+    Db db = Db::open(fp.path("library.db"));
+    Library lib{db};
+    std::unique_ptr<PluginHost> host;
+    std::deque<PluginHostEvent> got;
+    std::mutex mu;
+    FakeHttp fake;
+
+    Riffle() {
+        fs::copy("tests/data/plugins/examples/feed-riffle", fp.path("feed-riffle"), fs::copy_options::recursive);
+        fp.write("feed-riffle/settings.json", R"({"feeds":["https://feeds.test/prob.xml"],"tags":["riffled"]})");
+        lib.upsertCollection({"COLLINB1", "Inbox", "", 1});
+        fake.expect("GET", "https://feeds.test/prob.xml", FakeHttp::ok(kFeed));
+        PluginHostDeps d = fp.deps();
+        d.dbPath = fp.path("library.db");
+        d.handlerBudgetMs = 5000;
+        d.backgroundBudgetMs = 10000;
+        d.renderBudgetMs = 5000;
+        d.actionBudgetMs = 10000;
+        d.makeHttp = [this] {
+            return std::make_unique<FnHttp>([this](const HttpRequest& r) {
+                std::lock_guard<std::mutex> lock(mu);
+                return fake.send(r);
+            });
+        };
+        host = std::make_unique<PluginHost>(d);
+        host->setEnabled("feed-riffle", true);
+        host->start();
+    }
+    ~Riffle() { host->stop(); }
+
+    std::optional<PluginHostEvent> next(PluginHostEvent::Kind kind, uint64_t instance, int ms = 8000) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        for (;;) {
+            PluginHostEvent ev;
+            while (host->poll(ev)) got.push_back(std::move(ev));
+            for (auto it = got.begin(); it != got.end(); ++it)
+                if (it->kind == kind && (instance == 0 || it->instance == instance)) {
+                    PluginHostEvent out = std::move(*it);
+                    got.erase(it);
+                    return out;
+                }
+            if (std::chrono::steady_clock::now() >= end) return std::nullopt;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    // The next tree of `instance` whose text (all blocks) contains `needle`.
+    std::optional<PluginHostEvent> treeWith(uint64_t instance, const std::string& needle) {
+        for (int i = 0; i < 20; ++i) {
+            auto t = next(PluginHostEvent::Kind::ScreenTree, instance);
+            if (!t) return std::nullopt;
+            if (allText(*t->tree).find(needle) != std::string::npos) return t;
+        }
+        return std::nullopt;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("example: Feed Riffle — open, render, swipe, keep into a collection, close with a result, the summary; no network") {
+    Riffle r;
+    // The background run fetches the (fake) feed and deals the cards.
+    r.host->runBackground(1);
+    REQUIRE(r.host->waitIdle(15000));
+    CAPTURE(r.fp.log("feed-riffle"));
+    REQUIRE(r.fake.sent.size() == 1);
+
+    // Open the deck: the first card, and what is left.
+    const uint64_t deck = r.host->openScreen("feed-riffle", "deck");
+    r.host->screenEvent(deck, {{"kind", "open"}});
+    auto t = r.treeWith(deck, "2 left");
+    REQUIRE(t);
+    CHECK(allText(*t->tree).find("Brownian sheets") != std::string::npos);
+
+    // Swipe left: discard. The next card is on top, with a line saying so.
+    r.host->screenEvent(deck, {{"kind", "swipe"}, {"id", "card"}, {"direction", "left"}});
+    t = r.treeWith(deck, "1 left");
+    REQUIRE(t);
+    CHECK(allText(*t->tree).find("Random fields") != std::string::npos);
+    CHECK(allText(*t->tree).find("Discarded") != std::string::npos);
+
+    // Swipe right: keep opens the filing screen.
+    r.host->screenEvent(deck, {{"kind", "swipe"}, {"id", "card"}, {"direction", "right"}});
+    auto o = r.next(PluginHostEvent::Kind::ScreenOpen, 0);
+    REQUIRE(o);
+    CHECK(o->parent == deck);
+    CHECK(o->screenId == "file");
+    const uint64_t filing = o->instance;
+    r.host->screenEvent(filing, {{"kind", "open"}});
+    t = r.treeWith(filing, "Inbox");
+    REQUIRE(t);
+    r.host->screenEvent(filing, {{"kind", "select"}, {"id", "collections"}, {"row", "COLLINB1"}});
+    r.host->screenEvent(filing, {{"kind", "change"}, {"id", "note"}, {"text", "read this"}});
+    r.host->screenEvent(filing, {{"kind", "tap"}, {"id", "file"}});
+
+    // Filing closes the screen with a result line; the deck shows it and has run out.
+    auto c = r.next(PluginHostEvent::Kind::ScreenClose, filing);
+    REQUIRE(c);
+    REQUIRE(c->value.is_string());
+    CHECK(c->value.get<std::string>() == "Kept into Inbox");
+    t = r.treeWith(deck, "cleared");
+    REQUIRE(t);
+    CHECK(allText(*t->tree).find("1 kept") != std::string::npos);
+    CHECK(allText(*t->tree).find("1 discarded") != std::string::npos);
+
+    // The filing is queued for Zotero: the item, its collection, its tags and the note.
+    REQUIRE(r.host->waitIdle(8000));
+    std::set<std::string> kinds;
+    json created;
+    for (const auto& ch : r.lib.pendingPluginChanges("feed-riffle")) {
+        kinds.insert(kindName(ch.kind));
+        if (ch.kind == PluginChange::Kind::CreateItem) created = json::parse(ch.value);
+    }
+    CHECK(kinds == std::set<std::string>{"createItem", "addNote"});
+    CHECK(created["fields"]["title"] == "Random fields");
+    CHECK(created["collections"] == json::array({"COLLINB1"}));
+    CHECK(created["tags"] == json::array({"riffled"}));
+
+    // Done: the summary screen.
+    r.host->screenEvent(deck, {{"kind", "tap"}, {"id", "done"}});
+    o = r.next(PluginHostEvent::Kind::ScreenOpen, 0);
+    REQUIRE(o);
+    CHECK(o->screenId == "summary");
+    t = r.treeWith(o->instance, "cleared");
+    REQUIRE(t);
+    r.host->closeScreen(deck);
 }

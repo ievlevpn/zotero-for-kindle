@@ -10,6 +10,9 @@ type-checks them against the API, so they can't go stale.
 - [File an item into a collection, with undo](#file-an-item-into-a-collection-with-undo)
 - [React to finishing a book](#react-to-finishing-a-book)
 - [Run something hourly](#run-something-hourly)
+- [A deck of cards](#a-deck-of-cards)
+- [A form](#a-form)
+- [A list with search](#a-list-with-search)
 
 ## Export highlights
 
@@ -213,5 +216,134 @@ zk.background(async () => {
   }
   await zk.storage.set("lastRun", startedAt);
   zk.setBadge(lines.length > 0 ? `${lines.length} new` : null);
+});
+```
+
+The next three are screens; read [Screens and entry points](screens.md) first.
+
+## A deck of cards
+
+One card at a time. Swipe it left or right, or tap a button; the plugin keeps the state and the
+app turns the card. It is listed in the Plugins launcher on Home (`main: true`).
+
+<!-- recipe: sdk/recipes/deck.ts -->
+```ts
+// A deck: one card at a time, swipe left to dismiss, right to keep. Opens from the Plugins
+// launcher on Home. No permission needed.
+// plugin.json: "permissions": []
+
+const cards = ["Gaussian random fields", "Brownian sheets", "Stochastic PDEs"];
+let kept: string[] = [];
+let message = "";
+
+zk.screen("deck", {
+  title: "Cards",
+  main: true,
+  render: () =>
+    zk.ui.column([
+      zk.ui.deck({
+        id: "card",
+        card: cards[0] ? zk.ui.card({ title: cards[0], meta: `${cards.length} left` }) : null,
+        empty: `All done. Kept ${kept.length}.`,
+      }),
+      zk.ui.buttons([
+        { id: "drop", title: "Drop" },
+        { id: "keep", title: "Keep", primary: true },
+      ]),
+      message && zk.ui.notice(message),
+    ]),
+  onEvent: (e) => {
+    const verdict =
+      e.kind === "swipe" ? (e.direction === "right" ? "keep" : "drop") : e.kind === "tap" ? e.id : null;
+    if (!verdict || cards.length === 0) return;
+    const card = cards.shift()!;
+    if (verdict === "keep") kept.push(card);
+    message = `${verdict === "keep" ? "Kept" : "Dropped"} “${card}”`;
+  },
+});
+```
+
+## A form
+
+An item's *Plugins* section opens the screen (an item action may call `zk.ui.open`). A field, chips
+for the tags, and a button that writes to Zotero and closes the screen. Clearing the box after
+`submit` works by giving `value` a text that differs from what was typed.
+
+<!-- recipe: sdk/recipes/form.ts -->
+```ts
+// A form: a field, chips and a button on a screen that an item's Plugins section opens. The
+// button writes to Zotero and closes the screen.
+// plugin.json: "permissions": ["zotero:tags"]
+
+let tags: string[] = [];
+let text = "";
+
+zk.screen<{ itemKey: string }>("tag-it", {
+  title: "Tag",
+  render: () =>
+    zk.ui.column([
+      zk.ui.field({ id: "tag", placeholder: "New tag", value: text }),
+      zk.ui.chips({ id: "picked", chips: ["to-read", "important", ...tags.filter((t) => t !== "to-read" && t !== "important")], selected: tags }),
+      zk.ui.button({ id: "save", title: "Add tags", primary: true }),
+    ]),
+  onEvent: async (e, { itemKey }) => {
+    if (e.kind === "change") text = e.text;
+    else if (e.kind === "submit" && e.text.trim()) {
+      tags = [...new Set([...tags, e.text.trim()])];
+      text = ""; // differs from what was typed, so the app clears the box
+    } else if (e.kind === "chips") tags = e.selected;
+    else if (e.kind === "tap" && e.id === "save") {
+      for (const t of tags) await zk.zotero.addTag(itemKey, t);
+      const n = tags.length;
+      tags = [];
+      zk.ui.close(`Added ${n} tag${n === 1 ? "" : "s"}`);
+    }
+  },
+});
+
+zk.itemAction({
+  id: "tag-it",
+  title: "Tag…",
+  run: (item) => {
+    zk.ui.open("tag-it", { itemKey: item.key });
+  },
+});
+```
+
+## A list with search
+
+`change` arrives 700 ms after typing stops; the plugin narrows the rows and the app redraws only
+the list. Tapping a row sends `select`.
+
+<!-- recipe: sdk/recipes/list-search.ts -->
+```ts
+// A list with search: type to narrow the collections, tap a row to see where it is.
+// plugin.json: "permissions": ["library:read"]
+
+let query = "";
+let picked: string | null = null;
+
+zk.screen("collections", {
+  title: "Collections",
+  main: true,
+  render: async () => {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    const all = await zk.library.collections();
+    const rows = all
+      .filter((c) => words.every((w) => c.path.join(" / ").toLowerCase().includes(w)))
+      .map((c) => ({ id: c.key, title: c.name, subtitle: c.path.join(" / "), selected: c.key === picked }));
+    return zk.ui.column([
+      zk.ui.search({ id: "find", placeholder: "Collection" }),
+      zk.ui.list({ id: "rows", rows, empty: "No collection matches" }),
+      picked && zk.ui.notice(`Picked ${picked}`),
+    ]);
+  },
+  onEvent: (e) => {
+    if (e.kind === "open") {
+      query = "";
+      picked = null;
+    } else if (e.kind === "change") query = e.text;
+    else if (e.kind === "select") picked = e.row;
+  },
 });
 ```

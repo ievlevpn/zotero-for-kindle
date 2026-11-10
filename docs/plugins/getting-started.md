@@ -233,6 +233,7 @@ An in-app catalog, with signed installs and updates, is planned.
 
 - [Concepts](concepts.md): how plugins run, permissions, writing to Zotero, events, background
   work, limits.
+- [Screens and entry points](screens.md): actions in the reader and on items, screens of your own.
 - [Recipes](recipes.md): short complete plugins for common jobs.
 - [The API reference](reference/README.md), generated from `sdk/types/zk.d.ts`. Your editor shows
   the same text, with examples, as you type `zk.`.

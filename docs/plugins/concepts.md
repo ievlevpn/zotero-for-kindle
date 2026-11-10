@@ -277,7 +277,8 @@ Both survive restarts and app updates. *Reset its data* in Settings → Plugins 
 |---|---|
 | Time, event handler (and loading `main.js`) | 5 s |
 | Time, background task | 30 s |
-| Time, actions (not shown in this version yet) | at least 30 s |
+| Time, actions and screen events (`onEvent`) | at least 30 s |
+| Time, a screen's `render` | 1 s |
 | Memory | 32 MB a plugin; 96 MB for all plugins together |
 | Stack | deep recursion is stopped |
 | `zk.fetch` | 10 MB a response, 30 s a request, 8 at once, 20 MB of request bodies |
@@ -322,8 +323,8 @@ plugin off (*The app stopped while … was running — turned off*). If the app 
 crashes, twice in a row while plugins are on, the next start runs with all plugins off. Nothing a
 plugin does needs a reinstall to undo; see [Using plugins](using.md#if-something-goes-wrong).
 
-## Entry points for later
+## Entry points and screens
 
-`zk.selectionAction`, `zk.itemAction` and `zk.screen` are part of API v0 but nothing shows them
-in this version yet: plugin screens, the selection bar and an item's *More…* come later. Calling them
-now checks their arguments and records them, so a plugin written today keeps working.
+`zk.selectionAction` (the selection bar's **More…**), `zk.itemAction` (the **Plugins** section of an
+item's details) and `zk.screen` (screens; the `main` ones in the launcher behind the puzzle-piece
+icon on Home) are shown by the app. See [Screens and entry points](screens.md).

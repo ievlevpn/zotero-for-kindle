@@ -57,7 +57,7 @@ zk.zotero.cancel(changeId), pending()      // withdraw / list its unsent changes
 zk.on(event, handler)                      // highlightCreated/Changed/Deleted, bookOpened,
                                            // bookFinished, itemMarkedRead/Unread, syncFinished
 zk.background(task), zk.setBadge(text)     // after a sync, at most hourly; a short badge
-zk.selectionAction/itemAction/screen       // recorded, not shown yet (plugin screens come later)
+zk.selectionAction/itemAction/screen       // recorded here; v0 part 2 shows them (see above)
 zk.PermissionError, zk.LimitError          // what the app rejects with
 ```
 

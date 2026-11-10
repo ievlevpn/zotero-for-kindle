@@ -13,6 +13,8 @@ JavaScript plugins for Zotero for Kindle: what they are, how to use them, and ho
   build and on your Kindle.
 - [Concepts](concepts.md): how plugins run, permissions, writing to Zotero, events, background
   work, limits.
+- [Screens and entry points](screens.md): actions in the reader and on items, screens of your own,
+  the building blocks.
 - [Recipes](recipes.md): short complete plugins for common jobs.
 - [Debugging and testing](debugging.md): logs, the desktop loop, common errors.
 - [API reference](reference/README.md), generated from
@@ -21,4 +23,5 @@ JavaScript plugins for Zotero for Kindle: what they are, how to use them, and ho
 
 The SDK is in [`sdk/`](../../sdk/): the types, the [template](../../sdk/template/), and the
 example plugins in [`sdk/examples/`](../../sdk/examples/), of which
-[Highlights to Markdown](../../sdk/examples/highlights-to-markdown/) is the one to read first.
+[Highlights to Markdown](../../sdk/examples/highlights-to-markdown/) is the one to read first and
+[Feed Riffle](../../sdk/examples/feed-riffle/) shows screens.

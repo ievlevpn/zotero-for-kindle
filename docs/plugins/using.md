@@ -84,6 +84,16 @@ It only answers to your finger (not the pen), and not in the first half second, 
 for the page doesn't answer it. If you are turning a page, it waits for the turn to finish (up to
 3 seconds). It only comes right after something you did. Items go to Zotero's trash, from where you can restore them in Zotero.
 
+## Where plugins show up
+
+- **Reader:** select text, then **More…** in the selection bar lists plugin actions.
+- **Item details:** the **Plugins** section lists actions for that item.
+- **Home:** the puzzle-piece icon opens the plugins' own screens (a dot on it means a plugin has
+  something new).
+
+An action shows **Working…** while it runs; tap it to stop. The answer comes in a pop-up, with up to
+two buttons of the plugin's. If the plugin fails you see "<Plugin> couldn't do that: <message>".
+
 ## Turning plugins on and off
 
 - In **Settings → Plugins**, the switch on each row turns a plugin on or off. (The first time, the
