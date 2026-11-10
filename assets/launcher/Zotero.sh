@@ -23,6 +23,15 @@ U=update
 
 note() { echo "$(date '+%H:%M:%S') launcher: $*" >> log/zotero.log; }
 
+# Keeps the log to about 2 MB in all: over 1 MB, it becomes zotero.log.1 (replacing the old one).
+# `wc -c <` is in POSIX and busybox alike; unquoted, its macOS padding goes.
+rotate_log() {
+    [ -f log/zotero.log ] || return 0
+    size=$(wc -c < log/zotero.log 2>/dev/null) || return 0
+    [ -n "$size" ] && [ $size -gt 1048576 ] && mv -f log/zotero.log log/zotero.log.1
+    return 0
+}
+
 # Puts update/old back. Every step can be repeated, so an interrupted rollback finishes later.
 restore() {
     for d in bin lib share; do
@@ -69,6 +78,7 @@ check_update() {
 starts=0
 while [ "$starts" -lt 5 ]; do
     starts=$((starts + 1))
+    rotate_log
     check_update
     chmod +x bin/* 2>/dev/null  # copied over USB, the programs may have lost their execute bit
     DISPLAY=$ZK_DISPLAY ./bin/zotero >> log/zotero.log 2>&1

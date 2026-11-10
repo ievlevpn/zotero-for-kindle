@@ -402,7 +402,7 @@ void App::handle(const Gesture& g) {
     if (g.type == GestureType::Tap || g.type == GestureType::LongPress || g.type == GestureType::Swipe ||
         g.type == GestureType::DragEnd || g.type == GestureType::LongPressUp) {
         static const char* names[] = {"tap", "long press", "drag start", "drag move", "drag end", "swipe", "lift"};
-        log(LogLevel::Info, "%s at %d,%d", names[static_cast<int>(g.type)], g.pos.x, g.pos.y);
+        log(LogLevel::Debug, "%s at %d,%d", names[static_cast<int>(g.type)], g.pos.x, g.pos.y);
     }
     if (questionTakes(g)) return;
     Screen* s = visibleTop();

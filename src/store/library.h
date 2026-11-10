@@ -149,6 +149,8 @@ public:
     // them, as Refused: "It was deleted in Zotero." — except a pending Trash of the item or
     // DeleteNote of the note by the plugin that added it, which has happened: Sent (another
     // plugin's DeleteNote of it: Refused, "Only a note the plugin added can be deleted.").
+    // Downloaded copies go too: an attachment's own, and an item's attachments' (whose rows stay,
+    // as Remote, until Zotero deletes them as well).
     void removeObject(const std::string& type, const std::string& key);
 
     int64_t libraryVersion();
@@ -283,6 +285,7 @@ public:
     void saveReading(const std::string& itemKey, const std::string& location, double progress);
     void setFileState(const std::string& attachmentKey, AttachmentRecord::State, const std::string& localPath);
     std::vector<AttachmentRecord> downloadedAttachments();
+    std::vector<std::string> attachmentKeys();  // every attachment in the library, whatever its state
 
     // Plugin changes (zk.zotero.*), kept until SyncEngine::push has sent them and applied to the
     // local copy at once: CreateItem inserts the item under a fresh local key, AddNote a note
