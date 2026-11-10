@@ -86,7 +86,7 @@ PluginManifest parseObject(const json& j) {
 
     PluginManifest m;
     m.id = str(j, "id", true);
-    if (!matches(m.id, 64, idRe()))
+    if (!validPluginId(m.id))
         bad("\"id\" must be lowercase letters, digits and dashes (at most 64): " + m.id);
     m.name = oneLine(str(j, "name", true));
     if (m.name.empty() || codePoints(m.name) > 40) bad("\"name\" must be 1 to 40 characters");
@@ -197,6 +197,8 @@ std::string oneLine(const std::string& s) {
     }
     return out;
 }
+
+bool validPluginId(const std::string& id) { return matches(id, 64, idRe()); }
 
 std::optional<PluginManifest> parseManifest(const std::string& text, UserError* why) {
     try {

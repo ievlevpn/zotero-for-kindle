@@ -25,6 +25,9 @@ struct PluginManifest {
     std::vector<std::string> hosts;  // from net:<host> permissions, as written
 };
 
+// The id rule: lowercase letters, digits and single dashes between them, at most 64.
+bool validPluginId(const std::string& id);
+
 // nullopt and *why filled (if given) when the text is not a valid manifest.
 std::optional<PluginManifest> parseManifest(const std::string& json, UserError* why);
 
