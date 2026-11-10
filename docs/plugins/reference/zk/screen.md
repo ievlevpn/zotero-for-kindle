@@ -19,7 +19,9 @@ Home, shown when some plugin has a main screen; a dot on it when a plugin has a 
 
 The header shows `title` and the plugin's name, and its back arrow always works: the plugin
 is told (a `back` event) but can't keep the screen open. Leaving a screen (Back, the Home
-tab) closes it; nothing of a screen runs once it is closed.
+tab) closes it: it renders no more, and an `onEvent` call already running finishes (the
+`back` event comes after it), but the [zk.ui.open](ui/open.md), [zk.ui.close](ui/close.md) and
+[zk.ui.refresh](ui/refresh.md) it asks for are dropped.
 
 Budgets: `render` 1 s (it is usually milliseconds; it may `await` quick reads such as
 [zk.storage](storage-1.md)); `onEvent` at least 30 s, like an action (user-caused: it may change

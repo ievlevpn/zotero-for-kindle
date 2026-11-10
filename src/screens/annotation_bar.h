@@ -48,6 +48,7 @@ public:
     // More… tapped: the bar lists these instead (empty: back to the buttons).
     void showActions(std::vector<PluginAction>);
     bool listing() const { return !actions_.empty(); }
+    const std::vector<PluginAction>& listed() const { return actions_; }  // what the list shows
     Rect actionRect(int i) const;  // a listed action's row
     void setWorking(bool w) { working_ = w; }
     bool working() const { return working_; }

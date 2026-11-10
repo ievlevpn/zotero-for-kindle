@@ -827,20 +827,31 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             break;
         }
         case AnnotationBar::Action::Plugin: {
+            // The row the user tapped, as the list showed it (plugins may have loaded or restarted
+            // since: never send the passage to another plugin than the one picked).
+            const auto& listed = bar_->listed();
+            if (hit.colour < 0 || hit.colour >= static_cast<int>(listed.size())) break;
+            const PluginAction chosen = listed[static_cast<size_t>(hit.colour)];
             PluginEntries* e = nav.pluginEntries();
-            const auto actions = e ? e->actions("selectionAction") : std::vector<PluginAction>{};
+            bool still = false;
+            for (const auto& a : e ? e->actions("selectionAction") : std::vector<PluginAction>{})
+                still = still || (a.pluginId == chosen.pluginId && a.id == chosen.id);
             const Rect before = bar_->rect();
             bar_->showActions({});
             nav.damage(before.united(bar_->rect()), before.h > bar_->rect().h ? Waveform::Quality : Waveform::Ui);
             auto item = nav.library().item(row_.key);
             auto att = nav.library().attachment(row_.attachmentKey);
-            if (!e || !selection_ || !item || !att || hit.colour < 0 || hit.colour >= static_cast<int>(actions.size())) break;
+            if (!still) {
+                nav.toast(chosen.pluginName + " isn't available right now.");
+                break;
+            }
+            if (!e || !selection_ || !item || !att) break;
             nlohmann::ordered_json target = {{"text", selection_->text},
                                              {"item", plugins::itemJson(*item, nav.library().isRead(row_.key))},
                                              {"attachment", plugins::attachmentJson(*att)},
                                              {"pageLabel", selection_->pageLabel.empty() ? nlohmann::ordered_json(nullptr)
                                                                                          : nlohmann::ordered_json(selection_->pageLabel)}};
-            result_ = std::make_unique<PluginResult>(*e, actions[static_cast<size_t>(hit.colour)], "selectionAction", std::move(target),
+            result_ = std::make_unique<PluginResult>(*e, chosen, "selectionAction", std::move(target),
                                                      pageArea());
             bar_->setWorking(true);
             break;

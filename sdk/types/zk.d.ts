@@ -1044,7 +1044,9 @@ declare namespace zk {
    *
    * The header shows `title` and the plugin's name, and its back arrow always works: the plugin
    * is told (a `back` event) but can't keep the screen open. Leaving a screen (Back, the Home
-   * tab) closes it; nothing of a screen runs once it is closed.
+   * tab) closes it: it renders no more, and an `onEvent` call already running finishes (the
+   * `back` event comes after it), but the {@link zk.ui.open}, {@link zk.ui.close} and
+   * {@link zk.ui.refresh} it asks for are dropped.
    *
    * Budgets: `render` 1 s (it is usually milliseconds; it may `await` quick reads such as
    * {@link zk.storage}); `onEvent` at least 30 s, like an action (user-caused: it may change

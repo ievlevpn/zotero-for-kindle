@@ -11,6 +11,11 @@ first, with what to do about it.
 Still API 0 (v0 is unstable); plugins written for 0.3.0 keep loading, except a `zk.screen` call
 (below). Reference: [reference/](reference/README.md).
 
+**Screens and actions need app 0.4.0.** A plugin that calls `zk.screen` or `zk.ui`, or relies on
+`zk.selectionAction` / `zk.itemAction` showing in the app, sets `"minApp": "0.4.0"` in
+`plugin.json`; on 0.3.0 such a plugin would fail at load (and be turned off after three tries).
+The examples do.
+
 ```ts
 zk.screen(id, { title, main?, render(params), onEvent?(event, params) })  // a plugin screen
 zk.ui.column/row/text/card/deck/list/search/field/chips/button/buttons/divider/space/notice

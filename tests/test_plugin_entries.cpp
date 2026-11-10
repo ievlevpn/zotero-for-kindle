@@ -312,6 +312,29 @@ TEST_CASE("plugin entries: item details has a Plugins section; a row runs on the
     }
 }
 
+TEST_CASE("plugin entries: a row runs the action the list showed, even if plugins loaded or went since") {
+    FakeEntries e = withActions();
+    e.selection = {{"deepl", "DeepL", "translate", "Translate"}};
+    ReaderRig r(&e);
+    r.select();
+    r.tap(r.reader->annotationBar()->buttonRect(3));
+    REQUIRE(r.reader->annotationBar()->listing());
+    SUBCASE("another plugin loaded meanwhile, sorted first") {
+        e.selection.insert(e.selection.begin(), PluginAction{"explain", "Explain with AI", "explain", "Explain"});
+        r.tap(r.reader->annotationBar()->actionRect(0));
+        REQUIRE(e.runs.size() == 1);
+        CHECK(e.runs[1].action.pluginId == "deepl");
+        CHECK(e.runs[1].action.id == "translate");
+    }
+    SUBCASE("the picked one went (turned off, restarting)") {
+        e.selection = {{"explain", "Explain with AI", "explain", "Explain"}};
+        r.tap(r.reader->annotationBar()->actionRect(0));
+        CHECK(e.runs.empty());
+        CHECK(r.nav.toasts == std::vector<std::string>{"DeepL isn't available right now."});
+        CHECK_FALSE(r.reader->pluginResult());
+    }
+}
+
 TEST_CASE("plugin entries: Working… on the bar tapped again stops the run") {
     FakeEntries e = withActions();
     ReaderRig r(&e);
