@@ -163,20 +163,29 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
                 drawText(cr, b.text, {kSans, std::max(4.0, b.fontPx * 72.0 / 300.0), 400, false, kInk},
                          {b.rect.x, b.rect.y, std::max(b.rect.w, 40), std::max(b.rect.h, b.fontPx + 8)}, 20);
                 break;
-            case HighlightBox::Kind::Note: {  // a small note, the size of Zotero's icon
+            case HighlightBox::Kind::Note: {  // the panel's Add note icon, the size of Zotero's: its colour, an ink outline
                 const int s = noteIcon(b.rect).w;
-                roundedRect(cr, b.rect.x + 1.5, b.rect.y + 1.5, s - 3, s - 3, 6);
+                const double l = b.rect.x + 1.5, t = b.rect.y + 1.5, r = b.rect.x + s - 1.5, btm = b.rect.y + s - 1.5;
+                const double fold = s * 0.37;
+                cairo_save(cr);
+                cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+                cairo_move_to(cr, l, t);
+                cairo_line_to(cr, r, t);
+                cairo_line_to(cr, r, btm - fold);
+                cairo_line_to(cr, r - fold, btm);
+                cairo_line_to(cr, l, btm);
+                cairo_close_path(cr);
                 gray(cr, b.shade);
                 cairo_fill_preserve(cr);
                 gray(cr, kInk);
                 cairo_set_line_width(cr, 3);
                 cairo_stroke(cr);
-                for (int i = 1; i <= 3; ++i) {
-                    cairo_move_to(cr, b.rect.x + s * 0.22, b.rect.y + s * (0.22 + i * 0.16));
-                    cairo_line_to(cr, b.rect.x + s * 0.78, b.rect.y + s * (0.22 + i * 0.16));
-                }
-                cairo_set_line_width(cr, 2.5);
+                cairo_move_to(cr, r, btm - fold);  // the folded corner
+                cairo_line_to(cr, r - fold, btm - fold);
+                cairo_line_to(cr, r - fold, btm);
                 cairo_stroke(cr);
+                cairo_restore(cr);
                 break;
             }
             case HighlightBox::Kind::Image:  // the area: a 3 px frame, its colour as a darker shade
