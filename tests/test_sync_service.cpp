@@ -45,6 +45,7 @@ struct Rig {
     std::function<HttpResponse(const HttpRequest&)> route;
     std::unique_ptr<SyncService> service;
     std::atomic<bool> wifi{true};
+    int onlineGiveUpMs = 120'000;
 
     Rig() {
         char tmpl[] = "/tmp/zk-svc-XXXXXX";
@@ -78,6 +79,7 @@ struct Rig {
         deps.keepAwake = &keepAwake;
         deps.wifiUp = [this] { return wifi.load(); };
         deps.onlinePollMs = 20;
+        deps.onlineGiveUpMs = onlineGiveUpMs;
         service = std::make_unique<SyncService>(std::move(deps));
         service->start();
     }
@@ -281,6 +283,24 @@ TEST_CASE("sync service: opening a book goes ahead of a queued sync") {
     release = true;
     std::vector<SyncEvent> events = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished), 8000);
     CHECK(count(events, SyncEvent::Kind::SyncFinished) == 1);  // only the running one finished first
+}
+
+TEST_CASE("sync service: waiting for Wi-Fi doesn't hold the Kindle awake; the sync once online does") {
+    Rig rig;
+    rig.wifi = false;
+    rig.onlineGiveUpMs = 300;
+    rig.start();
+    rig.service->syncWhenOnline();  // woken with Wi-Fi off
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));  // the wait has run out
+    for (const auto& s : rig.lipc.setsCopy()) CHECK(s.find("preventScreenSaver 1") == std::string::npos);
+    rig.wifi = true;
+    rig.service->syncWhenOnline();
+    rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
+    const auto sets = rig.lipc.setsCopy();
+    REQUIRE(sets.size() >= 2);
+    CHECK(sets.front() == "com.lab126.powerd preventScreenSaver 1");
+    rig.service->stop();
+    CHECK(rig.lipc.setsCopy().back() == "com.lab126.powerd preventScreenSaver 0");
 }
 
 namespace {

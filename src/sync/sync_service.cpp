@@ -209,10 +209,11 @@ void SyncService::run() {
         }
         busy_ = true;
         std::optional<KeepAwakeScope> awake;
-        if (deps_.keepAwake) awake.emplace(*deps_.keepAwake);
         try {
             if (cmd.kind == Command::Kind::SyncWhenOnline) {
-                // Wi-Fi comes back a few seconds after wake; wait for it here, quietly.
+                // Wi-Fi comes back a few seconds after wake; wait for it here, quietly. Without
+                // keep-awake: with Wi-Fi off (many readers keep it off) the wait runs out, and
+                // holding the screensaver off for it kept the Kindle awake 2 minutes per wake.
                 const auto until = Clock::now() + std::chrono::milliseconds(deps_.onlineGiveUpMs);
                 bool online = deps_.wifiUp();
                 while (!online && !stopping_ && Clock::now() < until && sleepForMs(deps_.onlinePollMs)) online = deps_.wifiUp();
@@ -222,6 +223,7 @@ void SyncService::run() {
                 }
                 cmd.kind = Command::Kind::Sync;
             }
+            if (deps_.keepAwake) awake.emplace(*deps_.keepAwake);  // online (or not waiting): the work itself
             switch (cmd.kind) {
                 case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
                 case Command::Kind::Push:
