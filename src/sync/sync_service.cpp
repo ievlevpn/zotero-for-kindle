@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <set>
 
+#include "core/free_space.h"
 #include "core/log.h"
+#include <nlohmann/json.hpp>
 #include "core/wake.h"
 #include "net/write_guard.h"
 #include "store/db.h"
@@ -54,10 +57,30 @@ struct SyncService::Worker {
     std::unique_ptr<ZoteroApi> api;
     std::unique_ptr<SyncEngine> engine;
     std::unique_ptr<FileStore> files;  // WebDAV or Zotero storage
+    // The kept collections' catch-up, listed once when it starts: the files still to download
+    // (each with the kept collections it is in), and per collection how many it lacked then.
+    struct KeptFile {
+        std::string itemKey;
+        AttachmentRecord att;
+        std::set<std::string> collections;
+    };
+    std::vector<KeptFile> keptQueue;
+    std::map<std::string, int> keptTotal;
 };
 
 SyncService::SyncService(SyncDeps deps) : deps_(std::move(deps)), intervalMinutes_(deps_.intervalMinutes) {
     if (!deps_.wifiUp) deps_.wifiUp = [] { return probeNetState().wifiConnected; };
+    if (!deps_.wallMs)
+        deps_.wallMs = [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+        };
+    if (!deps_.freeBytes)
+        deps_.freeBytes = [dir = deps_.filesDir] {
+            fs::path p = dir;  // the files folder, or the nearest folder there is (before the first download)
+            std::error_code ec;
+            while (!p.empty() && !fs::exists(p, ec) && p.has_parent_path() && p.parent_path() != p) p = p.parent_path();
+            return freeBytesAt(p.string());
+        };
 }
 
 SyncService::~SyncService() { stop(); }
@@ -88,7 +111,18 @@ void SyncService::enqueue(Command c) {
             std::any_of(commands_.begin(), commands_.end(),
                         [](const Command& q) { return q.kind == Command::Kind::Sync || q.kind == Command::Kind::SyncWhenOnline; }))
             return;  // one pending sync is enough
-        // Opening a book is what the reader is waiting for: ahead of queued syncs.
+        if (c.kind == Command::Kind::KeepDownloads)
+            for (auto& q : commands_)
+                if (q.kind == Command::Kind::KeepDownloads) {
+                    q.flag = q.flag || c.flag;
+                    return;  // one pending is enough
+                }
+        // Opening a book is what the reader is waiting for: ahead of queued syncs and kept
+        // downloads, and a kept file under way gives way to it.
+        if (c.kind == Command::Kind::OpenBook && keptRunning_) {
+            keptYield_ = true;
+            *cancel_ = true;
+        }
         if (c.kind == Command::Kind::OpenBook) commands_.push_front(std::move(c));
         else commands_.push_back(std::move(c));
     }
@@ -109,6 +143,26 @@ void SyncService::openBook(const std::string& itemKey, const std::string& attach
 }
 void SyncService::setAllHighlightsOffline(bool on) { enqueue({Command::Kind::SetAllOffline, {}, {}, on}); }
 void SyncService::removeDownloads() { enqueue({Command::Kind::RemoveDownloads, {}, {}, false}); }
+void SyncService::downloadKept() { enqueue({Command::Kind::KeepDownloads, {}, {}, true}); }
+
+std::optional<KeptStatus> SyncService::keptStatus(const std::string& collectionKey) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = kept_.find(collectionKey);
+    if (it == kept_.end()) return std::nullopt;
+    return it->second;
+}
+
+void SyncService::setKept(std::map<std::string, KeptStatus> status) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (status == kept_) return;
+        kept_ = std::move(status);
+    }
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::KeptChanged;
+    emit(std::move(e));
+}
+
 void SyncService::setIntervalMinutes(int m) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -207,7 +261,7 @@ void SyncService::run() {
                 commands_.pop_front();
             }
         }
-        busy_ = true;
+        busy_ = cmd.kind != Command::Kind::KeepDownloads;  // a book opened meanwhile goes first: not "waiting"
         std::optional<KeepAwakeScope> awake;
         try {
             if (cmd.kind == Command::Kind::SyncWhenOnline) {
@@ -223,7 +277,9 @@ void SyncService::run() {
                 }
                 cmd.kind = Command::Kind::Sync;
             }
-            if (deps_.keepAwake) awake.emplace(*deps_.keepAwake);  // online (or not waiting): the work itself
+            // Online (or not waiting): the work itself. Not kept downloads: they never hold the
+            // Kindle awake beyond the sync before them (if it sleeps, they stop with Wi-Fi).
+            if (deps_.keepAwake && cmd.kind != Command::Kind::KeepDownloads) awake.emplace(*deps_.keepAwake);
             switch (cmd.kind) {
                 case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
                 case Command::Kind::Push:
@@ -250,9 +306,14 @@ void SyncService::run() {
                     done.kind = SyncEvent::Kind::SyncFinished;
                     done.error = rep.error;
                     done.report = std::move(rep);  // may carry thousands of plugin events: not copied
+                    const bool ok = !done.error;
                     if (!stopping_) emit(std::move(done));
+                    if (ok && !stopping_) enqueue({Command::Kind::KeepDownloads, {}, {}, true});  // new files of kept collections
                     break;
                 }
+                case Command::Kind::KeepDownloads:
+                    if (keepStep(w, cmd.flag) && !stopping_) enqueue({Command::Kind::KeepDownloads, {}, {}, false});
+                    break;
                 case Command::Kind::OpenBook: {
                     SyncEvent done;
                     done.kind = SyncEvent::Kind::DownloadFinished;
@@ -264,31 +325,8 @@ void SyncService::run() {
                         done.error = UserError{ErrorKind::Other, "This file isn't in the library yet. Sync, then try again.",
                                                "no attachment " + cmd.attachmentKey};
                     } else if (!local) {
-                        SyncEvent p0;
-                        p0.kind = SyncEvent::Kind::DownloadProgress;
-                        p0.itemKey = cmd.itemKey;
-                        p0.attachmentKey = cmd.attachmentKey;
-                        emit(p0);
-                        auto last = Clock::now();
-                        int lastPct = 0;
-                        w.files->setProgress([&](int64_t d, int64_t t) {
-                            const int pct = t > 0 ? static_cast<int>(100 * d / t) : 0;
-                            if (pct - lastPct < 5 && Clock::now() - last < std::chrono::seconds(1)) return;
-                            lastPct = pct;
-                            last = Clock::now();
-                            SyncEvent e = p0;
-                            e.done = d;
-                            e.total = t;
-                            emit(std::move(e));
-                        });
                         UserError err;
-                        if (w.files->download(*att, deps_.filesDir, &err)) {
-                            const std::string path = (fs::path(deps_.filesDir) / att->key / localFileName(*att)).string();
-                            w.lib->setFileState(att->key, AttachmentRecord::State::Local, path);
-                        } else {
-                            done.error = err;
-                        }
-                        w.files->setProgress(nullptr);
+                        if (!download(w, cmd.itemKey, *att, &err)) done.error = err;
                     }
                     const bool ok = !done.error;
                     if (!stopping_) emit(done);
@@ -332,6 +370,178 @@ void SyncService::run() {
         busy_ = false;
     }
     log(LogLevel::Info, "sync service: stopped");
+}
+
+bool SyncService::download(Worker& w, const std::string& itemKey, const AttachmentRecord& att, UserError* err,
+                           const std::function<void(int64_t)>& onTotal) {
+    SyncEvent p0;
+    p0.kind = SyncEvent::Kind::DownloadProgress;
+    p0.itemKey = itemKey;
+    p0.attachmentKey = att.key;
+    emit(p0);
+    auto last = Clock::now();
+    int lastPct = 0;
+    bool totalSeen = false;
+    w.files->setProgress([&](int64_t d, int64_t t) {
+        if (onTotal && !totalSeen && t > 0) {
+            totalSeen = true;
+            onTotal(t);
+        }
+        const int pct = t > 0 ? static_cast<int>(100 * d / t) : 0;
+        if (pct - lastPct < 5 && Clock::now() - last < std::chrono::seconds(1)) return;
+        lastPct = pct;
+        last = Clock::now();
+        SyncEvent e = p0;
+        e.done = d;
+        e.total = t;
+        emit(std::move(e));
+    });
+    const bool ok = w.files->download(att, deps_.filesDir, err);
+    w.files->setProgress(nullptr);
+    if (ok) w.lib->setFileState(att.key, AttachmentRecord::State::Local, (fs::path(deps_.filesDir) / att.key / localFileName(att)).string());
+    return ok;
+}
+
+namespace {
+
+constexpr int64_t kKeptRetryMs = int64_t{7} * 24 * 3600 * 1000;  // a file that failed: tried again after a week
+
+// Files that failed for reasons of their own (not on the server, wrong checksum), kept in the
+// library meta across syncs: {key: {ms, version}}. Tried again after kKeptRetryMs, or once the
+// attachment changed in Zotero.
+nlohmann::json keptFailures(Library& lib) {
+    auto j = nlohmann::json::parse(lib.metaValue("keptFailures"), nullptr, false);
+    return j.is_object() ? j : nlohmann::json::object();
+}
+
+bool failedRecently(const nlohmann::json& failures, const std::string& key, int64_t version, int64_t nowMs) {
+    auto it = failures.find(key);
+    if (it == failures.end() || !it->is_object()) return false;
+    return it->value("version", int64_t{-1}) == version && nowMs - it->value("ms", int64_t{0}) < kKeptRetryMs;
+}
+
+}  // namespace
+
+// One step of the kept collections' catch-up (spec B). A fresh start lists what they miss; each
+// step drops collections no longer kept, then downloads one file. It stops quietly without
+// Wi-Fi (never turned on for it) or on any failure not about the file itself (the next sync
+// tries again), pauses under kKeptMinFree (also when the file's size would take it there), and
+// gives way to a book being opened (enqueue() cancels the file under way; it comes again).
+bool SyncService::keepStep(Worker& w, bool fresh) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        keptRunning_ = true;  // from here: an open during the lookup gives way too
+    }
+    struct Done {
+        SyncService& s;
+        bool cancelReset = false;
+        ~Done() {
+            std::lock_guard<std::mutex> lock(s.mutex_);
+            s.keptRunning_ = false;
+            if ((s.keptYield_ || cancelReset) && !s.stopping_) *s.cancel_ = false;  // the cancel was for this file only
+            s.keptYield_ = false;
+        }
+    } done{*this};
+    auto stop = [&](std::map<std::string, KeptStatus> status) {
+        w.keptQueue.clear();
+        w.keptTotal.clear();
+        setKept(std::move(status));
+        return false;
+    };
+
+    const std::vector<std::string> kept = w.lib->keptCollections();
+    if (fresh) {
+        w.keptQueue.clear();
+        w.keptTotal.clear();
+        const auto failures = keptFailures(*w.lib);
+        const int64_t now = deps_.wallMs();
+        for (const auto& key : kept)
+            for (const ItemRow& row : w.lib->collectionFiles(key)) {
+                auto att = w.lib->attachment(row.attachmentKey);
+                if (!att || (att->state == AttachmentRecord::State::Local && fs::exists(att->localPath))) continue;
+                if (failedRecently(failures, att->key, w.lib->objectVersion(att->key), now)) continue;
+                auto it = std::find_if(w.keptQueue.begin(), w.keptQueue.end(),
+                                       [&](const Worker::KeptFile& f) { return f.att.key == att->key; });
+                if (it == w.keptQueue.end()) it = w.keptQueue.insert(w.keptQueue.end(), {row.key, *att, {}});
+                it->collections.insert(key);
+                ++w.keptTotal[key];
+            }
+    } else {  // keeping turned off meanwhile: those collections' files are no longer wanted
+        const std::set<std::string> keptSet(kept.begin(), kept.end());
+        for (auto& f : w.keptQueue)
+            for (auto c = f.collections.begin(); c != f.collections.end();) c = keptSet.count(*c) ? std::next(c) : f.collections.erase(c);
+        std::erase_if(w.keptQueue, [](const Worker::KeptFile& f) { return f.collections.empty(); });
+        std::erase_if(w.keptTotal, [&](const auto& t) { return !keptSet.count(t.first); });
+    }
+    if (w.keptQueue.empty() || stopping_) return stop({});
+    if (!deps_.wifiUp()) return stop({});  // quietly; the next sync (Wi-Fi up again) carries on
+
+    std::map<std::string, KeptStatus> status;  // "Downloading <current> of <total>"
+    for (const auto& [key, total] : w.keptTotal) {
+        const int left = static_cast<int>(std::count_if(w.keptQueue.begin(), w.keptQueue.end(),
+                                                         [&](const Worker::KeptFile& f) { return f.collections.count(key) > 0; }));
+        if (left > 0) status[key] = {total - left + 1, total, false};
+    }
+    auto paused = [&] {
+        for (auto& [key, st] : status) st.paused = true;
+        return stop(status);  // the next sync looks again
+    };
+    if (deps_.freeBytes() < kKeptMinFree) return paused();
+    setKept(status);
+
+    const Worker::KeptFile next = w.keptQueue.front();
+    // Opened (and so downloaded) meanwhile?
+    if (auto att = w.lib->attachment(next.att.key); !att || (att->state == AttachmentRecord::State::Local && fs::exists(att->localPath))) {
+        w.keptQueue.erase(w.keptQueue.begin());
+        return true;
+    }
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (keptYield_) return true;  // a book was opened during the lookup: it goes first
+    }
+    // Once the size is known: would it take the Kindle under the floor? (WebDAV keeps the zip and
+    // the file it holds, so twice the size.)
+    bool tooBig = false;
+    const uint64_t factor = deps_.config.webdavUrl.empty() ? 1 : 2;
+    auto onTotal = [&](int64_t total) {
+        const uint64_t need = static_cast<uint64_t>(total) * factor, free = deps_.freeBytes();
+        if (free >= need && free - need >= kKeptMinFree) return;
+        tooBig = true;
+        std::lock_guard<std::mutex> lock(mutex_);
+        *cancel_ = true;
+        done.cancelReset = true;
+    };
+    UserError err;
+    const bool ok = download(w, next.itemKey, next.att, &err, onTotal);
+    bool yielded;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        yielded = keptYield_;
+    }
+    if (stopping_) return stop({});
+    if (ok) {
+        if (auto failures = keptFailures(*w.lib); failures.erase(next.att.key))
+            w.lib->setMetaValue("keptFailures", failures.dump());
+        w.keptQueue.erase(w.keptQueue.begin());
+        SyncEvent fin;
+        fin.kind = SyncEvent::Kind::DownloadFinished;
+        fin.itemKey = next.itemKey;
+        fin.attachmentKey = next.att.key;
+        emit(std::move(fin));
+        return true;
+    }
+    if (tooBig) return paused();
+    if (yielded) return true;  // the opened book first; this file again after it
+    log(LogLevel::Info, "kept: %s not downloaded: %s", next.att.key.c_str(), err.details.c_str());
+    if (err.kind == ErrorKind::NotOnServer || err.kind == ErrorKind::Checksum) {  // the file's own fault
+        auto failures = keptFailures(*w.lib);
+        failures[next.att.key] = {{"ms", deps_.wallMs()}, {"version", w.lib->objectVersion(next.att.key)}};
+        w.lib->setMetaValue("keptFailures", failures.dump());
+        w.keptQueue.erase(w.keptQueue.begin());
+        return true;
+    }
+    if (err.kind == ErrorKind::DiskFull) return paused();
+    return stop({});  // network, server, login: not file after file; the next sync tries again
 }
 
 void SyncService::pushChanges(Worker& w) {

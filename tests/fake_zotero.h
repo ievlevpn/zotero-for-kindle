@@ -44,10 +44,11 @@ public:
         data["version"] = ++libraryVersion;
         items[key] = json{{"key", key}, {"version", libraryVersion}, {"data", data}};
     }
-    void putCollection(const std::string& key, const std::string& name) {
+    void putCollection(const std::string& key, const std::string& name, const std::string& parent = "") {
         ++libraryVersion;
+        json parentCollection = parent.empty() ? json(false) : json(parent);
         collections[key] = json{{"key", key}, {"version", libraryVersion},
-                                {"data", {{"key", key}, {"name", name}, {"parentCollection", false}}}};
+                                {"data", {{"key", key}, {"name", name}, {"parentCollection", parentCollection}}}};
     }
     void remove(const std::string& key) {
         items.erase(key);

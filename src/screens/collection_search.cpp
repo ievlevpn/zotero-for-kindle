@@ -104,7 +104,8 @@ void CollectionSearchScreen::draw(Canvas& canvas) {
                 {f.x + 96, f.y, f.w - 120, f.h}, Align::Left);
     const auto rects = resultRects();
     for (size_t i = 0; i < rects.size(); ++i)
-        drawCollectionRow(cr, rects[i], shown_[i].path, shown_[i].entry.items, shown_[i].entry.hasChildren);
+        drawCollectionRow(cr, rects[i], shown_[i].path, shown_[i].entry.items, shown_[i].entry.hasChildren, false, "",
+                          shown_[i].entry.kept);
     if (!searched_.empty() && shown_.empty())
         drawText(cr, "No collection called “" + searched_ + "”", {kSerif, 11, 400, false, kSecondary},
                  {kMargin, kHeaderH + 120, W() - 2 * kMargin, 100}, 2, Align::Center);

@@ -73,6 +73,22 @@ std::string SettingsScreen::updateLine() const {
     return "Version " + (updater_ ? updater_->current() : appVersion()).str() + " · open source (AGPL-3.0)";
 }
 
+std::string SettingsScreen::storageLine() const {
+    if (confirmRemove_ && keptCount_ > 0)
+        return "Removes " + mb(downloadedBytes_) + " and stops keeping " + std::to_string(keptCount_) +
+               (keptCount_ == 1 ? " collection" : " collections") + " downloaded";
+    return "Downloaded files: " + mb(downloadedBytes_);
+}
+
+TextStyle SettingsScreen::storageStyle(bool confirming) {
+    return confirming ? TextStyle{kSans, 7.5, 500} : TextStyle{kSans, 8.5, 500};
+}
+
+Rect SettingsScreen::storageTextRect() const {
+    const int w = W() - 2 * kMargin - 460;
+    return confirmRemove_ && keptCount_ > 0 ? Rect{kMargin, rows().storage + 2, w, 100} : Rect{kMargin, rows().storage + 24, w, 50};
+}
+
 Rect SettingsScreen::removeRect() const { return {W() - kMargin - 420, rows().storage + 10, 420, 80}; }
 
 void SettingsScreen::load(Library& lib) {
@@ -80,6 +96,7 @@ void SettingsScreen::load(Library& lib) {
     flashEvery_ = loadSettings(lib).flashEvery;
     allOffline_ = lib.allAnnotationsOffline();
     readTag_ = lib.readTag();
+    keptCount_ = static_cast<int>(lib.keptCollections().size());
     downloadedBytes_ = 0;
     for (const auto& a : lib.downloadedAttachments()) {
         std::error_code ec;
@@ -137,7 +154,8 @@ void SettingsScreen::draw(Canvas& canvas) {
     drawToggle(cr, toggleRect(), allOffline_);
     hRule(cr, rows().storage - rows().rule, kMargin, W() - kMargin);
 
-    drawText(cr, "Downloaded files: " + mb(downloadedBytes_), label, {kMargin, rows().storage + 24, w - 460, 50}, 1);
+    const bool confirmingKept = confirmRemove_ && keptCount_ > 0;
+    drawText(cr, storageLine(), storageStyle(confirmingKept), storageTextRect(), confirmingKept ? 2 : 1);
     drawButton(cr, removeRect(), confirmRemove_ ? "Tap again to remove" : "Remove all", false);
     hRule(cr, rows().flash - rows().rule, kMargin, W() - kMargin);
 
@@ -242,6 +260,9 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
             confirmRemove_ = true;
         } else {
             confirmRemove_ = false;
+            // Kept collections would download it all again: they stop being kept (as the line said).
+            for (const auto& key : nav.library().keptCollections()) nav.library().setCollectionKept(key, false);
+            keptCount_ = 0;
             nav.sync().removeDownloads();
         }
         nav.damage({0, rows().storage, W(), 200}, Waveform::Ui);

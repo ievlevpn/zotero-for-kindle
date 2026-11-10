@@ -15,7 +15,8 @@ struct SyncEvent {
     enum class Kind {
         SyncStarted, SyncProgress, SyncFinished, DownloadProgress, DownloadFinished, AnnotationsReady,
         PushStarted,  // `total` changes going up
-        PushFinished  // report.annotations sent; error: they stay unsent
+        PushFinished,  // report.annotations sent; error: they stay unsent
+        KeptChanged    // a kept collection's catch-up moved on, paused or ended: see keptStatus()
     };
     Kind kind = Kind::SyncStarted;
     SyncProgress progress;
@@ -23,6 +24,14 @@ struct SyncEvent {
     std::string itemKey, attachmentKey;
     int64_t done = 0, total = 0;
     std::optional<UserError> error;
+};
+
+// A kept collection catching up (spec B): "Downloading <current> of <total>", or paused because
+// the Kindle is nearly full. None when it has everything (or can't go on without Wi-Fi).
+struct KeptStatus {
+    int current = 0, total = 0;
+    bool paused = false;
+    bool operator==(const KeptStatus&) const = default;
 };
 
 class SyncControl {
@@ -40,6 +49,10 @@ public:
     virtual void setIntervalMinutes(int minutes /* 0 = off */) = 0;
     virtual bool poll(SyncEvent& out) = 0;  // non-blocking
     virtual bool busy() const = 0;
+    // Kept collections (Library::keptCollections): download what they miss, one file at a time,
+    // if Wi-Fi is up (never turned on for it). A sync does this by itself when it ends.
+    virtual void downloadKept() {}
+    virtual std::optional<KeptStatus> keptStatus(const std::string& /*collectionKey*/) const { return std::nullopt; }
 };
 
 }  // namespace zk

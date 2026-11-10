@@ -35,8 +35,9 @@ bool turnPage(const Gesture& g, Pager& pager) {
 
 // ---- the pin sheet ---------------------------------------------------------------------------
 
-Rect PinSheet::rect() { return {0, H() - kTabBarH - 300, W(), 300}; }
+Rect PinSheet::rect() { return {0, H() - kTabBarH - 420, W(), 420}; }
 Rect PinSheet::buttonRect() { return {kMargin, rect().y + 150, W() - 2 * kMargin, 100}; }
+Rect PinSheet::keepButtonRect() { return {kMargin, rect().y + 280, W() - 2 * kMargin, 100}; }
 
 void PinSheet::draw(cairo_t* cr) const {
     const Rect r = rect();
@@ -45,11 +46,43 @@ void PinSheet::draw(cairo_t* cr) const {
     drawText(cr, entry_.collection.name.empty() ? "Untitled" : entry_.collection.name, {kSans, 9.5, 700},
              {kMargin, r.y + 40, r.w - 2 * kMargin, 60}, 1);
     drawButton(cr, buttonRect(), label(), false);
+    drawButton(cr, keepButtonRect(), keepLabel(), false);
 }
 
-void PinSheet::tap(Point p, Library& lib) const {
-    if (buttonRect().contains(p)) lib.setCollectionPinned(entry_.collection.key, !pinned_);
+void PinSheet::tap(Point p, Nav& nav) const {
+    if (buttonRect().contains(p)) nav.library().setCollectionPinned(entry_.collection.key, !pinned_);
+    if (keepButtonRect().contains(p)) {
+        nav.library().setCollectionKept(entry_.collection.key, !entry_.kept);
+        if (!entry_.kept) nav.sync().downloadKept();  // the missing files, now (if Wi-Fi is up)
+    }
 }
+
+std::string keptNote(const std::optional<KeptStatus>& st) {
+    if (!st) return {};
+    if (st->paused) return "Paused — the Kindle is nearly full";
+    return "Downloading " + std::to_string(st->current) + " of " + std::to_string(st->total);
+}
+
+namespace {
+
+// The status of each kept collection among `entries` that is catching up.
+std::map<std::string, KeptStatus> keptStatuses(const std::vector<CollectionEntry>& entries, Nav& nav) {
+    std::map<std::string, KeptStatus> out;
+    for (const auto& e : entries)
+        if (e.kept)
+            if (auto st = nav.sync().keptStatus(e.collection.key)) out[e.collection.key] = *st;
+    return out;
+}
+
+std::optional<KeptStatus> statusOf(const std::map<std::string, KeptStatus>& kept, const std::string& key) {
+    auto it = kept.find(key);
+    return it == kept.end() ? std::nullopt : std::optional(it->second);
+}
+
+// "in Economics", "Downloading 3 of 12", or both.
+std::string joinNotes(const std::string& a, const std::string& b) { return a.empty() ? b : b.empty() ? a : a + " · " + b; }
+
+}  // namespace
 
 // ---- top level -------------------------------------------------------------------------------
 
@@ -74,6 +107,14 @@ void CollectionsScreen::onShow(Nav& nav) {
     while (pager_.offset() < offset && pager_.next()) {
     }
     showPage();
+    loadKept(nav);
+}
+
+void CollectionsScreen::loadKept(Nav& nav) { kept_ = keptStatuses(all_, nav); }
+
+std::string CollectionsScreen::rowNote(size_t i) const {
+    const auto& e = entries_.at(i);
+    return joinNotes(e.parentName.empty() ? "" : "in " + e.parentName, keptNote(statusOf(kept_, e.collection.key)));
 }
 
 Rect CollectionsScreen::searchRect() { return {W() - kMargin - 100, 20, 100, 100}; }
@@ -94,8 +135,7 @@ void CollectionsScreen::draw(Canvas& canvas) {
     auto rects = entryRects();
     for (size_t i = 0; i < entries_.size(); ++i) {
         const auto& e = entries_[i];
-        drawCollectionRow(cr, rects[i], e.collection.name, e.items, e.hasChildren, e.pinned,
-                          e.parentName.empty() ? "" : "in " + e.parentName);
+        drawCollectionRow(cr, rects[i], e.collection.name, e.items, e.hasChildren, e.pinned, rowNote(i), e.kept);
     }
     if (all_.empty())
         drawText(cr, "No collections yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100}, 1,
@@ -108,7 +148,7 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
     if (sheet_) {  // any tap closes it; its button pins or unpins
         if (g.type != GestureType::Tap) return;
         const bool pinning = sheet_->label() == "Pin to top" && PinSheet::buttonRect().contains(g.pos);
-        sheet_->tap(g.pos, nav.library());
+        sheet_->tap(g.pos, nav);
         if (pinning) pager_ = Pager(0, 1);  // to the first page, where it now is
         onShow(nav);
         nav.damage(contentArea(), Waveform::Quality);
@@ -139,6 +179,18 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
 }
 
 void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
+    if (e.kind == SyncEvent::Kind::KeptChanged) {  // only the rows whose note changed
+        const auto was = kept_;
+        loadKept(nav);
+        auto rects = entryRects();
+        for (size_t i = 0; i < entries_.size(); ++i) {
+            const std::string& key = entries_[i].collection.key;
+            // The note's last change (gone) rests: the quality waveform, no ghost of "Downloading…".
+            if (statusOf(was, key) != statusOf(kept_, key))
+                nav.damage(rects[i], statusOf(kept_, key) ? Waveform::Ui : Waveform::Quality);
+        }
+        return;
+    }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     onShow(nav);
     nav.damage(contentArea(), Waveform::Quality);
@@ -182,7 +234,10 @@ void CollectionScreen::load(Library& lib) {
 void CollectionScreen::onShow(Nav& nav) {
     sheet_.reset();
     load(nav.library());
+    loadKept(nav);
 }
+
+void CollectionScreen::loadKept(Nav& nav) { kept_ = keptStatuses(subs_, nav); }
 
 std::vector<Rect> CollectionScreen::lineRects() const {
     std::vector<Rect> out;
@@ -205,7 +260,8 @@ void CollectionScreen::draw(Canvas& canvas) {
     for (size_t i = 0; i < page_.size(); ++i) {
         if (page_[i].isCollection)
             drawCollectionRow(cr, rects[i], page_[i].collection.collection.name, page_[i].collection.items,
-                              page_[i].collection.hasChildren);
+                              page_[i].collection.hasChildren, false, keptNote(statusOf(kept_, page_[i].collection.collection.key)),
+                              page_[i].collection.kept);
         else
             drawItemRow(cr, rects[i], page_[i].item, status_ ? status_(page_[i].item.attachmentKey) : "");
     }
@@ -219,8 +275,10 @@ void CollectionScreen::draw(Canvas& canvas) {
 void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
     if (sheet_) {
         if (g.type != GestureType::Tap) return;
-        sheet_->tap(g.pos, nav.library());
+        sheet_->tap(g.pos, nav);
         sheet_.reset();
+        load(nav.library());  // the kept mark
+        loadKept(nav);
         nav.damage(contentArea(), Waveform::Quality);
         return;
     }
@@ -258,11 +316,29 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
 }
 
 void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
-    if (e.kind == SyncEvent::Kind::DownloadProgress || e.kind == SyncEvent::Kind::DownloadFinished) {
-        if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());
+    if (e.kind == SyncEvent::Kind::KeptChanged) {
+        const auto was = kept_;
+        loadKept(nav);
         auto rects = lineRects();
-        for (size_t i = 0; i < page_.size(); ++i)
-            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Ui);
+        for (size_t i = 0; i < page_.size(); ++i) {
+            if (!page_[i].isCollection) continue;
+            const std::string& key = page_[i].collection.collection.key;
+            // The note's last change (gone) rests: the quality waveform, no ghost of "Downloading…".
+            if (statusOf(was, key) != statusOf(kept_, key))
+                nav.damage(rects[i], statusOf(kept_, key) ? Waveform::Ui : Waveform::Quality);
+        }
+        return;
+    }
+    if (e.kind == SyncEvent::Kind::DownloadProgress || e.kind == SyncEvent::Kind::DownloadFinished) {
+        // Only the row of that file (kept collections download one after another): refreshed
+        // from the library when it finished, not the whole page.
+        auto rects = lineRects();
+        for (size_t i = 0; i < page_.size(); ++i) {
+            if (page_[i].isCollection || page_[i].item.attachmentKey != e.attachmentKey) continue;
+            if (e.kind == SyncEvent::Kind::DownloadFinished)
+                if (auto row = nav.library().rowFor(page_[i].item.key)) page_[i].item = std::move(*row);
+            nav.damage(rects[i], Waveform::Ui);
+        }
         return;
     }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;

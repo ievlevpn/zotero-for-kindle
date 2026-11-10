@@ -287,8 +287,29 @@ void drawHeader(cairo_t* cr, const std::string& title, bool back, int rightReser
              {x, back ? 40 : 18, metrics().width - x - kMargin - rightReserve, 100}, 1);
 }
 
+namespace {
+constexpr int kRowCountW = 160;  // the count's column, right of the marks (and the "›")
+constexpr int kRowMarkW = 60;    // a mark's slot
+}  // namespace
+
+// Fixed columns, so marks line up down a list: the pin's slot just left of the count, the
+// kept arrow's slot left of that (the pin's then stays empty on an unpinned row).
+std::vector<Rect> collectionRowMarks(Rect r, bool pinned, bool kept) {
+    std::vector<Rect> out;
+    const int pinX = r.x + r.w - kRowCountW - 40 - kRowMarkW;
+    if (kept) out.push_back({pinX - kRowMarkW, r.y + r.h / 2 - 30, kRowMarkW, 60});
+    if (pinned) out.push_back({pinX, r.y + r.h / 2 - 30, kRowMarkW, 60});
+    return out;
+}
+
+Rect collectionRowNameRect(Rect r, bool pinned, bool kept) {
+    const int tx = r.x + 112;
+    const int slots = kept ? 2 : pinned ? 1 : 0;
+    return {tx, r.y, r.w - (tx - r.x) - kRowCountW - 40 - kRowMarkW * slots, r.h};
+}
+
 void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren, bool pinned,
-                       const std::string& note) {
+                       const std::string& note, bool kept) {
     fillRect(cr, r, 255);
     // Folder glyph.
     gray(cr, kSecondary);
@@ -302,16 +323,37 @@ void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t ite
     cairo_line_to(cr, fx, fy + 52);
     cairo_close_path(cr);
     cairo_stroke(cr);
-    const int tx = r.x + 112, countW = 160;
-    const int nameW = r.w - (tx - r.x) - countW - 40 - (pinned ? 60 : 0);
+    const Rect nameBox = collectionRowNameRect(r, pinned, kept);
+    const int tx = nameBox.x, nameW = nameBox.w, countW = kRowCountW;
     if (note.empty()) {
         centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {tx, r.y, nameW, r.h}, Align::Left);
     } else {
         centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {tx, r.y + 8, nameW, r.h / 2}, Align::Left);
         centredText(cr, note, {kSans, 7, 400, false, kSecondary}, {tx, r.y + r.h / 2 - 4, nameW, r.h / 2 - 10}, Align::Left);
     }
+    const auto marks = collectionRowMarks(r, pinned, kept);
+    if (kept) {  // a download arrow onto a tray, the pin's size
+        const Rect m = marks.front();
+        const double cx = m.x + m.w / 2.0, cy = m.y + m.h / 2.0;
+        gray(cr, kInk);
+        cairo_save(cr);
+        cairo_set_line_width(cr, 4);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_move_to(cr, cx, cy - 19);
+        cairo_line_to(cr, cx, cy + 6);
+        cairo_stroke(cr);
+        cairo_move_to(cr, cx - 10, cy - 4);
+        cairo_line_to(cr, cx, cy + 6);
+        cairo_line_to(cr, cx + 10, cy - 4);
+        cairo_stroke(cr);
+        cairo_move_to(cr, cx - 15, cy + 18);
+        cairo_line_to(cr, cx + 15, cy + 18);
+        cairo_stroke(cr);
+        cairo_restore(cr);
+    }
     if (pinned) {  // a pushpin: round head, short needle, slanted
-        const double px = r.x + r.w - countW - 70, py = r.y + r.h / 2.0;
+        const double px = marks.back().x + 30, py = r.y + r.h / 2.0;
         gray(cr, kInk);
         cairo_save(cr);
         cairo_translate(cr, px, py);

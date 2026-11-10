@@ -1296,6 +1296,12 @@ std::vector<std::pair<std::string, int64_t>> Library::topTags(int n) {
     });
 }
 
+namespace {
+void markKept(std::vector<CollectionEntry>& entries, const std::vector<std::string>& kept) {
+    for (auto& e : entries) e.kept = std::find(kept.begin(), kept.end(), e.collection.key) != kept.end();
+}
+}  // namespace
+
 std::vector<CollectionEntry> Library::childCollections(const std::string& parentKey) {
     return guarded([&] {
         Stmt st = db_.prepare(
@@ -1307,6 +1313,7 @@ std::vector<CollectionEntry> Library::childCollections(const std::string& parent
         std::vector<CollectionEntry> out;
         while (st.step())
             out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+        markKept(out, keptCollections());
         return out;
     });
 }
@@ -1327,6 +1334,36 @@ void Library::setCollectionPinned(const std::string& key, bool pinned) {
     if (pinned) keys.push_back(key);
     else keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
     setMetaValue("pinnedCollections", json(keys).dump());
+}
+
+std::vector<std::string> Library::keptCollections() {
+    std::vector<std::string> out;
+    const auto j = json::parse(metaValue("keptCollections"), nullptr, false);
+    if (!j.is_array()) return out;
+    for (const auto& k : j)
+        if (k.is_string()) out.push_back(k.get<std::string>());
+    return out;
+}
+
+void Library::setCollectionKept(const std::string& key, bool kept) {
+    auto keys = keptCollections();
+    const bool was = std::find(keys.begin(), keys.end(), key) != keys.end();
+    if (was == kept) return;
+    if (kept) keys.push_back(key);
+    else keys.erase(std::remove(keys.begin(), keys.end(), key), keys.end());
+    setMetaValue("keptCollections", json(keys).dump());
+}
+
+std::vector<ItemRow> Library::collectionFiles(const std::string& collectionKey) {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins +
+                              " WHERE i.parentKey = ''" + notTrashed("i.key") +
+                              " AND i.readableKey != '' AND i.key IN (SELECT itemKey FROM item_collections WHERE collectionKey IN ("
+                              "WITH RECURSIVE sub(key) AS (SELECT ?1 UNION SELECT c.key FROM collections c JOIN sub ON c.parentKey = sub.key) "
+                              "SELECT key FROM sub)) ORDER BY i.title COLLATE NOCASE, i.key");
+        st.bind(1, collectionKey);
+        return readRows(st, readTag());
+    });
 }
 
 std::vector<CollectionEntry> Library::collectionsTab() {
@@ -1361,6 +1398,7 @@ std::vector<CollectionEntry> Library::allCollections() {
         std::vector<CollectionEntry> out;
         while (st.step())
             out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+        markKept(out, keptCollections());
         return out;
     });
 }

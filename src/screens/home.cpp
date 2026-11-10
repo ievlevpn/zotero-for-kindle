@@ -383,6 +383,11 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
             break;
         }
         case SyncEvent::Kind::DownloadFinished:
+            // Kept collections download in the background, one file after another: repaint only
+            // when one of them is on this screen.
+            reload(nav.library());
+            if (content() != shownContent) nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
+            break;
         case SyncEvent::Kind::AnnotationsReady:
             reload(nav.library());
             nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);

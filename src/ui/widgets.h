@@ -52,8 +52,12 @@ std::string noteSyncMark(const AnnotationRecord&);  // "" when it is simply in Z
 Rect noteRowButtonRect(Rect row, int i);            // a conflict's 0 Re-apply, 1 Discard
 
 // A collection line: folder glyph, name, item count, "›" when it has subcollections.
-// `pinned`: a pin before the count; `note` (a pinned subcollection's "in Economics") under the name.
+// `pinned`: a pin before the count; `kept` (kept downloaded): a download arrow before that;
+// `note` (a pinned subcollection's "in Economics", "Downloading 3 of 12") under the name.
 void drawCollectionRow(cairo_t*, Rect, const std::string& name, int64_t items, bool hasChildren, bool pinned = false,
-                       const std::string& note = "");
+                       const std::string& note = "", bool kept = false);
+// Where drawCollectionRow puts the name, and its marks (left to right: kept, pinned).
+Rect collectionRowNameRect(Rect row, bool pinned, bool kept);
+std::vector<Rect> collectionRowMarks(Rect row, bool pinned, bool kept);
 
 }  // namespace zk
