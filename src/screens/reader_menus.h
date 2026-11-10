@@ -34,7 +34,7 @@ public:
     static Rect backRect();
     static Rect searchRect();
     static Rect contentsIconRect();
-    static Rect markAreaRect();  // PDF: "Mark an area" in the top bar, left of search
+    static Rect markAreaRect();  // PDF: "Mark area", the sixth cell
     static Rect sliderRect();
     // Where the slider takes a finger: its track, a little taller (a ~9 mm target) and wider.
     static Rect sliderHitRect();
@@ -42,7 +42,9 @@ public:
     // A touch going down here drags at once (the app asks): the slider follows the finger.
     bool dragsFrom(Point at) const { return !picker_ && sliderHitRect().contains(at); }
     static constexpr int kDragFrameMs = 100;  // the slider redraws at most ~10 times a second
-    static Rect buttonRect(int i);  // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync
+    // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync, 5 Mark area (PDF), of `count` in the row.
+    static Rect buttonRect(int i, int count = 5);
+    int buttonCount() const;  // 6 on a PDF (Mark area), else 5
     static Rect lightPanelRect();
     static Rect lightSliderRect();
     static Rect displayPanelRect();

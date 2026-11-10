@@ -26,7 +26,7 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
-const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync"};
+const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync", "Mark area"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
 constexpr int kDisplayH = 580;
 const char* kMarginNames[] = {"Narrow", "Normal", "Wide", "Extra wide"};
@@ -40,20 +40,20 @@ Rect ReaderMenus::panelRect() { return {0, H() - kPanelH, W(), kPanelH}; }
 Rect ReaderMenus::backRect() { return {0, 0, 320, kTopH}; }
 Rect ReaderMenus::searchRect() { return {W() - kMargin - 190, 30, 80, 80}; }
 Rect ReaderMenus::contentsIconRect() { return {W() - kMargin - 90, 30, 90, 80}; }
-Rect ReaderMenus::markAreaRect() {
-    constexpr int w = 290;
-    return {searchRect().x - 20 - w, 35, w, 70};
-}
+Rect ReaderMenus::markAreaRect() { return buttonRect(5, 6); }
 Rect ReaderMenus::sliderRect() { return {kMargin, H() - kPanelH + 100, W() - 2 * kMargin, 70}; }
 Rect ReaderMenus::sliderHitRect() {
     const Rect s = sliderRect();
     return {s.x - 30, s.y - 15, s.w + 60, s.h + 30};
 }
 Rect ReaderMenus::pageLabelRect() { return {W() - kMargin - 380, H() - kPanelH + 30, 380, 50}; }
-Rect ReaderMenus::buttonRect(int i) {
-    const int w = (W() - 2 * kMargin) / 5;
-    return {kMargin + i * w, H() - kPanelH + 210, w - 12, 120};
+Rect ReaderMenus::buttonRect(int i, int count) {
+    // One row of icon-over-label cells, as many as there are (six on a PDF).
+    constexpr int gap = 12;
+    const int w = (W() - 2 * kMargin + gap) / count;
+    return {kMargin + i * w, H() - kPanelH + 200, w - gap, 140};
 }
+int ReaderMenus::buttonCount() const { return reader_.type() == DocType::Pdf ? 6 : 5; }
 Rect ReaderMenus::lightPanelRect() { return {0, H() - kPanelH - kLightH, W(), kLightH}; }
 Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, H() - kPanelH - kLightH + 50, W() - 2 * kMargin - 240, 70}; }
 
@@ -470,17 +470,18 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         nav.push(std::make_unique<BookSearchScreen>(reader_));
         return;
     }
-    if (contentsIconRect().contains(g.pos) || buttonRect(0).contains(g.pos)) return openContents(nav);
-    if (reader_.type() == DocType::Pdf && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
-    if (buttonRect(1).contains(g.pos)) return openNotes(nav);
-    if (buttonRect(2).contains(g.pos)) {
+    const int n = buttonCount();
+    if (contentsIconRect().contains(g.pos) || buttonRect(0, n).contains(g.pos)) return openContents(nav);
+    if (n == 6 && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
+    if (buttonRect(1, n).contains(g.pos)) return openNotes(nav);
+    if (buttonRect(2, n).contains(g.pos)) {
         displayOpen_ = !displayOpen_;
         lightOpen_ = false;
         nav.damage(displayPanelRect(), displayOpen_ ? Waveform::Ui : Waveform::Quality);
         return;
     }
     if (displayOpen_ && onDisplayTap(g.pos, nav)) return;
-    if (buttonRect(3).contains(g.pos)) {
+    if (buttonRect(3, n).contains(g.pos)) {
         lightOpen_ = !lightOpen_;
         if (displayOpen_) nav.damage(displayPanelRect(), Waveform::Quality);
         displayOpen_ = false;
@@ -491,7 +492,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         nav.damage(lightPanelRect(), lightOpen_ ? Waveform::Ui : Waveform::Quality);
         return;
     }
-    if (buttonRect(4).contains(g.pos)) {
+    if (buttonRect(4, n).contains(g.pos)) {
         syncing_ = true;
         nav.sync().openBook(reader_.row().key, reader_.row().attachmentKey);
         nav.damage(panelRect(), Waveform::Ui);
@@ -523,11 +524,8 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_line_to(cr, kMargin + 22, 96);
     cairo_stroke(cr);
     centredText(cr, "Library", {kSans, 8.5, 500}, {kMargin + 44, 30, 220, 90}, Align::Left);
-    const bool pdf = reader_.type() == DocType::Pdf;
-    const int titleRight = pdf ? markAreaRect().x - 20 : W() - 260;
     centredText(cr, reader_.row().title.empty() ? "Untitled" : reader_.row().title, {kSerif, 9, 700},
-                {320, 30, titleRight - 320, 90});
-    if (pdf) drawButton(cr, markAreaRect(), "Mark an area", false);
+                {320, 30, W() - 320 - 260, 90});
     const Rect sr = searchRect();
     searchIcon(cr, sr.x + sr.w / 2.0 - 4, sr.y + sr.h / 2.0 - 4, kInk);
     const Rect ci = contentsIconRect();
@@ -562,11 +560,24 @@ void ReaderMenus::draw(Canvas& canvas) {
     gray(cr, kInk);
     cairo_arc(cr, s.x + f * s.w, s.y + s.h / 2.0, 18, 0, 2 * M_PI);
     cairo_fill(cr);
-    for (int i = 0; i < 5; ++i) {
+    using Icon = void (*)(cairo_t*, double, double, uint8_t);
+    const Icon icons[] = {contentsIcon, notesIcon, displayIcon, lightIcon, syncIcon, areaIcon};
+    const int n = buttonCount();
+    for (int i = 0; i < n; ++i) {
         std::string label = kButtons[i];
         if (i == 1) label = notesLabel();
         if (i == 4 && syncing_) label = "Syncing…";
-        drawButton(cr, buttonRect(i), label, (i == 3 && lightOpen_) || (i == 2 && displayOpen_));
+        const Rect r = buttonRect(i, n);
+        if ((i == 3 && lightOpen_) || (i == 2 && displayOpen_)) {  // open: outlined, as a chosen tab
+            gray(cr, kInk);
+            cairo_set_line_width(cr, 3);
+            roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, 14);
+            cairo_stroke(cr);
+        }
+        icons[i](cr, r.x + r.w / 2.0, r.y + 48, kInk);
+        TextStyle st{kSans, 6.5, 500};  // a long label (Notes (128) on the KT4) a little smaller
+        if (measureText(label, st, 10000, 1).width > r.w - 8) st.size_pt = 6;
+        centredText(cr, label, st, {r.x + 4, r.y + 84, r.w - 8, 40});
     }
     if (picker_) drawPicker(cr);
 }

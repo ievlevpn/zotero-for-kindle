@@ -176,4 +176,76 @@ void closeIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_restore(cr);
 }
 
+void contentsIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    for (int i = -1; i <= 1; ++i) {
+        const double y = cy + i * 13;
+        cairo_move_to(cr, cx - 7, y);
+        cairo_line_to(cr, cx + kIconR, y);
+    }
+    cairo_stroke(cr);
+    for (int i = -1; i <= 1; ++i) {
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, cx - kIconR + 2, cy + i * 13, 3.5, 0, 2 * M_PI);
+    }
+    cairo_fill(cr);
+    cairo_restore(cr);
+}
+
+void notesIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    const double l = cx - 15.5, r = cx + 15.5, t = cy - kIconR, b = cy + kIconR, fold = 11;
+    cairo_move_to(cr, r - fold, t);
+    cairo_line_to(cr, l, t);
+    cairo_line_to(cr, l, b);
+    cairo_line_to(cr, r, b);
+    cairo_line_to(cr, r, t + fold);
+    cairo_close_path(cr);
+    cairo_move_to(cr, r - fold, t);
+    cairo_line_to(cr, r - fold, t + fold);
+    cairo_line_to(cr, r, t + fold);
+    cairo_move_to(cr, l + 8, cy + 2);
+    cairo_line_to(cr, r - 8, cy + 2);
+    cairo_move_to(cr, l + 8, cy + 11);
+    cairo_line_to(cr, r - 12, cy + 11);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+void displayIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    const TextStyle st{kSans, 10, 500, false, g};
+    const TextResult m = measureText("Aa", st, 200, 1);
+    drawText(cr, "Aa", st, {static_cast<int>(cx - m.width / 2.0), static_cast<int>(cy - m.height / 2.0), m.width + 4, m.height + 4}, 1);
+}
+
+void lightIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    cairo_arc(cr, cx, cy, 8, 0, 2 * M_PI);
+    for (int i = 0; i < 8; ++i) {
+        const double a = i * M_PI / 4;
+        cairo_move_to(cr, cx + 15 * std::cos(a), cy + 15 * std::sin(a));
+        cairo_line_to(cr, cx + kIconR * std::cos(a), cy + kIconR * std::sin(a));
+    }
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
+void areaIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    const double hw = kIconR, hh = 16, arm = 11;
+    for (int sx : {-1, 1})
+        for (int sy : {-1, 1}) {
+            const double x = cx + sx * hw, y = cy + sy * hh;
+            cairo_move_to(cr, x - sx * arm, y);
+            cairo_line_to(cr, x, y);
+            cairo_line_to(cr, x, y - sy * arm);
+        }
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
 }  // namespace zk

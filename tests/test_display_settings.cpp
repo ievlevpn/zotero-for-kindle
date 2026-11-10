@@ -46,7 +46,7 @@ struct Rig {
     void openDisplay(ReaderScreen& r) {
         r.onGesture(tapAt({metrics().width / 2, metrics().height / 2}), nav);  // the menus
         REQUIRE(r.menusOpen());
-        r.onGesture(tapAt(ReaderMenus::buttonRect(2).center()), nav);
+        r.onGesture(tapAt(ReaderMenus::buttonRect(2, r.menus()->buttonCount()).center()), nav);
     }
 };
 
