@@ -1,7 +1,8 @@
 # Zotero for Kindle
 
 Your Zotero library on a jailbroken Kindle: browse it, read EPUBs and PDFs, and highlight.
-Highlights and notes sync both ways with Zotero.
+Highlights and notes sync both ways with Zotero. On a Kindle Scribe, write on your PDFs with the pen, and the ink shows
+up in Zotero. Plugins add what the app itself doesn't do, from a small catalog on the Kindle.
 
 > **Unofficial.** This is a personal project, built for my own use. It is not made or supported by Zotero or Amazon.
 > It works on my Kindles. It may not work on yours.
@@ -17,6 +18,21 @@ Highlights and notes sync both ways with Zotero.
   <img src="docs/screenshots/reader-menus.png" width="24%" alt="Reader menus">
 </p>
 
+## Highlights
+
+**Write on PDFs with the Scribe's pen.** On a Kindle Scribe, the pen writes straight onto PDF pages. Your strokes become
+Zotero ink annotations, so they appear in Zotero desktop's PDF reader and sync like highlights. The eraser end takes
+strokes away, and a palm resting on the screen is ignored. Elsewhere, and in EPUBs, the pen works like a finger. In
+*Display → Pen: Tap* it turns pages and selects text on PDFs too, and so does holding the Premium Pen's side button.
+Contributed by Anna Smirnova; details in [docs/scribe-pen.md](docs/scribe-pen.md).
+
+**Plugins.** Small JavaScript plugins add what doesn't belong in the app itself: an action on selected text or on an
+item, a screen of their own, work in the background after a sync. *Settings → Plugins → Get plugins* lists the catalog.
+A plugin installs with a tap, and stays off until you've read what it may do and turned it on. Updates appear on the
+plugin's page. The first plugin in the catalog is [Feed Riffle](https://github.com/ievlevpn/zk-feed-riffle): it deals
+the new papers from the feeds you follow in Zotero as cards, to discard, keep (filed, tagged, with a note) or skip.
+More [below](#plugins).
+
 ## What it does
 
 - Syncs your library from zotero.org: items, collections, tags and annotations.
@@ -30,6 +46,8 @@ Highlights and notes sync both ways with Zotero.
 - Mark as read: a Zotero tag (`read`, or one you choose) shown as "✓ Read" in lists, set from an item's long press or at
   the end of a book.
 - Highlights and notes that show up in Zotero desktop, and the other way round.
+- On a Kindle Scribe: pen ink on PDFs, synced as Zotero ink annotations.
+- Plugins, from an in-app catalog or copied over USB.
 - Optional landscape mode, with two columns on big screens.
 - A native app with a Kindle-like look, made for e-ink.
 
@@ -57,13 +75,28 @@ version doesn't start, the app goes back to the previous one. To get from 0.1.0 
 
 ## Plugins
 
-The app runs JavaScript plugins, for things that don't belong in the app itself: exports, feeds, small automations.
-A plugin is a folder you copy into `zotero/plugins/` on the Kindle. It is off until you have read what it may do in
-*Settings → Plugins* and turned it on, and it can't remove anything from your library without asking you each time.
+The app runs JavaScript plugins, for things that don't belong in the app itself: exports, feeds, AI lookups, small
+automations. A plugin can:
+- add an action to the reader's selection bar or to an item's page;
+- open screens of its own, drawn by the app in its own style;
+- run in the background after a sync.
 
-- [Using plugins](docs/plugins/using.md): installing, permissions, and turning plugins off if one gets in the way.
+Get one from *Settings → Plugins → Get plugins*, or copy its folder into `zotero/plugins/` over USB.
+
+Plugins are kept on a short leash:
+- **Off until you say so.** A plugin stays off until you've read what it may do and turned it on.
+- **Changes go through the app.** It changes Zotero only through the app, which checks every change. It can't remove
+  anything without asking you each time.
+- **Signed.** Catalog plugins are signed by their authors, and the catalog by the app.
+- **Easy to turn off.** One that keeps failing is turned off on its own. A file named `OFF` in the plugins folder turns
+  them all off.
+
+- [Using plugins](docs/plugins/using.md): the catalog, permissions, updates, and turning plugins off.
 - [Writing plugins](docs/plugins/getting-started.md): from an empty folder to a plugin on your Kindle, with TypeScript,
-  a desktop loop and an [API reference](docs/plugins/reference/README.md).
+  screens, a desktop loop and an [API reference](docs/plugins/reference/README.md). Examples in
+  [sdk/examples](sdk/examples): Highlights to Markdown, Explain with AI, Feed Riffle.
+- [Publishing a plugin](docs/plugins/publishing.md): sign it, release it on GitHub, and list it in the
+  [catalog](https://github.com/ievlevpn/zotero-for-kindle-plugins) with one pull request.
 
 ## Building from source
 
@@ -74,7 +107,7 @@ The app is C++20 with cairo/pango, crengine (EPUB), MuPDF (PDF) and FBInk, built
     tools/build-kindle.sh                                      # cross-build in the zk-kindlehf container
     tools/package.sh                                           # dist/zotero-for-kindle.zip
     tools/deploy.sh                                            # copy to a Kindle over USBNetwork (SSH)
-    tools/release.sh 0.3.0 notes.md                            # a signed release (needs the signing key)
+    tools/release.sh 0.6.1 notes.md                            # a signed release (needs the signing key)
 
 `tools/screenshots.sh` regenerates the screenshots above from a demo library of public-domain books.
 
