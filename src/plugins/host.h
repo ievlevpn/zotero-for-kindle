@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@
 #include "docs/document.h"
 #include "plugins/events.h"
 #include "plugins/manifest.h"
+#include "plugins/ui_tree.h"
 #include "update/version.h"
 
 namespace zk {
@@ -52,6 +54,8 @@ struct PluginHostDeps {
     // fails, stopping the call that made it.
     size_t memoryTotal = 96u << 20;
     int handlerBudgetMs = 5000, backgroundBudgetMs = 30000;
+    // A screen's onEvent (and an action's run): user-caused, at least 30 s. A screen's render: 1 s.
+    int actionBudgetMs = 30000, renderBudgetMs = 1000;
     // Quiet run time: outside user-caused calls and the background run, a plugin's JavaScript may
     // run at most quietRunMs in any quietWindowMs; a timer or continuation whose call has ended
     // waits (not failed) until the window allows it.
@@ -73,18 +77,36 @@ struct PluginHostDeps {
 // the plugin turned off or reloaded): take the question away without answering.
 // BackgroundDone: the tasks of a runBackground() have all ended (also when none was due): the
 // screen thread's keep-awake hold may end; `requestId` is the round it answers. Badge: `text` is the plugin's new badge ("" cleared).
+//
+// Screens (zk.screen; `instance` names one open screen, see PluginHost::openScreen):
+// ScreenTree: `tree` is what render returned, checked; `requestId` counts the events of the screen
+// sent with screenEvent() that were handled before it (an event is answered by the first tree
+// whose requestId reaches its number, 1 for the first). ScreenOpen: the plugin opened `screenId`
+// (title in `text`) over `parent` with zk.ui.open (parent 0: from an action's run); `value` the
+// params (null: none). ScreenClose: the plugin closed the screen (zk.ui.close); `value` the result.
+// ScreenError: the screen can't be shown (render failed, an invalid tree, the plugin turned off or
+// restarted): `text` "<Plugin> can't show this screen right now"; nothing more comes for it.
+// ScreenActionError: its onEvent failed: `text` "<Plugin> couldn't do that: <message>"; a tree follows.
 struct PluginHostEvent {
-    enum class Kind { Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone } kind;
+    enum class Kind {
+        Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone,
+        ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError
+    } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
     uint64_t requestId = 0;
     std::string action;
+    uint64_t instance = 0, parent = 0;
+    std::string screenId;
+    nlohmann::json value;
+    std::shared_ptr<const Block> tree;
 };
 
-// What a plugin registered with zk.selectionAction / zk.itemAction / zk.screen (shown in part 2).
-// kind: "selectionAction", "itemAction" or "screen"; title is "" for a screen.
+// What a plugin registered with zk.selectionAction / zk.itemAction / zk.screen.
+// kind: "selectionAction", "itemAction" or "screen"; `main`: a screen listed in the launcher.
 struct PluginEntry {
     std::string kind, id, title;
+    bool main = false;
 };
 
 struct PluginStatus {
@@ -137,6 +159,16 @@ public:
     // Empties the plugin's data/ folder and its storage (Settings → Plugins → Reset its data). Works
     // whether or not the plugin is loaded; if it is, its queued storage writes are dropped.
     void resetData(const std::string& id);
+    // Opens a plugin's screen (the launcher, a test): returns its instance number at once; the
+    // plugin gets an `open` event (if it has onEvent), then render runs and a ScreenTree (or a
+    // ScreenError) follows. `params` (null: none) are given to render and onEvent.
+    uint64_t openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
+    // What the user did on an open screen ({kind:"tap", id}, …: zk.d.ts's zk.ui.Event). Events are
+    // handled one at a time, in order; each is answered by a ScreenTree (see PluginHostEvent).
+    void screenEvent(uint64_t instance, nlohmann::json event);
+    // The user left the screen (Back, or it went with its tab): it is closed now; the plugin gets
+    // a `back` event, and the screen below a `result` event.
+    void closeScreen(uint64_t instance);
     // The user's answer to a Confirm event.
     void answer(uint64_t requestId, bool yes);
     bool poll(PluginHostEvent&);

@@ -54,10 +54,11 @@ TEST_CASE("entry: selectionAction/itemAction/screen validate their arguments (Ty
         {"zk.itemAction({id:'',title:'T',run(){}})", "`id`"},
         {"zk.screen()", "`id`"},
         {"zk.screen('Bad','x')", "`id`"},
-        {"zk.screen('ok')", "`render`"},
-        {"zk.screen('ok', 3)", "`render`"},
+        {"zk.screen('ok')", "zk.screen"},
+        {"zk.screen('ok', 3)", "zk.screen"},
+        {"zk.screen('ok', {title:'T'})", "`render`"},
         {"zk.selectionAction({id:'a',title:'T',run(){}}); zk.selectionAction({id:'a',title:'U',run(){}})", "\"a\""},
-        {"zk.screen('s',()=>1); zk.screen('s',()=>2)", "\"s\""},
+        {"zk.screen('s',{title:'S',render:()=>1}); zk.screen('s',{title:'S',render:()=>2})", "\"s\""},
     };
     for (const auto& c : cases) {
         CAPTURE(c.code);
@@ -74,7 +75,7 @@ TEST_CASE("entry: selectionAction/itemAction/screen validate their arguments (Ty
         CHECK(l.status().errors.empty());
     }
     // The same id in different kinds is fine.
-    Loaded l("zk.selectionAction({id:'a',title:'T',run(){}}); zk.itemAction({id:'a',title:'T',run(){}}); zk.screen('a',()=>1);");
+    Loaded l("zk.selectionAction({id:'a',title:'T',run(){}}); zk.itemAction({id:'a',title:'T',run(){}}); zk.screen('a',{title:'A',render:()=>1});");
     CHECK(l.status().entries.size() == 3);
 }
 
@@ -82,7 +83,7 @@ TEST_CASE("entry: registrations are listed in PluginStatus for part 2") {
     Loaded l(
         "zk.selectionAction({id:'explain',title:'  Ex\\nplain ',run:()=>'x'});\n"
         "zk.itemAction({id:'export',title:'Export',run(){}});\n"
-        "zk.screen('cards',()=>({}));\n");
+        "zk.screen('cards',{title:'Cards',render:()=>({})});\n");
     const auto st = l.status();
     REQUIRE(st.loaded);
     REQUIRE(st.entries.size() == 3);
@@ -94,7 +95,7 @@ TEST_CASE("entry: registrations are listed in PluginStatus for part 2") {
     CHECK(st.entries[1].title == "Export");
     CHECK(st.entries[2].kind == "screen");
     CHECK(st.entries[2].id == "cards");
-    CHECK(st.entries[2].title.empty());
+    CHECK(st.entries[2].title == "Cards");
 
     // Dropped on unload, back after a reload (main.js runs again).
     l.host.setEnabled("p", false);

@@ -1,6 +1,5 @@
-// zk.selectionAction, zk.itemAction, zk.screen: entry points the app will show in part 2. In API v0
-// they are checked and recorded (kept in the plugin's run state, listed in PluginStatus) so plugins
-// written now keep working when they appear.
+// zk.selectionAction, zk.itemAction: entry points the app shows; checked and recorded (kept in the
+// plugin's run state, listed in PluginStatus). zk.screen is bindings_ui.cpp's.
 #include <regex>
 
 #include "plugins/plugin_ctx.h"
@@ -35,8 +34,9 @@ std::string text(JSContext* c, JSValueConst v) {
 
 const char* idRule = "lowercase letters, digits and dashes, at most 64 characters";
 
-// Checks `id` (a JS value) and returns it in *id; false with a TypeError pending.
-bool takeId(JSContext* c, JSValueConst v, const char* fn, const std::string& kind, std::string* id) {
+}  // namespace
+
+bool checkEntryId(JSContext* c, JSValueConst v, const char* fn, const std::string& kind, std::string* id) {
     if (!JS_IsString(v)) {
         JS_ThrowTypeError(c, "%s: `id` must be a string (%s)", fn, idRule);
         return false;
@@ -53,13 +53,15 @@ bool takeId(JSContext* c, JSValueConst v, const char* fn, const std::string& kin
     return true;
 }
 
+namespace {
+
 JSValue action(JSContext* c, JSValueConst arg, const char* fn, const char* kind) {
     if (!JS_IsObject(arg)) return JS_ThrowTypeError(c, "%s: expected an object { id, title, run }", fn);
     JSValue idV = JS_GetPropertyStr(c, arg, "id"), titleV = JS_GetPropertyStr(c, arg, "title"),
             runV = JS_GetPropertyStr(c, arg, "run");
     JSValue result = JS_UNDEFINED;
     std::string id, title;
-    if (!takeId(c, idV, fn, kind, &id)) result = JS_EXCEPTION;
+    if (!checkEntryId(c, idV, fn, kind, &id)) result = JS_EXCEPTION;
     else if (!JS_IsString(titleV) || (title = oneLine(text(c, titleV))).empty() || characters(title) > kTitleChars)
         result = JS_ThrowTypeError(c, "%s: `title` must be a non-empty string (at most %zu characters)", fn, kTitleChars);
     else if (!JS_IsFunction(c, runV)) result = JS_ThrowTypeError(c, "%s: `run` must be a function", fn);
@@ -78,20 +80,11 @@ JSValue jsItemAction(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     return action(c, argc > 0 ? argv[0] : JS_UNDEFINED, "zk.itemAction", "itemAction");
 }
 
-JSValue jsScreen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
-    std::string id;
-    if (!takeId(c, argc > 0 ? argv[0] : JS_UNDEFINED, "zk.screen", "screen", &id)) return JS_EXCEPTION;
-    if (argc < 2 || !JS_IsFunction(c, argv[1])) return JS_ThrowTypeError(c, "zk.screen: `render` must be a function");
-    addEntry(ctxOf(c), "screen", id, "", js::Value(c, JS_DupValue(c, argv[1])));
-    return JS_UNDEFINED;
-}
-
 }  // namespace
 
 void installEntry(PluginCtx& p) {
     defineFunction<jsSelectionAction>(p.cx.raw(), p.zk.raw(), "selectionAction", 1);
     defineFunction<jsItemAction>(p.cx.raw(), p.zk.raw(), "itemAction", 1);
-    defineFunction<jsScreen>(p.cx.raw(), p.zk.raw(), "screen", 2);
 }
 
 }  // namespace zk::plugins

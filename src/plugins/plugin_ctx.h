@@ -28,6 +28,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <nlohmann/json.hpp>
@@ -65,6 +66,7 @@ struct PluginCtx {
     js::Context cx;
     js::Value zk;  // the plugin's global `zk`; installers add their members to it
     js::Value makePermissionError, makeLimitError;  // the error classes' factories (installCore)
+    js::Value uiRender;  // (render, params) => Promise<JSON text of the tree> (installUi)
     std::unique_ptr<PluginRun> run;
     std::shared_ptr<void> storage;  // bindings_storage.cpp's state (no JavaScript values in it)
     std::shared_ptr<void> zotero;   // bindings_zotero.cpp's state (no JavaScript values in it)
@@ -196,6 +198,19 @@ void setBackgroundTask(PluginCtx&, js::Value task);
 // (kind, id, title) in PluginStatus::entries. kind: "selectionAction", "itemAction", "screen".
 bool hasEntry(PluginCtx&, const std::string& kind, const std::string& id);
 void addEntry(PluginCtx&, const std::string& kind, const std::string& id, const std::string& title, js::Value run);
+// Checks an entry point's `id` (a JS value) and returns it in *id; false with a TypeError pending
+// (not a valid id, or taken by another entry of the same kind). `fn` names the function.
+bool checkEntryId(JSContext*, JSValueConst v, const char* fn, const std::string& kind, std::string* id);
+
+// ---- Screens (bindings_ui.cpp; the host keeps the open screens) ------------------------------
+
+void addScreen(PluginCtx&, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent);
+// zk.ui.open / zk.ui.close: "" when recorded (they take effect when the running call ends), else
+// the message of the Error to throw. params / result: nullopt for undefined.
+std::string uiOpen(PluginCtx&, const std::string& screenId, std::optional<nlohmann::json> params);
+std::string uiClose(PluginCtx&, std::optional<nlohmann::json> result);
+// zk.ui.refresh: renders the plugin's showing screen again (soon, not inside this call).
+void uiRefresh(PluginCtx&);
 
 // The error just made for a lost connection: remembered by identity, so a background task that
 // lets exactly it escape isn't held to account (a copy, a new error or a forged flag is).
@@ -219,9 +234,11 @@ void installFetch(PluginCtx&);
 void installLibrary(PluginCtx&);
 // zk.zotero (bindings_zotero.cpp). Throws std::runtime_error on an internal error.
 void installZotero(PluginCtx&);
-// zk.selectionAction, zk.itemAction, zk.screen (bindings_entry.cpp): checked and recorded for part 2.
-// Throws std::runtime_error on an internal error.
+// zk.selectionAction, zk.itemAction (bindings_entry.cpp): checked and recorded. Throws
+// std::runtime_error on an internal error.
 void installEntry(PluginCtx&);
+// zk.screen and zk.ui (bindings_ui.cpp). Throws std::runtime_error on an internal error.
+void installUi(PluginCtx&);
 // Empties <pluginDir>/data/ and storage.db. `loaded`, if the plugin is loaded: its queued writes
 // are dropped and its storage closed (it reopens, empty, at the next use).
 void resetPluginData(const std::string& pluginDir, PluginCtx* loaded);
