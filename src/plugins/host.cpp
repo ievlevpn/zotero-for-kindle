@@ -1622,7 +1622,7 @@ bool hasEntry(PluginCtx& p, const std::string& kind, const std::string& id) {
 
 void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, const std::string& title, js::Value fn) {
     PluginEntry info{kind, id, title};
-    p.run->entries.push_back({info, std::move(fn)});
+    p.run->entries.push_back({info, std::move(fn), {}});
     std::lock_guard<std::mutex> lock(p.host.mu);
     p.host.entryList[p.manifest.id].push_back(std::move(info));
 }

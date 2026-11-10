@@ -97,9 +97,9 @@ struct PluginHostEvent {
     uint64_t requestId = 0;
     std::string action;
     uint64_t instance = 0, parent = 0;
-    std::string screenId;
-    nlohmann::json value;
-    std::shared_ptr<const Block> tree;
+    std::string screenId = {};
+    nlohmann::json value = nullptr;
+    std::shared_ptr<const Block> tree = nullptr;
 };
 
 // What a plugin registered with zk.selectionAction / zk.itemAction / zk.screen.

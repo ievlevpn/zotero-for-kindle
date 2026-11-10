@@ -17,7 +17,50 @@ PluginEvents::PluginEvents(PluginHost* host) : host_(host) {}
 void PluginEvents::rebind(PluginHost* host, App& app) {
     for (uint64_t id : open_) app.withdrawConfirm(id);
     open_.clear();
+    for (const auto& [instance, name] : screens_) {  // that host's screens are gone with it
+        PluginHostEvent ev{PluginHostEvent::Kind::ScreenError, "", name, name + " can't show this screen right now", {}, 0, ""};
+        ev.instance = instance;
+        mail_[instance].push_back(std::move(ev));
+    }
     host_ = host;
+}
+
+void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginName, const std::string& title) {
+    screens_[instance] = pluginName;
+    app.push(std::make_unique<PluginScreen>(*this, instance, pluginName, title));
+}
+
+uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
+    if (!host_) return 0;
+    std::string name = pluginId, title;
+    for (const auto& st : host_->status()) {
+        if (st.folder.dir != pluginId) continue;
+        if (st.folder.manifest) name = st.folder.manifest->name;
+        for (const auto& e : st.entries)
+            if (e.kind == "screen" && e.id == screenId) title = e.title;
+    }
+    const uint64_t instance = host_->openScreen(pluginId, screenId, std::move(params));
+    pushScreen(app, instance, name, title);
+    return instance;
+}
+
+void PluginEvents::send(uint64_t instance, nlohmann::json event) {
+    if (host_ && screens_.count(instance)) host_->screenEvent(instance, std::move(event));
+}
+
+void PluginEvents::left(uint64_t instance) {
+    screens_.erase(instance);
+    mail_.erase(instance);
+    if (host_) host_->closeScreen(instance);
+}
+
+bool PluginEvents::take(uint64_t instance, PluginHostEvent& out) {
+    auto it = mail_.find(instance);
+    if (it == mail_.end() || it->second.empty()) return false;
+    out = std::move(it->second.front());
+    it->second.pop_front();
+    if (it->second.empty() && !screens_.count(instance)) mail_.erase(it);  // closed by the plugin: its last word
+    return true;
 }
 
 void PluginEvents::poll(App& app) {
@@ -52,6 +95,18 @@ void PluginEvents::poll(App& app) {
                 break;
             case PluginHostEvent::Kind::Badge:
             case PluginHostEvent::Kind::Log:
+                break;
+            case PluginHostEvent::Kind::ScreenOpen:
+                if (ev.parent != 0 && !screens_.count(ev.parent)) host_->closeScreen(ev.instance);  // its parent went
+                else pushScreen(app, ev.instance, ev.pluginName, ev.text);
+                break;
+            case PluginHostEvent::Kind::ScreenClose:
+                if (screens_.erase(ev.instance)) mail_[ev.instance].push_back(std::move(ev));  // the screen pops itself
+                break;
+            case PluginHostEvent::Kind::ScreenTree:
+            case PluginHostEvent::Kind::ScreenError:
+            case PluginHostEvent::Kind::ScreenActionError:
+                if (screens_.count(ev.instance)) mail_[ev.instance].push_back(std::move(ev));
                 break;
         }
     }

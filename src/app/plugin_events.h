@@ -11,15 +11,21 @@
 //    dialog or the screensaver is over the app it waits until the app is in front again; several
 //    are shown one after another.
 //  - Badge, Log: nothing here (Settings → Plugins reads badges and logs from the host).
+//  - Screens: openScreen() pushes a PluginScreen; ScreenOpen (zk.ui.open) pushes one over its
+//    parent (if the parent is still open; else the host is told it went); trees, errors and
+//    ScreenClose wait for their screen, which takes them when it is visible (PluginScreen::onTick).
+//    rebind() gives every open plugin screen the error state.
 
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "plugins/host.h"
+#include "screens/plugin_screen.h"
 #include "sync/sync_control.h"
 
 namespace zk {
@@ -31,7 +37,7 @@ class App;
 // the other events of that sync. The first full sync of a library carries no per-item events.
 void forwardSyncToPlugins(const SyncEvent&, PluginSink&);
 
-class PluginEvents {
+class PluginEvents final : public ScreenLink {
 public:
     explicit PluginEvents(PluginHost*);  // nullptr: no host (nothing to poll)
     void poll(App&);
@@ -44,6 +50,14 @@ public:
 
     int waiting() const { return static_cast<int>(open_.size()); }
 
+    // Opens a plugin's screen over what shows (the launcher, an entry point): returns its instance
+    // (0 if there is no host).
+    uint64_t openScreen(App&, const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
+    // ScreenLink (PluginScreen).
+    void send(uint64_t instance, nlohmann::json event) override;
+    void left(uint64_t instance) override;
+    bool take(uint64_t instance, PluginHostEvent& out) override;
+
     static constexpr int64_t kToastGapMs = 3000;  // a toast's time on screen
 
 private:
@@ -52,6 +66,9 @@ private:
     std::deque<std::string> turnedOff_;  // toasts not shown yet
     int64_t lastToastMs_ = -kToastGapMs;
     std::function<void(uint64_t)> backgroundDone_;
+    std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
+    std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them
+    void pushScreen(App&, uint64_t instance, const std::string& pluginName, const std::string& title);
 };
 
 }  // namespace zk
