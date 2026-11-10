@@ -24,7 +24,7 @@ public:
     void draw(Canvas&);
     void onGesture(const Gesture&, Nav&);
     void onKey(const KeyEvent&, Nav&) {}
-    void onTick(Nav&) {}
+    void onTick(Nav&);
     void onPage(Nav&);
     void onSyncEvent(const SyncEvent&, Nav&);
     void onSearchResults(const std::vector<SearchHit>&, Nav&) {}
@@ -34,9 +34,17 @@ public:
     static Rect backRect();
     static Rect searchRect();
     static Rect contentsIconRect();
-    static Rect markAreaRect();  // PDF: "Mark an area" in the top bar, left of search
+    static Rect markAreaRect();  // PDF: "Mark area", the sixth cell
     static Rect sliderRect();
-    static Rect buttonRect(int i);  // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync
+    // Where the slider takes a finger: its track, a little taller (a ~9 mm target) and wider.
+    static Rect sliderHitRect();
+    static Rect pageLabelRect();  // "Page 12 of 300", above the slider's right end
+    // A touch going down here drags at once (the app asks): the slider follows the finger.
+    bool dragsFrom(Point at) const { return !picker_ && sliderHitRect().contains(at); }
+    static constexpr int kDragFrameMs = 100;  // the slider redraws at most ~10 times a second
+    // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync, 5 Mark area (PDF), of `count` in the row.
+    static Rect buttonRect(int i, int count = 5);
+    int buttonCount() const;  // 6 on a PDF (Mark area), else 5
     static Rect lightPanelRect();
     static Rect lightSliderRect();
     static Rect displayPanelRect();
@@ -64,6 +72,8 @@ public:
     Rect fontPickerNextRect();  // empty on the last
     bool fontPickerHeadingShown();  // "FAST READING" on this page
 
+    std::string pageLabel() const;  // "Page 12 of 300": the page under the finger while dragging
+    bool sliderDragged() const { return dragPage_.has_value(); }
     std::string notesLabel() const { return "Notes (" + std::to_string(notes_) + ")"; }
     bool lightOpen() const { return lightOpen_; }
 
@@ -76,7 +86,10 @@ private:
     ReaderScreen& reader_;
     Lipc* lipc_;
     size_t notes_ = 0;
-    std::optional<int> dragPage_;
+    std::optional<int> dragPage_;  // the page under the finger while the slider is dragged
+    int64_t dragShownMs_ = 0;       // when the slider was last redrawn during the drag
+    bool dragBehind_ = false;       // it moved since: redrawn once kDragFrameMs have passed
+    void showDrag(Nav&);
     bool lightOpen_ = false;
     bool displayOpen_ = false;
     std::optional<size_t> picker_;  // the font pop-up's page

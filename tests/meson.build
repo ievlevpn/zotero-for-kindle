@@ -87,6 +87,7 @@ test_sources = files(
   'test_render_worker.cpp',
   'test_reader.cpp',
   'test_reader_menus.cpp',
+  'test_slider_drag.cpp',
   'test_display_settings.cpp',
   'test_reader_highlights.cpp',
   'test_book_search.cpp',

@@ -366,7 +366,7 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     penTouchAt_ = p.pos;
     if (p.type == PenEvent::Type::Down) {
         t.type = TouchEvent::Type::Down;
-        gestures_.setDragAtOnce(s->dragsAtOnce());
+        gestures_.setDragAtOnce(s->dragsAtOnceFrom(p.pos));
     }
     if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) {
         t.type = TouchEvent::Type::Up;
@@ -492,7 +492,7 @@ void App::step(int timeout_ms) {
                 if (palmBlocked(e.touch)) break;
                 if (e.touch.type == TouchEvent::Type::Down) {
                     const Screen* top = visibleTop();
-                    gestures_.setDragAtOnce(top && top->dragsAtOnce());
+                    gestures_.setDragAtOnce(top && top->dragsAtOnceFrom(e.touch.pos));
                 }
                 auto g = gestures_.feed(e.touch);
                 gestures.insert(gestures.end(), g.begin(), g.end());

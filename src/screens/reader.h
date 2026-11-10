@@ -129,6 +129,7 @@ public:
     bool areaArmed() const { return areaArmed_; }  // "Mark an area": waiting for the drag
     void markArea(Nav&);                           // the menus' "Mark an area" (closes them)
     bool dragsAtOnce() const override { return areaArmed_; }
+    bool dragsAtOnceFrom(Point at) const override;  // also the menus' page slider: dragged, not swiped
     bool fastPartsApart() const override { return areaDrawing_; }
     static Rect areaBannerRect();  // "Drag across the area to mark" while armed, at the top of the page
     static Rect areaCancelRect();

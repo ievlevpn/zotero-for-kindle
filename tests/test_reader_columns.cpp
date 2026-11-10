@@ -46,7 +46,7 @@ struct Rig {
     void openDisplay(ReaderScreen& r) {
         r.onGesture(tapAt({618, 700}), nav);
         REQUIRE(r.menusOpen());
-        r.onGesture(tapAt(ReaderMenus::buttonRect(2).center()), nav);
+        r.onGesture(tapAt(ReaderMenus::buttonRect(2, r.menus()->buttonCount()).center()), nav);
     }
     // Columns on, from the Display panel; back to reading.
     void columns(ReaderScreen& r) {
@@ -133,7 +133,7 @@ TEST_CASE("pdf columns, reader: Contents shows PDF page numbers") {
     r->onGesture(tapAt({618, 700}), rig.nav);
     REQUIRE(r->menusOpen());
     rig.nav.pushed.clear();
-    r->onGesture(tapAt(ReaderMenus::buttonRect(0).center()), rig.nav);  // Contents
+    r->onGesture(tapAt(ReaderMenus::buttonRect(0, r->menus()->buttonCount()).center()), rig.nav);  // Contents
     REQUIRE(rig.nav.pushed.size() == 1);
     auto* contents = dynamic_cast<ContentsScreen*>(rig.nav.pushed[0].get());
     REQUIRE(contents);

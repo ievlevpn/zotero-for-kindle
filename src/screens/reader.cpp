@@ -615,6 +615,8 @@ void ReaderScreen::openMenus(Nav& nav) {
     menus_->open(nav);
 }
 
+bool ReaderScreen::dragsAtOnceFrom(Point at) const { return areaArmed_ || (menus_ && menus_->dragsFrom(at)); }
+
 void ReaderScreen::closeMenus(Nav& nav) {
     if (!menus_) return;
     menus_->close(nav);

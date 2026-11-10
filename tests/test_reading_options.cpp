@@ -147,7 +147,7 @@ struct ReaderRig {
     }
     void openDisplay() {
         reader->onGesture(test::tapAt({618, 700}), nav);
-        reader->onGesture(test::tapAt(ReaderMenus::buttonRect(2).center()), nav);
+        reader->onGesture(test::tapAt(ReaderMenus::buttonRect(2, reader->menus()->buttonCount()).center()), nav);
     }
     Layout engineLayout() { return engine.load()->layout; }
 };

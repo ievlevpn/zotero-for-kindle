@@ -268,7 +268,7 @@ TEST_CASE("scribe goldens: the reader's overlays") {
     REQUIRE(rig.reader->menusOpen());
     rig.reader->draw(c);
     checkGolden(c, "tests/golden/reader-menus-scribe.png");
-    rig.tap(ReaderMenus::buttonRect(2).center());  // Display
+    rig.tap(ReaderMenus::buttonRect(2, rig.reader->menus()->buttonCount()).center());  // Display
     rig.reader->draw(c);
     checkGolden(c, "tests/golden/display-panel-scribe.png");
     rig.reader->closeMenus(rig.nav);
