@@ -83,6 +83,7 @@ const Op kOps[] = {
     {"search", Permission::LibraryRead, "zk.library.search()"},
     {"find", Permission::LibraryRead, "zk.library.findByIdentifier()"},
     {"collections", Permission::LibraryRead, "zk.library.collections()"},
+    {"feeds", Permission::LibraryRead, "zk.library.feeds()"},
     {"tags", Permission::LibraryRead, "zk.library.tags()"},
     {"attachments", Permission::LibraryRead, "zk.library.attachments()"},
     {"annotations", Permission::AnnotationsRead, "zk.library.annotations()"},
@@ -228,6 +229,19 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         for (const std::string& key : keys)
             if (auto r = lib.item(key)) items.push_back(itemOf(lib, *r));
         return toJs(c, items);
+    }
+    if (op == "feeds") {  // Zotero's "feeds" setting as sync keeps it: {url: [name, ...]}
+        const json all = json::parse(lib.metaValue("zotero:feeds"), nullptr, false);
+        std::vector<std::pair<std::string, std::string>> rows;  // name, url
+        if (all.is_object())
+            for (const auto& [url, v] : all.items())
+                rows.push_back({v.is_array() && !v.empty() && v[0].is_string() ? v[0].get<std::string>() : url, url});
+        std::sort(rows.begin(), rows.end(), [](const auto& x, const auto& y) {
+            return std::make_tuple(lowerOf(x.first), x.first, x.second) < std::make_tuple(lowerOf(y.first), y.first, y.second);
+        });
+        json out = json::array();
+        for (const auto& [name, url] : rows) out.push_back({{"url", url}, {"name", name}});
+        return toJs(c, out);
     }
     if (op == "collections") {
         std::map<std::string, CollectionRecord> byKey;
@@ -443,6 +457,7 @@ const library = {
     return n.call("find", id.doi || "", id.arxiv || "", id.isbn || "");
   },
   async collections() { n.need("collections"); return n.call("collections"); },
+  async feeds() { n.need("feeds"); return n.call("feeds"); },
   async tags() { n.need("tags"); return n.call("tags"); },
   async search(text) {
     n.need("search");

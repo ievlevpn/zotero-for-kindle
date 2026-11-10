@@ -30,7 +30,7 @@ struct VersionMap {
 
 struct Deleted {
     int64_t libraryVersion = 0;
-    std::vector<std::string> items, collections;
+    std::vector<std::string> items, collections, settings;
 };
 
 struct SettingsListing {

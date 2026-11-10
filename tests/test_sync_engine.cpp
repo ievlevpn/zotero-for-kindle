@@ -495,3 +495,53 @@ TEST_CASE("sync: a file without a parent item is listed, searchable and readable
     CHECK(rig.lib.recentItems(10).empty());
     CHECK_FALSE(rig.lib.attachment("LONE0001"));
 }
+
+TEST_CASE("sync: the Zotero feeds setting is kept in the library; never written back") {
+    Rig rig;
+    const json feeds = {{"https://rss.arxiv.org/rss/math.PR", {"math.PR updates on arXiv.org", 10, 30, 1440}}};
+    rig.server.putSetting("feeds", feeds);
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(json::parse(rig.lib.metaValue("zotero:feeds")) == feeds);
+
+    json more = feeds;
+    more["https://example.org/feed"] = {"Example", 10, 30, 60};
+    rig.server.putSetting("feeds", more);
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(json::parse(rig.lib.metaValue("zotero:feeds")) == more);
+
+    rig.server.putSetting("feeds", "not an object");  // left as it was
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(json::parse(rig.lib.metaValue("zotero:feeds")) == more);
+
+    rig.server.settings.erase("feeds");  // deleted on the desktop
+    rig.server.deletedSettings["feeds"] = ++rig.server.libraryVersion;
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.lib.metaValue("zotero:feeds") == "{}");
+    CHECK(rig.server.count("POST", "settings") == 0);
+}
+
+TEST_CASE("sync: an existing library gets the feeds setting once, though its settings version is past it") {
+    Rig rig;
+    const json feeds = {{"https://rss.arxiv.org/rss/math.PR", {"math.PR updates on arXiv.org", 10, 30, 1440}}};
+    rig.server.putSetting("feeds", feeds);
+    rig.server.putSetting("lastPageIndex_u_EPUB0001", 3);
+    rig.lib.setSettingsVersion(rig.server.libraryVersion);  // synced before feeds were kept
+    rig.server.sent.clear();
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.server.count("GET", "settings?since=0") == 1);
+    CHECK(json::parse(rig.lib.metaValue("zotero:feeds")) == feeds);
+
+    rig.server.sent.clear();
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.server.count("GET", "settings?since=0") == 0);
+}
+
+TEST_CASE("sync: without a feeds setting the one full pull is not repeated") {
+    Rig rig;
+    rig.lib.setSettingsVersion(5);
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.lib.metaValue("zotero:feeds") == "{}");
+    rig.server.sent.clear();
+    REQUIRE_FALSE(rig.pull().error);
+    CHECK(rig.server.count("GET", "settings?since=0") == 0);
+}

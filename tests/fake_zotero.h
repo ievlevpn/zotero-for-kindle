@@ -29,6 +29,7 @@ public:
     int created = 0;
     std::map<std::string, int> failObjects;  // POST: these keys fail with this code; PATCH, DELETE of one: answered so
     std::map<std::string, json> settings;    // key -> {value, version}
+    std::map<std::string, int64_t> deletedSettings;  // key -> version of deletion
     std::set<std::string> answerUnchanged;   // POST: written, but answered as "unchanged"
     bool omitSuccessful = false;             // POST: "success" without the "successful" copies
 
@@ -165,6 +166,8 @@ public:
                 if (v > since) out["items"].push_back(k);
             for (const auto& [k, v] : deletedCollections)
                 if (v > since) out["collections"].push_back(k);
+            for (const auto& [k, v] : deletedSettings)
+                if (v > since) out["settings"].push_back(k);
             return ok(r, out);
         }
         if (req.method == "POST" && path == "items") {

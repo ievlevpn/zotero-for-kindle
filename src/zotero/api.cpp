@@ -171,8 +171,9 @@ std::optional<Deleted> ZoteroApi::deleted(int64_t since, UserError* err) {
     if (!j.is_object()) return setError(err, badBody("deleted: not an object")), std::nullopt;
     Deleted out;
     out.libraryVersion = libraryVersionOf(r);
-    for (const char* kind : {"items", "collections"}) {
-        auto& dst = std::string(kind) == "items" ? out.items : out.collections;
+    for (const char* kind : {"items", "collections", "settings"}) {
+        const std::string k = kind;
+        auto& dst = k == "items" ? out.items : k == "collections" ? out.collections : out.settings;
         if (j.contains(kind) && j[kind].is_array())
             for (const auto& k : j[kind])
                 if (k.is_string()) dst.push_back(k.get<std::string>());

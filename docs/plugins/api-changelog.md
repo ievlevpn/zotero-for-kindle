@@ -6,6 +6,10 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## 0.6.0
+
+- zk.library.feeds() — the user's Zotero feed subscriptions; needs app 0.6.0
+
 ## v0, part 2 — screens, entry points, the result pop-up (unreleased)
 
 Still API 0 (v0 is unstable); plugins written for 0.3.0 keep loading, except a `zk.screen` call

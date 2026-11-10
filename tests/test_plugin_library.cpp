@@ -392,6 +392,29 @@ TEST_CASE("library: collections() carry their path") {
     CHECK(contains(log, R"(OUT [{"key":"COLLOTH1","name":"Archive","parent":null,"path":["Archive"]},{"key":"COLLTOP1","name":"Reading","parent":null,"path":["Reading"]},{"key":"COLLSUB1","name":"arXiv","parent":"COLLTOP1","path":["Reading","arXiv"]}])"));
 }
 
+TEST_CASE("library: feeds() lists the Zotero feed subscriptions by name") {
+    Env env;
+    env.lib.setMetaValue("zotero:feeds", R"({
+        "https://rss.arxiv.org/rss/math.PR": ["math.PR updates on arXiv.org", 10, 30, 1440],
+        "https://example.org/b": ["blog", 10, 30, 60],
+        "https://example.org/odd": 7,
+        "https://example.org/empty": []
+    })");
+    env.fp.add("a", pluginWith(R"(
+        out(await zk.library.feeds());
+    )"), {"library:read"});
+    const std::string log = env.run("a");
+    CHECK(contains(log, R"(OUT [{"url":"https://example.org/b","name":"blog"},{"url":"https://example.org/empty","name":"https://example.org/empty"},{"url":"https://example.org/odd","name":"https://example.org/odd"},{"url":"https://rss.arxiv.org/rss/math.PR","name":"math.PR updates on arXiv.org"}])"));
+}
+
+TEST_CASE("library: feeds() is empty without the setting, or with a malformed one") {
+    Env env;
+    env.fp.add("a", pluginWith(R"(out(await zk.library.feeds());)"), {"library:read"});
+    CHECK(contains(env.run("a"), "OUT []"));
+    env.lib.setMetaValue("zotero:feeds", "[1, 2");
+    CHECK(contains(env.run("a"), "OUT []"));
+}
+
 TEST_CASE("library: annotations, recentAnnotations and notes") {
     Env env;
     fill(env.lib);
@@ -454,7 +477,7 @@ TEST_CASE("library: the rest needs library:read") {
         const calls = {
           item: () => zk.library.item("AAAAAAA1"), search: () => zk.library.search("x"), tags: () => zk.library.tags(),
           collections: () => zk.library.collections(), attachments: () => zk.library.attachments("AAAAAAA1"),
-          find: () => zk.library.findByIdentifier({ doi: "10.1/x" }),
+          find: () => zk.library.findByIdentifier({ doi: "10.1/x" }), feeds: () => zk.library.feeds(),
           items: async () => { for await (const i of zk.library.items()) return; },
         };
         for (const [name, f] of Object.entries(calls)) {
@@ -462,7 +485,7 @@ TEST_CASE("library: the rest needs library:read") {
         }
     )"), {"notes:read"});
     const std::string log = env.run("a");
-    for (const char* n : {"item", "search", "tags", "collections", "attachments", "find", "items"})
+    for (const char* n : {"item", "search", "tags", "collections", "attachments", "find", "items", "feeds"})
         CHECK(contains(log, std::string("OUT ") + n + " library:read"));
 }
 

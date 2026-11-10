@@ -10,6 +10,7 @@ Everything comes back as plain objects; nothing is live.
 - [annotations](library/annotations.md)
 - [attachments](library/attachments.md)
 - [collections](library/collections.md)
+- [feeds](library/feeds.md)
 - [findByIdentifier](library/findByIdentifier.md)
 - [fullText](library/fullText.md)
 - [item](library/item.md)

@@ -14,6 +14,7 @@ using nlohmann::json;
 namespace {
 
 constexpr size_t kBatch = 50;
+constexpr const char* kFeedsMeta = "zotero:feeds";  // Zotero's "feeds" setting, JSON; read by zk.library.feeds()
 
 bool sameContent(const AnnotationRecord& a, const AnnotationRecord& b) {
     return a.type == b.type && a.text == b.text && a.comment == b.comment && a.color == b.color &&
@@ -179,6 +180,8 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         auto tx = lib_.begin();
         for (const auto& key : gone->items) removeKey(key, rep);
         for (const auto& key : gone->collections) lib_.removeObject("collection", key);
+        for (const auto& key : gone->settings)
+            if (key == "feeds") lib_.setMetaValue(kFeedsMeta, "{}");
         tx.commit();
     }
     progress({"deletions", static_cast<int>(gone->items.size() + gone->collections.size()),
@@ -189,9 +192,13 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
 }
 
 // Reading positions: the settings lastPageIndex_u_<attachmentKey> changed since the last pull.
+// Also Zotero's feed subscriptions (setting "feeds"), kept for plugins and never written back. A
+// library synced before they were kept lists every setting once (since=0) to pick them up; that
+// re-applies no position, as each is applied only when its version is newer.
 void SyncEngine::pullPositions(SyncReport& rep) {
     UserError err;
-    auto listing = api_.settings(lib_.settingsVersion(), &err);
+    const bool full = lib_.metaValue(kFeedsMeta).empty();
+    auto listing = api_.settings(full ? 0 : lib_.settingsVersion(), &err);
     if (!listing) {  // positions only: the rest of the sync stands; next time
         log(LogLevel::Warn, "sync: reading positions not fetched: %s", err.details.c_str());
         return;
@@ -203,6 +210,9 @@ void SyncEngine::pullPositions(SyncReport& rep) {
         const auto& [value, version] = setting;
         if (value.is_number() || value.is_string()) lib_.applyRemotePosition(key.substr(prefix.size()), value.dump(), version);
     }
+    auto feeds = listing->settings.find("feeds");
+    if (feeds != listing->settings.end() && feeds->second.first.is_object()) lib_.setMetaValue(kFeedsMeta, feeds->second.first.dump());
+    else if (full) lib_.setMetaValue(kFeedsMeta, "{}");  // none: the full listing isn't repeated
     if (listing->libraryVersion > 0) lib_.setSettingsVersion(listing->libraryVersion);
     tx.commit();
 }

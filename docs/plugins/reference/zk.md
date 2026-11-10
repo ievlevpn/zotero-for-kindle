@@ -27,6 +27,7 @@
 - [Collection](zk/Collection.md)
 - [Creator](zk/Creator.md)
 - [Events](zk/Events.md)
+- [Feed](zk/Feed.md)
 - [Headers](zk/Headers.md)
 - [Item](zk/Item.md)
 - [ItemFields](zk/ItemFields.md)
