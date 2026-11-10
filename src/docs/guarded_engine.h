@@ -58,6 +58,8 @@ public:
             return false;
         }
     }
+    size_t cacheLimitBytes() override { return guard([&] { return e_->cacheLimitBytes(); }, size_t{0}); }
+    void trimCaches() override { guard([&] { e_->trimCaches(); }); }
     bool fullText(std::string& out, UserError* err) override {
         try {
             return e_->fullText(out, err);

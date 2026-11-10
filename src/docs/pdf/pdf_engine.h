@@ -15,10 +15,20 @@ namespace zk {
 
 class PdfEngine final : public DocumentEngine {
 public:
-    PdfEngine();
+    // MuPDF's resource store (decoded images, fonts) per context. A reader's: a few scanned pages'
+    // images (one is ~8 MB in gray); MuPDF evicts beyond it. Text only (plugins' fullText): fonts.
+    // Several contexts can be alive at once (reader, fullText, a closing reader's worker) on a
+    // 512 MB Kindle, so these stay small.
+    static constexpr size_t kReaderStoreBytes = 24u << 20;
+    static constexpr size_t kTextStoreBytes = 8u << 20;
+
+    explicit PdfEngine(size_t storeBytes = kReaderStoreBytes);
     ~PdfEngine() override;
 
     bool open(const std::string& path, UserError*) override;
+    bool openForText(const std::string& path, UserError*) override;  // with a kTextStoreBytes store
+    size_t cacheLimitBytes() override { return ctx_ ? storeBytes_ : 0; }
+    void trimCaches() override;
     void setLayout(const Layout&) override;
     int pageCount() override;
     int viewsPerPage() override;
@@ -86,7 +96,10 @@ private:
     // The page's inked area (page space), for trimmed margins; measured once per page.
     bool contentBox(int page, float box[4]);
 
+    void newContext(size_t storeBytes);
+
     fz_context* ctx_ = nullptr;
+    size_t storeBytes_ = 0;
     fz_document* doc_ = nullptr;
     Layout layout_;
     std::vector<TocEntry> toc_;  // in PDF pages

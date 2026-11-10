@@ -73,6 +73,8 @@ public:
     uint64_t linkAt(int page, int index);
     // Handwriting on `page` placed for Zotero; every request is answered, in order.
     uint64_t ink(int page, std::vector<std::vector<Point>> paths, int widthPx);
+    // Empties the engine's resource cache (the app went to the background); pages drawn stay.
+    void trimCaches();
     bool poll(RenderEvent&);  // UI thread, non-blocking
 
     // Waits (up to the timeout) for workers whose readers are gone to finish; before exit.
