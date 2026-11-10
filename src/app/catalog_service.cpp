@@ -130,16 +130,19 @@ void CatalogService::start() {
     run(Op::Load, "", "", [](std::string&) { return true; });
 }
 
-void CatalogService::check(bool force) {
+void CatalogService::check(bool force, std::string pageId) {
     if (!force && shown_.cache.registry) {
         const int64_t age = config_.wallMs() - shown_.cache.registryMs;
-        if (age >= 0 && age < kRegistryFreshMs) return;
+        if (age >= 0 && age < kRegistryFreshMs) {
+            if (!pageId.empty()) lookUp(pageId, kPageCheckEveryMs);  // the registry is fresh: only its release
+            return;
+        }
     }
     const auto ids = installedIds(config_.host ? config_.host() : nullptr);
-    run(Op::Check, "", "Checking…", [this, ids, force](std::string& error) {
+    run(Op::Check, "", "Checking…", [this, ids, force, pageId](std::string& error) {
         auto http = config_.makeHttp();
         const catalog::CheckResult r = runCheck(*http, {config_.feed, config_.registryKey, config_.wallMs}, config_.pluginsDir, ids,
-                                       force, cancel_);
+                                       force, cancel_, pageId);
         log(LogLevel::Info, "catalog: checked: %s", r.status == catalog::CheckStatus::Ok ? "ok" : r.message.c_str());
         const bool none = r.status == catalog::CheckStatus::NoCatalog;  // calm: not an error
         set([&](State& s) { s.noCatalog = none; });
@@ -148,12 +151,12 @@ void CatalogService::check(bool force) {
     });
 }
 
-void CatalogService::lookUp(std::string id) {
+void CatalogService::lookUp(std::string id, int64_t everyMs) {
     const Entry* e = find(shown_.cache, id);
     if (!e) return;
     if (auto l = shown_.cache.latest.find(id); l != shown_.cache.latest.end()) {
         const int64_t age = config_.wallMs() - l->second.checkedMs;
-        if (age >= 0 && age < kPluginCheckEveryMs) return;
+        if (age >= 0 && age < everyMs) return;
     }
     run(Op::LookUp, id, "", [this, entry = *e](std::string& error) {
         auto http = config_.makeHttp();

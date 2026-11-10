@@ -71,13 +71,14 @@ void PluginPageScreen::onShow(Nav& nav) {
 }
 
 // An installed catalog plugin's page checks the catalog as Get plugins does (when the copy is more
-// than an hour old), so its Update shows here; while the catalog is busy, it waits its turn.
+// than an hour old), and its own release when that is over an hour old, so its Update shows here;
+// while the catalog is busy, it waits its turn.
 void PluginPageScreen::checkForUpdate() {
     if (!wantCheck_ || !catalog_ || catalog_->busy()) return;
     wantCheck_ = false;
     const auto& cache = catalog_->state().cache;
     if (!status_ || (!catalog::find(cache, id_) && !cache.fromCatalog.count(id_))) return;
-    catalog_->check(false);
+    catalog_->check(false, id_);  // its own release too, when over an hour old
 }
 
 void PluginPageScreen::onTick(Nav& nav) {

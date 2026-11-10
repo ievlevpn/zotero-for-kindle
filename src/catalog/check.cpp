@@ -170,7 +170,7 @@ std::optional<Latest> fetchLatest(Http& http, const Entry& e, int64_t nowMs, std
 
 CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& pluginsDir,
                      const std::vector<std::string>& installedIds, bool force,
-                     std::shared_ptr<std::atomic<bool>> cancel) {
+                     std::shared_ptr<std::atomic<bool>> cancel, const std::string& pageId) {
     const CheckResult stopped{CheckStatus::Failed, "Cancelled."};
     if (cancelled(cancel)) return stopped;
 
@@ -201,13 +201,14 @@ CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& plu
     cache.registry = std::move(registry);
     cache.registryMs = opt.wallMs();
 
-    // Each installed plugin in the registry, at most every 6 h unless forced.
+    // Each installed plugin in the registry, at most every 6 h (its page open: 1 h) unless forced.
     for (const auto& id : installedIds) {
         const Entry* e = find(cache, id);
         if (!e) continue;
         auto old = cache.latest.find(id);
         const int64_t now = opt.wallMs();
-        if (!force && old != cache.latest.end() && now - old->second.checkedMs < kPluginCheckEveryMs) continue;
+        if (!force && old != cache.latest.end() && now - old->second.checkedMs < (id == pageId ? kPageCheckEveryMs : kPluginCheckEveryMs))
+            continue;
         if (cancelled(cancel)) break;
         if (auto l = fetchLatest(http, *e, now, cancel)) cache.latest[id] = *l;  // else quietly: tried again next time
     }

@@ -24,6 +24,7 @@ namespace zk::catalog {
 
 extern const char* const kRegistryFeed;  // api.github.com/repos/ievlevpn/zotero-for-kindle-plugins/releases/latest
 constexpr int64_t kPluginCheckEveryMs = 6LL * 3600 * 1000;
+constexpr int64_t kPageCheckEveryMs = 3600 * 1000LL;  // the plugin whose page is open
 
 struct Latest {
     Version version;
@@ -68,10 +69,11 @@ struct CheckResult {
 std::optional<Latest> fetchLatest(Http&, const Entry&, int64_t nowMs, std::shared_ptr<std::atomic<bool>> cancel);
 
 // Fetches the registry (verified with registryKey, kept only if it verifies and parses), then the
-// latest release of each installed id that is in the registry and wasn't checked within 6 h.
+// latest release of each installed id that is in the registry and wasn't checked within 6 h
+// (`pageId`, the plugin whose page is open: within 1 h).
 // A plugin release that can't be read or lacks plugin.zip / plugin.zip.sig is skipped quietly.
 CheckResult runCheck(Http&, const CheckOptions&, const std::string& pluginsDir,
                      const std::vector<std::string>& installedIds, bool force,
-                     std::shared_ptr<std::atomic<bool>> cancel);
+                     std::shared_ptr<std::atomic<bool>> cancel, const std::string& pageId = "");
 
 }  // namespace zk::catalog

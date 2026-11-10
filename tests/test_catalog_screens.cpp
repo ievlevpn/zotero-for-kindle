@@ -317,7 +317,7 @@ TEST_CASE("catalog screens: an installed catalog plugin's page checks the catalo
         CHECK(r.world->count(kFeed) == before);
         CHECK(page.updateLabel().empty());
     }
-    *r.now += 7 * 3600 * 1000LL;  // past the hour (and the 6 h a plugin's release is kept)
+    *r.now += 2 * 3600 * 1000LL;  // past the hour
     {  // a plugin that isn't in the catalog: no check
         PluginPageScreen page("mine", r.fn());
         page.onShow(r.nav);
@@ -337,6 +337,43 @@ TEST_CASE("catalog screens: an installed catalog plugin's page checks the catalo
     CHECK(list.rows()[0].mark == "Installed");
 }
 
+TEST_CASE("catalog screens: a plugin's page re-fetches its own release after 1 h; the background check keeps 6 h") {
+    Rig r;
+    r.installFeed();
+    addPlugin(r.dir, "md", "Highlights to Markdown", "\"annotations:read\"");  // in the catalog too, by hand
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.2.0", json::array({"library:read"}));
+    r.startHost();
+    r.startCatalog();
+    r.checkNow();
+    const std::string feedRel = "https://api.github.com/repos/ann/zk-feed/releases/latest";
+    const std::string mdRel = "https://api.github.com/repos/bo/zk-md/releases/latest";
+    REQUIRE(r.world->count(feedRel) == 1);
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
+
+    *r.now += 2 * 3600 * 1000LL;
+    r.svc->check(false);  // the hourly background check: the registry, no plugin release (6 h)
+    r.settle();
+    CHECK(r.world->count(kFeed) == 2);
+    CHECK(r.world->count(feedRel) == 1);
+
+    PluginPageScreen page("feed", r.fn());  // the registry is fresh; its release is 2 h old
+    page.onShow(r.nav);
+    r.settle();
+    page.onTick(r.nav);
+    CHECK(r.world->count(kFeed) == 2);
+    CHECK(r.world->count(feedRel) == 2);  // only this one
+    CHECK(r.world->count(mdRel) == 1);
+    CHECK(page.updateLabel() == "Update to 1.3.0");
+
+    *r.now += 2 * 3600 * 1000LL;  // both stale: one check, with only this plugin's release
+    PluginPageScreen again("feed", r.fn());
+    again.onShow(r.nav);
+    r.settle();
+    CHECK(r.world->count(kFeed) == 3);
+    CHECK(r.world->count(feedRel) == 3);
+    CHECK(r.world->count(mdRel) == 1);
+}
+
 TEST_CASE("catalog screens: a plugin's page opened while the catalog is busy checks once it is free") {
     Rig r;
     r.installFeed();
@@ -344,7 +381,7 @@ TEST_CASE("catalog screens: a plugin's page opened while the catalog is busy che
     r.startHost();
     r.startCatalog();
     r.checkNow();
-    *r.now += 7 * 3600 * 1000LL;
+    *r.now += 2 * 3600 * 1000LL;
     r.world->gated = true;
     r.svc->lookUp("md");  // something else on the worker
     PluginPageScreen page("feed", r.fn());

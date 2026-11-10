@@ -5,7 +5,8 @@
 //
 //   check(force)   the registry and the installed plugins' releases (runCheck). Not forced, it is
 //                  skipped while the copy is less than an hour old (Get plugins or an installed
-//                  catalog plugin's page opening).
+//                  catalog plugin's page opening). check(false, id) from a plugin's page also
+//                  re-fetches that plugin's release when it is over an hour old (others: 6 h).
 //   install(id)    a plugin that isn't installed: download, verify, put in place (off).
 //   update(id)     an installed one: staged; applied at once when it adds no permissions, else
 //                  awaitingYes holds it until applyStaged (Update) or discardStaged (Not now).
@@ -84,8 +85,9 @@ public:
 
     // On the UI thread: start work, poll results; never blocks. A call while busy is ignored.
     void start();  // reads the cache (the worker)
-    void check(bool force);
-    void lookUp(std::string id);  // a catalog plugin's latest release, for its page (at most every 6 h)
+    void check(bool force, std::string pageId = "");
+    // A catalog plugin's latest release, for its page (at most every `everyMs`, by default 6 h).
+    void lookUp(std::string id, int64_t everyMs = catalog::kPluginCheckEveryMs);
     void install(std::string id);
     void update(std::string id);
     void updateAll();  // each waiting update that adds no permissions; the others stay waiting
