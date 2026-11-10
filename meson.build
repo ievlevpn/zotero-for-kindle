@@ -220,6 +220,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/plugins.cpp',
   'src/screens/plugin_page.cpp',
   'src/screens/plugin_blocks.cpp',
+  'src/screens/plugin_diff.cpp',
   'src/app/settings_store.cpp',
   include_directories : ui_incs + [include_directories('third_party', is_system : true)],
   dependencies : [ui_dep, store_dep, sync_dep, docs_dep, update_dep, plugins_dep])
