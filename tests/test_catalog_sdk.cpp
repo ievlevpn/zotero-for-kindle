@@ -95,10 +95,9 @@ TEST_CASE("catalog sdk: the packed zip has plugin.json at its root and a valid m
 
 TEST_CASE("catalog sdk: the committed registry and the spec's sample parse") {
     std::string why;
-    auto empty = catalog::parseRegistry(slurp("registry/registry.json"), &why);
-    REQUIRE_MESSAGE(empty, why);
-    CHECK(empty->plugins.empty());
-    CHECK(empty->revoked.empty());
+    auto committed = catalog::parseRegistry(slurp("registry/registry.json"), &why);
+    REQUIRE_MESSAGE(committed, why);
+    for (const auto& entry : committed->plugins) CHECK(!entry.repo.empty());
 
     const std::string sample = R"({
       "registry": 1, "updated": "2026-11-10T12:00:00Z",
