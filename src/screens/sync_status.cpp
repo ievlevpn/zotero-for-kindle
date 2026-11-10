@@ -56,16 +56,17 @@ void SyncStatus::drawIndicator(cairo_t* cr, Rect r) const {
     fillRect(cr, r, 255);
     const double cx = r.x + r.w / 2.0, cy = r.y + r.h / 2.0;
     if (syncing()) {
-        gray(cr, theme::kTertiary);
-        cairo_set_line_width(cr, 5);
-        cairo_arc(cr, cx, cy, 20, 0, 2 * M_PI);
+        // A pale ring with a short arc of ink: activity without animating (each frame would be a refresh).
+        cairo_save(cr);
+        iconPen(cr, 200);
+        cairo_arc(cr, cx, cy, 15.5, 0, 2 * M_PI);
         cairo_stroke(cr);
-        // A short arc of ink shows activity without animating (each frame would be a refresh).
-        gray(cr, theme::kInk);
-        cairo_arc(cr, cx, cy, 20, -M_PI / 2, M_PI / 3);
+        iconPen(cr, theme::kInk);
+        cairo_arc(cr, cx, cy, 15.5, -M_PI / 2, M_PI / 6);
         cairo_stroke(cr);
+        cairo_restore(cr);
     } else {
-        syncIcon(cr, cx, cy, 20);
+        syncIcon(cr, cx, cy, theme::kSecondary);
     }
     if (hasError()) {
         // A small "!" badge to the lower right, clear of the arrow.

@@ -16,10 +16,23 @@ void roundedRect(cairo_t* cr, double x, double y, double w, double h, double rad
 void hRule(cairo_t* cr, int y, int x0, int x1, uint8_t g = 220);
 // Text vertically centred in `box`.
 void centredText(cairo_t* cr, const std::string& s, const TextStyle& st, Rect box, Align a = Align::Center);
-// Circular "refresh" arrow: an open ring with a solid arrowhead continuing the curve.
-void syncIcon(cairo_t* cr, double cx, double cy, double r);
 void searchIcon(cairo_t* cr, double cx, double cy, uint8_t g);
-void gearIcon(cairo_t* cr, double cx, double cy, double r, uint8_t g);
+
+// Header icons, one family: outlined, kIconStroke wide, round caps and joins, drawn inside a
+// kIconSize square centred on (cx, cy), stroke included.
+inline constexpr double kIconStroke = 5;
+inline constexpr double kIconSize = 44;
+// Sets the family's pen: gray `g`, kIconStroke, round caps and joins.
+void iconPen(cairo_t* cr, uint8_t g);
+// Two arcs chasing each other clockwise, each with an open arrowhead.
+void syncIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+// Six outlined teeth around a round hole.
+void gearIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+// A square with a knob on top and on the right; the whole shape is centred.
+void puzzleIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+// A badge dot for puzzleIcon at the same centre: ink, with a white halo cutting the outline.
+void puzzleBadge(cairo_t* cr, double cx, double cy);
+void closeIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 // Typographic cover for items without one: title in Bookerly, authors in Ember.
 void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark);
 void typeBadge(cairo_t* cr, Rect r, const std::string& type);
