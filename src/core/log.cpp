@@ -1,7 +1,9 @@
 #include "core/log.h"
 
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <mutex>
 #include <sys/time.h>
@@ -12,6 +14,7 @@ namespace {
 
 std::mutex g_mutex;
 FILE* g_file = nullptr;
+std::atomic<LogLevel> g_level{std::getenv("ZK_LOG_DEBUG") ? LogLevel::Debug : LogLevel::Info};
 
 const char* levelName(LogLevel level) {
     switch (level) {
@@ -34,7 +37,12 @@ void setLogFile(const std::string& path) {
     if (!path.empty()) g_file = fopen(path.c_str(), "a");
 }
 
+void setLogLevel(LogLevel minimum) { g_level = minimum; }
+
+LogLevel logLevel() { return g_level; }
+
 void log(LogLevel level, const char* fmt, ...) {
+    if (level < g_level.load()) return;
     char message[2048];
     va_list args;
     va_start(args, fmt);

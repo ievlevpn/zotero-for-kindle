@@ -237,3 +237,23 @@ TEST_CASE("launcher fix: an unreadable state with a backup rolls back") {
     CHECK(k.file("zotero/bin/zotero") == app("0.2.0", 0));
     CHECK_FALSE(fs::exists(k.home / "update/state"));
 }
+
+TEST_CASE("launcher: a log over 1 MB becomes zotero.log.1 before the start, replacing the old one") {
+    Kindle k;
+    const std::string big(1048577, 'x');
+    writeFile(k.home / "log/zotero.log", big);
+    writeFile(k.home / "log/zotero.log.1", "older");
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+    CHECK(k.file("zotero/log/zotero.log.1") == big);
+    CHECK(fs::file_size(k.home / "log/zotero.log") < 1024);
+}
+
+TEST_CASE("launcher: a log of 1 MB or less is kept as it is") {
+    Kindle k;
+    const std::string small(1048576, 'x');
+    writeFile(k.home / "log/zotero.log", small);
+    k.launch();
+    CHECK_FALSE(fs::exists(k.home / "log/zotero.log.1"));
+    CHECK(k.file("zotero/log/zotero.log").substr(0, small.size()) == small);
+}
