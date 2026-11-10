@@ -40,6 +40,10 @@ Rect ReaderMenus::panelRect() { return {0, H() - kPanelH, W(), kPanelH}; }
 Rect ReaderMenus::backRect() { return {0, 0, 320, kTopH}; }
 Rect ReaderMenus::searchRect() { return {W() - kMargin - 190, 30, 80, 80}; }
 Rect ReaderMenus::contentsIconRect() { return {W() - kMargin - 90, 30, 90, 80}; }
+Rect ReaderMenus::markAreaRect() {
+    constexpr int w = 290;
+    return {searchRect().x - 20 - w, 35, w, 70};
+}
 Rect ReaderMenus::sliderRect() { return {kMargin, H() - kPanelH + 100, W() - 2 * kMargin, 70}; }
 Rect ReaderMenus::buttonRect(int i) {
     const int w = (W() - 2 * kMargin) / 5;
@@ -427,6 +431,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (contentsIconRect().contains(g.pos) || buttonRect(0).contains(g.pos)) return openContents(nav);
+    if (reader_.type() == DocType::Pdf && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
     if (buttonRect(1).contains(g.pos)) return openNotes(nav);
     if (buttonRect(2).contains(g.pos)) {
         displayOpen_ = !displayOpen_;
@@ -478,8 +483,11 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_line_to(cr, kMargin + 22, 96);
     cairo_stroke(cr);
     centredText(cr, "Library", {kSans, 8.5, 500}, {kMargin + 44, 30, 220, 90}, Align::Left);
+    const bool pdf = reader_.type() == DocType::Pdf;
+    const int titleRight = pdf ? markAreaRect().x - 20 : W() - 260;
     centredText(cr, reader_.row().title.empty() ? "Untitled" : reader_.row().title, {kSerif, 9, 700},
-                {320, 30, W() - 320 - 260, 90});
+                {320, 30, titleRight - 320, 90});
+    if (pdf) drawButton(cr, markAreaRect(), "Mark an area", false);
     const Rect sr = searchRect();
     searchIcon(cr, sr.x + sr.w / 2.0 - 4, sr.y + sr.h / 2.0 - 4, kInk);
     const Rect ci = contentsIconRect();

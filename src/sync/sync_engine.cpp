@@ -32,18 +32,6 @@ int64_t versionOf(const json& obj) {
     return obj.contains("version") && obj["version"].is_number_integer() ? obj["version"].get<int64_t>() : 0;
 }
 
-json annotationJson(const AnnotationRecord& a) {
-    json tags = json::array();
-    for (const auto& t : a.tags) tags.push_back({{"tag", t}});
-    json j = {{"itemType", "annotation"},         {"parentItem", a.parentKey},     {"annotationType", a.type},
-              {"annotationComment", a.comment},   {"annotationColor", a.color},    {"annotationPageLabel", a.pageLabel},
-              {"annotationSortIndex", a.sortIndex}, {"annotationPosition", a.position}, {"tags", tags}};
-    if (a.type == "highlight" || a.type == "underline") j["annotationText"] = a.text;
-    j["key"] = a.key;  // client-made for new ones, so a lost response can't create a duplicate
-    if (a.version > 0) j["version"] = a.version;
-    return j;
-}
-
 int64_t nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
         .count();
@@ -59,6 +47,19 @@ constexpr const char* kDeletedInZotero = "It was deleted in Zotero.";
 constexpr const char* kNotAllowed = "The app doesn't allow this change.";
 
 }  // namespace
+
+// Zotero's fields for an annotation (an image annotation has no annotationText: Zotero refuses it).
+json annotationJson(const AnnotationRecord& a) {
+    json tags = json::array();
+    for (const auto& t : a.tags) tags.push_back({{"tag", t}});
+    json j = {{"itemType", "annotation"},         {"parentItem", a.parentKey},     {"annotationType", a.type},
+              {"annotationComment", a.comment},   {"annotationColor", a.color},    {"annotationPageLabel", a.pageLabel},
+              {"annotationSortIndex", a.sortIndex}, {"annotationPosition", a.position}, {"tags", tags}};
+    if (a.type == "highlight" || a.type == "underline") j["annotationText"] = a.text;
+    j["key"] = a.key;  // client-made for new ones, so a lost response can't create a duplicate
+    if (a.version > 0) j["version"] = a.version;
+    return j;
+}
 
 WriteGuard::PluginChanges pluginChangeShapes(Library& lib) {
     return [&lib](const std::string& key) -> std::optional<PluginChangeShape> {

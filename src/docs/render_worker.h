@@ -18,7 +18,7 @@
 namespace zk {
 
 struct RenderEvent {
-    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink, Link };
+    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink, Link, Area };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
     int viewsPerPage = 1;  // PDF column view: pages are views, this many per PDF page
@@ -32,7 +32,7 @@ struct RenderEvent {
     uint64_t requestId = 0;          // SearchResults, Selection, HitAnnotation: the id the request returned
     std::optional<Selection> selection;  // Selection (nullopt: not on text)
     std::string annotationKey;           // HitAnnotation ("" if none)
-    std::optional<InkPlacement> ink;     // Ink (nullopt: the format has no ink)
+    std::optional<InkPlacement> ink;     // Ink, Area (nullopt: the format has none)
     UserError error;                 // Error
     DocPosition position;            // of this page
     // Page: each bookmark given to setBookmarks with its page (-1: can't be placed), by position.
@@ -73,6 +73,8 @@ public:
     uint64_t linkAt(int page, int index);
     // Handwriting on `page` placed for Zotero; every request is answered, in order.
     uint64_t ink(int page, std::vector<std::vector<Point>> paths, int widthPx);
+    // A rectangle on `page` placed for Zotero (an Area event); answered in order with ink.
+    uint64_t area(int page, Rect r);
     // Empties the engine's resource cache (the app went to the background); pages drawn stay.
     void trimCaches();
     bool poll(RenderEvent&);  // UI thread, non-blocking

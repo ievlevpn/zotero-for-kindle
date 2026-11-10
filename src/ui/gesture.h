@@ -33,6 +33,9 @@ public:
     explicit GestureRecognizer(GestureConfig config = {});
 
     std::vector<Gesture> feed(const TouchEvent& event);
+    // For the touches that go down from now on: moving past the slop is a drag at once (DragStart,
+    // DragMove, DragEnd), with no long press first (the reader's "Mark an area").
+    void setDragAtOnce(bool on) { dragAtOnce_ = on; }
 
     // Call periodically while a finger is down; emits LongPress when due.
     std::vector<Gesture> tick(int64_t now_ms);
@@ -45,6 +48,7 @@ private:
     GestureConfig config_;
     State state_ = State::Idle;
     int finger_ = -1;
+    bool dragAtOnce_ = false, dragging_ = false;  // dragging_: this touch drags at once
     Point start_{};
     int64_t start_ms_ = 0;
 };

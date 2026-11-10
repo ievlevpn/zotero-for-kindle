@@ -41,6 +41,7 @@ public:
     std::vector<HighlightBox> highlights(int page, const std::vector<AnnotationRecord>&) override;
     std::optional<Selection> select(int page, Point from, Point to) override;
     std::optional<InkPlacement> inkPosition(int page, const std::vector<std::vector<Point>>& paths, int widthPx) override;
+    std::optional<InkPlacement> areaPosition(int page, Rect r) override;
     int pageOfAnnotation(const AnnotationRecord&) override;
     std::string zoteroPosition(int page) override;
     int pageOfZoteroPosition(const std::string& json) override;

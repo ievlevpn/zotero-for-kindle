@@ -89,6 +89,12 @@ public:
                     b.paths.push_back(std::move(path));
                 }
                 out.push_back(std::move(b));
+            } else if (a.pageLabel == std::to_string(page) && a.type == "image" &&
+                       a.position.find("\"rect\"") != std::string::npos) {  // position: the device rect as drawn
+                const nlohmann::json r = nlohmann::json::parse(a.position)["rect"];
+                HighlightBox b{a.key, {r[0].get<int>(), r[1].get<int>(), r[2].get<int>(), r[3].get<int>()}, shadeOf(a.color), false};
+                b.kind = HighlightBox::Kind::Image;
+                out.push_back(b);
             } else if (a.pageLabel == std::to_string(page)) {
                 HighlightBox b{a.key, {100, 200, 600, 50}, shadeOf(a.color), a.type == "underline"};
                 if (a.type == "text") {
@@ -173,6 +179,13 @@ public:
         std::snprintf(sort, sizeof sort, "%05d|%08d", page, 0);
         return InkPlacement{nlohmann::json{{"fake", page}, {"width", widthPx}, {"paths", jp}}.dump(), sort,
                             std::to_string(page)};
+    }
+
+    // Areas: the device rect as drawn, {"fake": page, "rect": [x, y, w, h]}.
+    std::optional<InkPlacement> areaPosition(int page, Rect r) override {
+        char sort[32];
+        std::snprintf(sort, sizeof sort, "%05d|%08d", page, r.y);
+        return InkPlacement{nlohmann::json{{"fake", page}, {"rect", {r.x, r.y, r.w, r.h}}}.dump(), sort, std::to_string(page)};
     }
 
     std::optional<Selection> select(int page, Point from, Point to) override {

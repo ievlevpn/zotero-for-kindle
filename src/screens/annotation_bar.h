@@ -86,6 +86,7 @@ public:
     bool confirming() const { return state_ == State::Confirm; }
     bool commenting() const { return state_ == State::Comment; }
     bool wantsKeyboard() const { return commenting(); }
+    std::string question() const;  // the confirmation's: "Delete this highlight?" (an area: "Delete this area?")
     Rect rect() const;              // what is drawn now: the bar, the question or the comment box
     Rect confirmRect(int i) const;  // 0 Delete, 1 Cancel
     static Rect commentRect();                // above the device's keyboard (when lipc says nothing)

@@ -122,6 +122,17 @@ public:
     Rect noteRect() const { return noteBox_; }  // the note box, above the keyboard as it was when opened
     const PluginResult* pluginResult() const { return result_.get(); }  // a selection action's run
 
+    // Areas (PDF; Zotero `image` annotations): a long press where there's no text and a drag draw
+    // one, as do "Mark an area" in the menus (the next drag, over text too) and the pen with its
+    // side button held. Saved on lift in the colour used last, then the edit bar opens on it.
+    std::optional<Rect> drawnArea() const;  // the rectangle under the finger, while drawn
+    bool areaArmed() const { return areaArmed_; }  // "Mark an area": waiting for the drag
+    void markArea(Nav&);                           // the menus' "Mark an area" (closes them)
+    bool dragsAtOnce() const override { return areaArmed_; }
+    static Rect areaBannerRect();  // "Drag across the area to mark" while armed, at the top of the page
+    static Rect areaCancelRect();
+    static constexpr int kMinAreaPx = 59;  // ~5 mm at 300 ppi: smaller on either side is a slip
+
     // Handwriting (PDF, Scribe): strokes wait this long after the last one, then become one
     // Zotero ink annotation (a page turn sends them at once).
     static constexpr int64_t kInkCommitMs = 1500;
@@ -174,6 +185,11 @@ private:
     bool penAllowed() const;
     void onInk(const RenderEvent&, Nav&);
     void eraseAlong(const std::vector<Point>&, Nav&);
+    void beginArea(Point from, Point to, Nav&);
+    void moveArea(Point to, Nav&);
+    void endArea(Point to, Nav&);  // saves it when big enough
+    void cancelArea(Nav&);         // armed or drawn: neither any more
+    void onArea(const RenderEvent&, Nav&);
 
     ItemRow row_;
     std::string path_;
@@ -249,6 +265,24 @@ private:
     };
     std::optional<PositionQuestion> question_;
     int twoColumnsSetting_ = -1;  // AppSettings::twoColumns
+    // Areas.
+    bool areaArmed_ = false, areaDrawing_ = false;
+    bool areaPen_ = false;  // drawn with the pen (its side button or Mark an area)
+    Point areaFrom_, areaTo_;
+    Point selLast_;  // the finger's last place while a long press waits to learn if it is on text
+    int64_t areaDownMs_ = 0;
+    struct SentArea {
+        int page = -1;
+        Rect rect;
+    };
+    std::map<uint64_t, SentArea> areaSent_;  // being placed by the worker
+    struct SavedArea {
+        std::string key;
+        int page = -1;
+        Rect rect;
+    };
+    std::vector<SavedArea> areaSaved_;  // saved; framed until the page comes back with it
+    std::string newAreaKey_;                 // just made: its colour, picked on the bar, is the next one's
     // Handwriting.
     bool inkDown_ = false, erasing_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw

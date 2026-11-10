@@ -1056,4 +1056,53 @@ std::optional<InkPlacement> PdfEngine::inkPosition(int page, const std::vector<s
     return out;
 }
 
+// A rectangle in device pixels -> PDF user space, as a Zotero image annotation. The sort index is
+// a highlight's: the page, the first character inside the area (else how many come above it),
+// and the area's top from the top of the page.
+std::optional<InkPlacement> PdfEngine::areaPosition(int page, Rect r) {
+    double scale, dx, dy;
+    if (!doc_ || r.empty() || !fit(page, scale, dx, dy)) return std::nullopt;
+    fz_page* p = nullptr;
+    fz_stext_page* st = nullptr;
+    fz_var(p);
+    fz_var(st);
+    fz_matrix userToPage = fz_identity;
+    fz_rect media = fz_empty_rect;
+    char label[64] = "";
+    bool ok = true;
+    const int pdfPage = src(page);
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, pdfPage);
+        if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
+        fz_page_label(ctx_, p, label, sizeof label);
+        st = fz_new_stext_page_from_page(ctx_, p, nullptr);
+    }
+    fz_catch(ctx_) { ok = false; }
+    const fz_rect area = fz_make_rect(static_cast<float>((r.x - dx) / scale), static_cast<float>((r.y - dy) / scale),
+                                      static_cast<float>((r.x + r.w - dx) / scale), static_cast<float>((r.y + r.h - dy) / scale));
+    int offset = -1, above = 0, index = 0;
+    if (ok && st)
+        forEachChar(st, [&](fz_stext_line*, fz_stext_char* ch) {
+            const fz_rect c = fz_rect_from_quad(ch->quad);
+            const fz_point mid = fz_make_point((c.x0 + c.x1) / 2, (c.y0 + c.y1) / 2);
+            if (offset < 0 && fz_is_point_inside_rect(mid, area)) offset = index;
+            above += mid.y < area.y0;
+            ++index;
+        });
+    fz_drop_stext_page(ctx_, st);
+    fz_drop_page(ctx_, p);
+    if (!ok) return std::nullopt;
+    const fz_rect u = fz_transform_rect(area, fz_invert_matrix(userToPage));
+    InkPlacement out;
+    out.position = nlohmann::json{{"pageIndex", pdfPage},
+                                  {"rects", nlohmann::json::array({{round2(u.x0), round2(u.y0), round2(u.x1), round2(u.y1)}})}}
+                       .dump();
+    char sort[40];
+    std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", pdfPage, offset >= 0 ? offset : above,
+                  static_cast<int>(std::max(0.0, std::floor(static_cast<double>(media.y1 - u.y1)))));
+    out.sortIndex = sort;
+    out.pageLabel = label[0] ? label : std::to_string(pdfPage + 1);
+    return out;
+}
+
 }  // namespace zk

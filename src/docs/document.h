@@ -112,9 +112,9 @@ struct Selection {
     bool roundTrips = true;   // §7.5: the position resolves back to exactly this text
 };
 
-// Handwriting placed on a page, ready to be saved as a Zotero `ink` annotation.
+// Handwriting or an area placed on a page, ready to be saved as a Zotero `ink` or `image` annotation.
 struct InkPlacement {
-    std::string position;  // Zotero annotationPosition JSON {pageIndex, width, paths}
+    std::string position;  // Zotero annotationPosition JSON {pageIndex, width, paths} or {pageIndex, rects}
     std::string sortIndex, pageLabel;
 };
 
@@ -181,6 +181,9 @@ public:
                                                     int /*widthPx*/) {
         return std::nullopt;
     }
+    // A rectangle drawn on `page` (device pixels) as a Zotero image annotation: {pageIndex, rects:
+    // [[x1, y1, x2, y2]]} in PDF points, as highlights; nullopt where the format has none (EPUB).
+    virtual std::optional<InkPlacement> areaPosition(int /*page*/, Rect /*r*/) { return std::nullopt; }
     // The key of the topmost annotation drawn under `p` on `page`.
     virtual std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& anns) {
         const std::vector<HighlightBox> boxes = highlights(page, anns);

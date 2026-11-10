@@ -30,6 +30,7 @@ test_sources = files(
   'test_pdf_select.cpp',
   'test_annotation_bar.cpp',
   'test_annotation_edit.cpp',
+  'test_area_annotations.cpp',
   'test_notes_conflicts.cpp',
   'test_push_triggers.cpp',
   'test_review_fixes5.cpp',
