@@ -6,7 +6,8 @@
 // some), Remove. Reset, Discard and Remove ask first, in the app's own confirmation box.
 // A folder that can't load shows its problem and can't be turned on; it can still be removed.
 //
-// With the catalog (Nav::catalog): "From the catalog" / "Installed by hand" under the byline;
+// With the catalog (Nav::catalog): opening the page of a plugin in the catalog checks it when the
+// copy is more than an hour old (as Get plugins does); "From the catalog" / "Installed by hand" under the byline;
 // "Update to 1.3" beside Turn on/off when the catalog has a newer version (applied at once when it
 // asks for nothing more; else "This version also wants to:" lists what it adds, with Update and
 // Not now, and the installed version keeps running until the yes); "Roll back to 1.2" among the
@@ -71,12 +72,14 @@ private:
     std::optional<PluginConfirm> confirm() const;
     std::string name() const;
 
-    bool reasking() const;  // the catalog staged an update of this one that adds permissions
+    bool reasking() const;
+    void checkForUpdate();  // the catalog staged an update of this one that adds permissions
 
     std::string id_;
     PluginHostFn host_;
     CatalogService* catalog_ = nullptr;
     int catalogSerial_ = -1;
+    bool wantCheck_ = false;  // the catalog check on opening, until the catalog was free to start it
     std::string removing_;  // its name while a confirmed Remove runs on the catalog's worker ("" when none)
     uint64_t hostVersion_ = 0;
     std::optional<PluginStatus> status_;  // nullopt: no longer installed (or no host)

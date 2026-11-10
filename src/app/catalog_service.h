@@ -4,7 +4,8 @@
 // or the plugin thread; installing, updating and removing work in safe mode and with OFF.
 //
 //   check(force)   the registry and the installed plugins' releases (runCheck). Not forced, it is
-//                  skipped while the copy is less than an hour old (Get plugins opening).
+//                  skipped while the copy is less than an hour old (Get plugins or an installed
+//                  catalog plugin's page opening).
 //   install(id)    a plugin that isn't installed: download, verify, put in place (off).
 //   update(id)     an installed one: staged; applied at once when it adds no permissions, else
 //                  awaitingYes holds it until applyStaged (Update) or discardStaged (Not now).
@@ -48,7 +49,7 @@ struct CatalogConfig {
 
 class CatalogService {
 public:
-    static constexpr int64_t kRegistryFreshMs = 3600 * 1000LL;  // Get plugins re-checks an older copy
+    static constexpr int64_t kRegistryFreshMs = 3600 * 1000LL;  // Get plugins and a plugin's page re-check an older copy
 
     enum class Op { None, Load, Check, LookUp, Install, Update, Apply, Discard, RollBack, Remove };
     struct State {

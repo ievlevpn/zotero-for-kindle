@@ -66,11 +66,24 @@ void PluginPageScreen::onShow(Nav& nav) {
     if (catalog_) catalog_->poll();
     load(nav);
     ask_ = Ask::None;
+    wantCheck_ = true;
+    checkForUpdate();
+}
+
+// An installed catalog plugin's page checks the catalog as Get plugins does (when the copy is more
+// than an hour old), so its Update shows here; while the catalog is busy, it waits its turn.
+void PluginPageScreen::checkForUpdate() {
+    if (!wantCheck_ || !catalog_ || catalog_->busy()) return;
+    wantCheck_ = false;
+    const auto& cache = catalog_->state().cache;
+    if (!status_ || (!catalog::find(cache, id_) && !cache.fromCatalog.count(id_))) return;
+    catalog_->check(false);
 }
 
 void PluginPageScreen::onTick(Nav& nav) {
     PluginHost* h = host_ ? host_() : nullptr;
     if (catalog_) catalog_->poll();
+    checkForUpdate();
     const int serial = catalog_ ? catalog_->state().serial : -1;
     if (serial == catalogSerial_ && (h ? h->entriesVersion() : 0) == hostVersion_) return;
     if (catalog_ && serial != catalogSerial_ && !removing_.empty()) {  // the Remove the user confirmed

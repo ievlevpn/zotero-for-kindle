@@ -1,9 +1,9 @@
 #pragma once
 // Get plugins (Settings → Plugins → the last row): the catalog's plugins by name, each with its
-// author · description and "Installed", "Update" or nothing on the right; paged. "As of 9 Nov" and
+// author · description and "Installed" or nothing on the right; paged. "As of 9 Nov" and
 // Check now at the top; with no copy yet and no network, "Connect to Wi-Fi to see the plugins in
 // the catalog." Opening it checks when the copy is more than an hour old. A row opens the plugin's
-// page: part 1's for an installed one, CatalogPageScreen for the others. Needs Nav::catalog().
+// page: part 1's for an installed one (where its Update is), CatalogPageScreen for the others. Needs Nav::catalog().
 
 #include <string>
 #include <vector>
@@ -27,7 +27,7 @@ public:
     bool showsTabBar() const override { return false; }
 
     struct Row {
-        std::string id, name, byline, mark;  // mark: "Installed", "Update" or ""
+        std::string id, name, byline, mark;  // mark: "Installed" or ""
     };
     std::vector<Row> rows() const;  // this page's
     std::vector<Rect> rowRects() const;

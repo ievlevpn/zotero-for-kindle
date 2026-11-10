@@ -4,6 +4,7 @@
 
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -171,6 +172,7 @@ struct Rig {
     std::unique_ptr<PluginHost> host;
     std::unique_ptr<CatalogService> svc;
     bool hostStarted = false;
+    std::shared_ptr<std::atomic<int64_t>> now = std::make_shared<std::atomic<int64_t>>(kNow);
 
     Rig() {
         fillFixtureLibrary(lib, 12);
@@ -196,7 +198,7 @@ struct Rig {
         c.makeHttp = [w] { return std::make_unique<FnHttp>([w](const HttpRequest& r) { return w->serve(r); }); };
         c.feed = kFeed;
         c.registryKey = publicKeyFor(kRegistrySeed);
-        c.wallMs = [] { return kNow; };
+        c.wallMs = [now = now] { return now->load(); };
         c.app = Version{9, 9, 9};
         c.hooks.freeSpace = [](const std::string&) { return int64_t{1} << 40; };
         c.hooks.probe = [] { return NetState{}; };
@@ -269,7 +271,7 @@ TEST_CASE("catalog screens: Get plugins lists the entries, with As of, Check now
     const auto rows = list.rows();
     REQUIRE(rows.size() == 2);
     CHECK(rows[0].name == "Feed Riffle");  // by name
-    CHECK(rows[0].mark == "Update");
+    CHECK(rows[0].mark == "Installed");  // its update is on its own page, never here
     CHECK(rows[0].byline == "Ann Author · Sends new highlights to Readwise and tags what it sent.");
     CHECK(rows[1].name == "Highlights to Markdown");
     CHECK(rows[1].mark.empty());
@@ -294,6 +296,67 @@ TEST_CASE("catalog screens: Get plugins lists the entries, with As of, Check now
     list.onTick(r.nav);
     CHECK(list.rows().size() == 2);
     CHECK(list.headline() == asOf(kNow) + " · No Wi-Fi.");
+}
+
+TEST_CASE("catalog screens: an installed catalog plugin's page checks the catalog when the copy is over an hour old") {
+    Rig r;
+    r.installFeed();
+    addPlugin(r.dir, "mine", "My Own", "\"library:read\"");  // by hand, not in the catalog
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.2.0", json::array({"library:read"}));
+    r.startHost();
+    r.startCatalog();
+    r.checkNow();  // 1.2.0 is the latest: nothing to update
+
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
+    const int before = r.world->count(kFeed);
+    {  // within the hour: no check
+        PluginPageScreen page("feed", r.fn());
+        page.onShow(r.nav);
+        r.settle();
+        page.onTick(r.nav);
+        CHECK(r.world->count(kFeed) == before);
+        CHECK(page.updateLabel().empty());
+    }
+    *r.now += 7 * 3600 * 1000LL;  // past the hour (and the 6 h a plugin's release is kept)
+    {  // a plugin that isn't in the catalog: no check
+        PluginPageScreen page("mine", r.fn());
+        page.onShow(r.nav);
+        r.settle();
+        CHECK(r.world->count(kFeed) == before);
+    }
+    PluginPageScreen page("feed", r.fn());
+    page.onShow(r.nav);  // checks, without waiting for it
+    CHECK(r.svc->state().checking);
+    CHECK(page.updateLabel().empty());
+    r.settle();
+    page.onTick(r.nav);  // polled: the Update shows here
+    CHECK(r.world->count(kFeed) == before + 1);
+    CHECK(page.updateLabel() == "Update to 1.3.0");
+    CatalogListScreen list(r.fn());
+    list.onShow(r.nav);
+    CHECK(list.rows()[0].mark == "Installed");
+}
+
+TEST_CASE("catalog screens: a plugin's page opened while the catalog is busy checks once it is free") {
+    Rig r;
+    r.installFeed();
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
+    r.startHost();
+    r.startCatalog();
+    r.checkNow();
+    *r.now += 7 * 3600 * 1000LL;
+    r.world->gated = true;
+    r.svc->lookUp("md");  // something else on the worker
+    PluginPageScreen page("feed", r.fn());
+    page.onShow(r.nav);
+    CHECK_FALSE(r.svc->state().checking);
+    r.world->open();
+    r.settle();
+    page.onTick(r.nav);  // free now: the check starts
+    CHECK(r.svc->state().checking);
+    r.settle();
+    page.onTick(r.nav);
+    CHECK(page.updateLabel() == "Update to 1.3.0");
 }
 
 TEST_CASE("catalog screens: Install shows Downloading…, then lands on part 1's page with the plugin off") {

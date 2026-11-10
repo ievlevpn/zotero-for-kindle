@@ -69,7 +69,7 @@ void CatalogListScreen::load() {
         Row row{e.id, oneLine(e.name), "", ""};
         const std::string author = oneLine(e.author), about = oneLine(e.description);
         row.byline = author.empty() ? about : about.empty() ? author : author + " · " + about;
-        if (s) row.mark = s->folder.manifest && catalog_->updateFor(e.id, s->folder.manifest->version) ? "Update" : "Installed";
+        if (s) row.mark = "Installed";  // its Update is on its own page
         all_.push_back(std::move(row));
     }
     std::stable_sort(all_.begin(), all_.end(), [](const Row& a, const Row& b) { return folded(a.name) < folded(b.name); });
