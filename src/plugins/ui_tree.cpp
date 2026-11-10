@@ -121,7 +121,7 @@ struct Parser {
     }
 
     // The children of a layout block: falsy entries skipped, paths keep the written index.
-    std::vector<Block> children(const json& o, const char* name, const std::string& where) {
+    std::vector<Block> children(const json& o, const char* name, const std::string& where, int depth) {
         const json* v = field(o, name);
         if (!v) bad(where, std::string("\"") + name + "\" is missing");
         if (!v->is_array()) bad(where, std::string("\"") + name + "\" must be a list");
@@ -129,7 +129,7 @@ struct Parser {
         for (size_t i = 0; i < v->size(); ++i) {
             const json& c = (*v)[i];
             if (falsy(c)) continue;
-            out.push_back(block(c, where + "[" + std::to_string(i) + "]", true));
+            out.push_back(block(c, where + "[" + std::to_string(i) + "]", true, depth + 1));
         }
         return out;
     }
@@ -159,7 +159,7 @@ struct Parser {
     }
 
     // `prefix` is the path up to this block ("column[2]"); its kind is appended (".buttons").
-    Block block(const json& o, const std::string& prefix, bool child) {
+    Block block(const json& o, const std::string& prefix, bool child, int depth) {
         if (!o.is_object()) bad(prefix.empty() ? "the screen" : prefix, "a block must be an object");
         const json* k = field(o, "kind");
         if (!k || !k->is_string()) bad(prefix.empty() ? "the screen" : prefix, "a block needs a \"kind\"");
@@ -174,6 +174,7 @@ struct Parser {
         };
         const auto* found = std::find_if(std::begin(kinds), std::end(kinds), [&](const auto& p) { return kind == p.first; });
         if (found == std::end(kinds)) bad(prefix.empty() ? "the screen" : prefix, "unknown block kind \"" + kind + "\"");
+        if (depth > kMaxTreeDepth) bad(where, "blocks nested more than 16 deep");
         if (found->second == Block::Kind::Button) return button(o, where);
         count(where);
         Block b;
@@ -184,7 +185,8 @@ struct Parser {
             case K::Row:
                 onlyFields(o, where, {"children", "gap"});
                 b.gap = gapOf(o, "gap", where, Block::Gap::Small, true);
-                b.children = children(o, "children", where);
+                b.children = children(o, "children", where, depth);
+                if (b.kind == K::Row && b.children.size() > kMaxRowBlocks) bad(where, "a row holds at most 6 blocks");
                 break;
             case K::Text: {
                 onlyFields(o, where, {"text", "style", "lines"});
@@ -363,7 +365,7 @@ struct Parser {
 std::optional<Block> parseTree(const json& j, std::string* why) {
     try {
         Parser p;
-        return p.block(j, "", false);
+        return p.block(j, "", false, 1);
     } catch (const Bad& b) {
         if (why) *why = b.msg;
     } catch (const json::exception& e) {

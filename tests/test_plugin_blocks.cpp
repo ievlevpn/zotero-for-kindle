@@ -246,3 +246,19 @@ TEST_CASE("plugin blocks: hit-testing buttons, chips, search and the deck") {
     CHECK(hitTest(lf, findLaid(lf, "find")->rect.center())->kind == K::Search);
     CHECK(findLaid(lf, "nope") == nullptr);
 }
+
+TEST_CASE("plugin blocks: a row of wide buttons leaves its text room to read") {
+    if (!fonts()) return;
+    ScopedMetrics m(kKt4);
+    const Block t = tree(json::parse(R"({"kind":"row","children":[
+      {"kind":"text","text":"Some words that should wrap by words"},
+      {"kind":"button","id":"a","title":"A very long button title"},{"kind":"button","id":"b","title":"Another long button title"},
+      {"kind":"button","id":"c","title":"A third long button title"},{"kind":"button","id":"d","title":"A fourth long button"},
+      {"kind":"button","id":"e","title":"A fifth long button title"}]})"));
+    const Laid l = layoutTree(t, blocksArea(), 0);
+    REQUIRE(l.children.size() == 1);
+    const Laid& row = l.children[0];
+    REQUIRE(row.children.size() == 6);
+    CHECK(row.children[0].rect.w >= std::min(240, blocksArea().w / 6));
+    for (const auto& c : row.children) CHECK(c.rect.x + c.rect.w <= blocksArea().x + blocksArea().w);
+}

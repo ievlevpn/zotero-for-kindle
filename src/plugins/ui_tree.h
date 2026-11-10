@@ -14,6 +14,8 @@ namespace zk {
 
 constexpr size_t kMaxTreeBlocks = 2000;         // a list row, a chip or a button counts as one
 constexpr size_t kMaxTreeText = 256 * 1024;     // bytes of text (every string in the tree)
+constexpr int kMaxTreeDepth = 16;               // the root is at depth 1
+constexpr size_t kMaxRowBlocks = 6;
 
 struct Span {
     std::string text;

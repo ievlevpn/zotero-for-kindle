@@ -130,14 +130,17 @@ std::vector<int> rowWidths(const Block& row, int w) {
     std::vector<int> ws(n, 0);
     if (!n) return ws;
     const int gap = gapPx(row.gap);
-    int fixed = 0, flex = 0;
+    int fixed = 0, flex = 0, buttons = 0;
+    for (const auto& c : row.children) (c.kind == K::Button ? buttons : flex)++;
+    // Buttons take their width, but leave every other block at least kMinFlex (text never wraps a
+    // character a line).
+    constexpr int kMinFlex = 240;
+    const int minFlex = std::min(kMinFlex, w / n);
+    const int buttonCap = buttons ? std::max(1, (w - flex * minFlex - gap * (n - 1)) / buttons) : 0;
     for (int i = 0; i < n; ++i) {
-        if (row.children[i].kind == K::Button) {
-            ws[i] = std::min(w / n, std::max(200, measureText(row.children[i].title, {kSans, 8.5, 700}, w, 1).width + 100));
-            fixed += ws[i];
-        } else {
-            ++flex;
-        }
+        if (row.children[i].kind != K::Button) continue;
+        ws[i] = std::min({w / n, buttonCap, std::max(200, measureText(row.children[i].title, {kSans, 8.5, 700}, w, 1).width + 100)});
+        fixed += ws[i];
     }
     const int rest = std::max(0, w - fixed - gap * (n - 1));
     if (flex == 0) {  // only buttons: right-aligned at their widths

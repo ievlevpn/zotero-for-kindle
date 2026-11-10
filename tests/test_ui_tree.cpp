@@ -168,3 +168,25 @@ TEST_CASE("ui tree: sameBlock is deep equality") {
     b.children[0].rows[0].selected = true;
     CHECK_FALSE(sameBlock(a, b));
 }
+
+TEST_CASE("ui tree: blocks nest at most 16 deep; a 2,000-deep chain is refused at once") {
+    const auto chain = [](int depth) {
+        json j = {{"kind", "text"}, {"text", "leaf"}};
+        for (int i = 1; i < depth; ++i) j = {{"kind", "column"}, {"children", json::array({j})}};
+        return j;
+    };
+    Block t = ok(chain(16));
+    CHECK(blockCount(t) == 16);
+    const std::string why = whyNot(chain(17));
+    CHECK(why.find("blocks nested more than 16 deep") != std::string::npos);
+    CHECK(why.rfind("column[0].", 0) == 0);  // named by its path
+    CHECK(whyNot(chain(2000)).find("nested more than 16 deep") != std::string::npos);
+}
+
+TEST_CASE("ui tree: a row holds at most 6 blocks") {
+    json kids = json::array();
+    for (int i = 0; i < 6; ++i) kids.push_back({{"kind", "text"}, {"text", "t"}});
+    ok(json{{"kind", "row"}, {"children", kids}});
+    kids.push_back({{"kind", "text"}, {"text", "t"}});
+    CHECK(whyNot(json{{"kind", "row"}, {"children", kids}}) == "row: a row holds at most 6 blocks");
+}
