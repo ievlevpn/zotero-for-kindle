@@ -220,14 +220,13 @@ The `name` in `package.json` is only for npm.
 
 ## Sharing a plugin
 
-There is no catalog or store for plugins yet. To share one, share its folder: `plugin.json` and
+To get a plugin into the in-app catalog, see [Publishing a plugin](publishing.md). To share one
+without that, share its folder: `plugin.json` and
 `main.js` (from `dist/<id>/`), plus a short README saying what it does, which permissions it asks
 for and why, and what goes in `settings.json` if it has settings. Others copy the folder to
 `/mnt/us/zotero/plugins/<id>/` (`zotero/plugins/<id>/` on the USB drive) and turn it on in
 Settings → Plugins after reading its permissions, as in [Using plugins](using.md). Don't share
 `plugin.log`, `storage.db` or `data/`: they are your own run's.
-
-An in-app catalog, with signed installs and updates, is planned.
 
 ## Next
 

@@ -7,11 +7,58 @@ do what it declares; anything that removes something from your library needs you
 Plugins are code written by other people. Install the ones you trust, and read what each may do
 before you turn it on.
 
-There is no catalog of plugins yet: authors share a plugin's folder (see
-[Sharing a plugin](getting-started.md#sharing-a-plugin)). An in-app catalog, with signed installs
-and updates, is planned.
+There are two ways to get one: from the catalog inside the app, or by copying a folder over USB.
 
-## Installing a plugin
+## Get plugins (the catalog)
+
+**Settings → Plugins → Get plugins** (the last row) lists the plugins in the catalog, by name, with
+the author and a line about each. A plugin you have shows **Installed**; one with a newer version
+shows **Update**. At the top: *As of <date>* and **Check now**. With no Wi-Fi and no copy of the list
+yet it says *Connect to Wi-Fi to see the plugins in the catalog.*; after that the list shows offline.
+
+1. Tap a plugin, read about it, and tap **Install**. It reads *Downloading…* while it works.
+2. The plugin's page opens. It is **off**: read what it can do and tap **Turn on**, exactly as for
+   a plugin you copied by hand.
+
+Every download is checked against its author's key, which the catalog pins. If that fails, nothing
+is installed, and the page says why in a sentence, such as *The download isn't signed by the
+plugin's author.*, *It needs app 0.5.0.* or *No Wi-Fi.*
+
+### Updates
+
+Settings → Plugins marks a plugin that has a newer version with *Update to 1.3*, and shows
+**Update all (n)** at the top. Updates are always a tap, never automatic.
+
+- Open the plugin and tap **Update to 1.3**. If the new version asks for nothing more than the old
+  one did, it installs at once and an enabled plugin stays enabled.
+- If it asks for more, you are told what: *This version also wants to: …*, with **Update** and
+  **Not now**. The old version keeps running until you say yes. **Update all** skips these; open
+  them one at a time.
+
+Its settings and data stay with it across an update.
+
+### Roll back
+
+An update keeps the version before it. On the plugin's page, **Roll back to 1.2** puts that
+version back, with the plugin's data as it is now. One earlier version is kept.
+
+### Remove
+
+On the plugin's page, **Remove** asks *Remove <name> and the data it saved?*; on yes the plugin's
+folder, data and storage are deleted. Changes it asked for that haven't synced are still sent.
+
+### From the catalog, or installed by hand
+
+A plugin's page says which it is: **From the catalog** (installed with Get plugins, so it can
+update and roll back) or **Installed by hand** (copied over USB; the catalog never changes it).
+
+### Withdrawn plugins
+
+If a plugin is found to be harmful, the catalog can withdraw it. At the next check it is turned
+off with *Turned off — withdrawn from the catalog: <reason>*. It isn't deleted; you remove it
+yourself if you want to, and it can't be turned on again.
+
+## Installing a plugin by hand
 
 1. Close Zotero on the Kindle (the × at the top right of Home).
 2. Connect the Kindle by USB (as in [INSTALL.md](../../INSTALL.md#2-copy-them-onto-the-kindle):
@@ -26,7 +73,7 @@ and updates, is planned.
 
 A plugin starts when it is first needed, for example at the next sync.
 
-**Updating a plugin:** copy the new version's files over the old ones, the same way, with the app
+**Updating a plugin installed by hand:** copy the new version's files over the old ones, the same way, with the app
 closed. It stays on, and keeps its settings and data. A new version may ask for more than the old
 one did: look at its page in Settings → Plugins again.
 

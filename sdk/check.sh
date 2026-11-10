@@ -76,4 +76,8 @@ if ! diff -r "$tmp/reference" ../docs/plugins/reference >/dev/null; then
 fi
 echo "reference: up to date"
 
+echo "== the authors' tool (zk-plugin.mjs) and the registry checker"
+node zk-plugin.mjs self-test
+node ../registry/check.mjs ../registry/registry.json
+
 echo "sdk: all checks passed"

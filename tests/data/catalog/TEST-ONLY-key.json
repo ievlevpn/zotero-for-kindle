@@ -1,0 +1,10 @@
+{
+  "format": "zk-plugin-key-1",
+  "privateKey": {
+    "crv": "Ed25519",
+    "d": "8-rfM7DUpokNF3vD_81bK2gy1WwD2d9ZBYg7GLH7xIU",
+    "x": "q5I5sdqXi99fW6OsWoNxe-y4QF7d8po1XBkRB2qDFw0",
+    "kty": "OKP"
+  },
+  "publicKey": "q5I5sdqXi99fW6OsWoNxe+y4QF7d8po1XBkRB2qDFw0="
+}

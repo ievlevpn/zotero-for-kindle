@@ -16,3 +16,4 @@ dist/
 # Plugin SDK
 sdk/**/node_modules/
 sdk/**/dist/
+registry/out/

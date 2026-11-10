@@ -4,7 +4,7 @@ JavaScript plugins for Zotero for Kindle: what they are, how to use them, and ho
 
 **Using plugins**
 
-- [Using plugins](using.md): installing one, what its permissions mean, turning plugins on and off,
+- [Using plugins](using.md): getting one from the catalog or by USB, updates, what its permissions mean, turning plugins on and off,
   and what to do if one gets in the way.
 
 **Writing plugins**
@@ -19,6 +19,7 @@ JavaScript plugins for Zotero for Kindle: what they are, how to use them, and ho
 - [Debugging and testing](debugging.md): logs, the desktop loop, common errors.
 - [API reference](reference/README.md), generated from
   [`sdk/types/zk.d.ts`](../../sdk/types/zk.d.ts).
+- [Publishing a plugin](publishing.md): your key, a signed release, getting listed in the catalog.
 - [API changelog](api-changelog.md): the plugin API is v0, still unstable.
 
 The SDK is in [`sdk/`](../../sdk/): the types, the [template](../../sdk/template/), and the
