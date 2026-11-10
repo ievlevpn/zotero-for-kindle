@@ -356,6 +356,28 @@ TEST_CASE("catalog install: [Review Focus] commit keeps data/, and a zip's own d
     CHECK(previousVersion(t.str(), "feed-riffle") == "1.0.0");
 }
 
+TEST_CASE("catalog install: its storage and log stay with it across update and roll back") {
+    TempDir t;
+    installOld(t);
+    writeFile(t.path / "feed-riffle/storage.db", "kv");
+    writeFile(t.path / "feed-riffle/storage.db-wal", "wal");
+    writeFile(t.path / "feed-riffle/plugin.log", "log");
+    UserError err;
+    REQUIRE(stageZip(t, makeZip({{"plugin.json", manifest()}, {"main.js", "// v1.2.0"}, {"storage.db", "theirs"},
+                                 {"PLUGIN.LOG", "theirs"}}),
+                     &err));
+    CHECK_FALSE(fs::exists(t.path / ".incoming/feed-riffle/storage.db"));
+    REQUIRE(commit(t.str(), "feed-riffle", &err));
+    CHECK(readFile(t.path / "feed-riffle/storage.db") == "kv");
+    CHECK(readFile(t.path / "feed-riffle/storage.db-wal") == "wal");
+    CHECK(readFile(t.path / "feed-riffle/plugin.log") == "log");
+    CHECK_FALSE(fs::exists(t.path / ".previous/feed-riffle/storage.db"));
+    REQUIRE(rollBack(t.str(), "feed-riffle", &err));
+    CHECK(readFile(t.path / "feed-riffle/main.js") == "// v1.0.0");
+    CHECK(readFile(t.path / "feed-riffle/storage.db") == "kv");
+    CHECK_FALSE(fs::exists(t.path / ".previous/feed-riffle/storage.db"));
+}
+
 TEST_CASE("catalog install: one previous version is kept, and rollBack swaps both ways") {
     TempDir t;
     installOld(t);

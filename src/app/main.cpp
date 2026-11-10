@@ -61,6 +61,8 @@
 #include "update/install.h"
 #include "update/release_key.h"
 #include "platform/scaled_display.h"
+#include "app/catalog_service.h"
+#include "catalog/install.h"
 #include "plugins/host.h"
 #include "plugins/safe_mode.h"
 #include "screens/plugins.h"
@@ -362,6 +364,7 @@ int main(int argc, char** argv) {
     const bool pluginsOff = safeMode.pluginsOff;
     if (pluginsOff)
         log(LogLevel::Warn, "plugins: off (%s)", safeMode.automatic ? "the app stopped twice" : "OFF file or launcher");
+    catalog::repairInterrupted(paths.pluginsDir);  // a swap the app was killed in: before the host scans
     auto plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
     if (gPluginDevLoop) {  // say what is on, and why each other plugin won't run
         for (const auto& line : enablePluginsForDev(*plugins, gEnablePlugins)) std::fprintf(stderr, "%s\n", line.c_str());
@@ -417,6 +420,25 @@ int main(int argc, char** argv) {
             log(LogLevel::Info, "plugins: %s/main.js changed: reloading", id.c_str());
             if (plugins) plugins->reload(id);
         });
+    // The plugin catalog (part 3): Get plugins, updates, roll back and remove, on its own worker.
+    // It works in safe mode and with OFF too: it is one way out of a bad plugin.
+    CatalogConfig catalogConfig;
+    catalogConfig.pluginsDir = paths.pluginsDir;
+    catalogConfig.makeHttp = [] { return std::make_unique<CurlHttp>(kCaBundle); };
+    catalogConfig.feed = catalog::kRegistryFeed;
+#ifndef ZK_KINDLE
+    if (const char* feed = std::getenv("ZK_PLUGIN_REGISTRY"); feed && *feed) {
+        catalogConfig.feed = feed;
+        log(LogLevel::Warn, "catalog: test registry %s", feed);
+    }
+#endif
+    catalogConfig.registryKey = kReleasePublicKey;
+    catalogConfig.wallMs = wallMs;
+    catalogConfig.app = appVersion();
+    catalogConfig.host = [&]() -> PluginHost* { return pluginsRunning ? plugins.get() : nullptr; };
+    CatalogService catalogService(catalogConfig);
+    app.setCatalog(&catalogService);
+    catalogService.start();
     app.setPollHook([&] {
         updateListening();
         if (!startConfirmed && app.nowMs() - startedMs >= kSafeModeConfirmMs) {
@@ -424,10 +446,12 @@ int main(int argc, char** argv) {
             confirmSafeModeStart(paths.pluginsDir);
         }
         pluginEvents.poll(app);
+        catalogService.poll();
         backgroundRound.tick(app.nowMs());
         if (pluginWatch && plugins && pluginsRunning && !pluginsOff) pluginWatch->poll(app.nowMs());
     });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
+    updateNotice.alsoCheck([&] { catalogService.check(false); });
     auto startService = [&](const Config& c) {
         if (plugins) plugins->setWebdavHost(c.webdavUrl);  // the account (and its WebDAV server) may have changed
         if (service) service->stop();
@@ -485,6 +509,7 @@ int main(int argc, char** argv) {
             &keepAwake,
             [&] {  // the install failed and changed nothing
                 if (config) startService(*config);
+                catalogService.wait();  // its worker may still use the old host
                 plugins.reset();
                 plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
                 pluginEvents.rebind(plugins.get(), app);

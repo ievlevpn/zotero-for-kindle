@@ -40,6 +40,7 @@ public:
     Rect updateRect() const;
     Rect pluginsRect() const;  // the whole Plugins row: opens the list
     std::string pluginsLine() const;  // "3 on · 1 needs attention"
+    bool pluginsDot() const { return pluginsDot_; }  // plugin updates are waiting (Nav::catalog)
     Rect aboutTextRect() const;  // the About row's second line (two lines at most)
     std::string updateLine() const;  // the About row's second line: version, or the last check's result
 
@@ -53,6 +54,7 @@ private:
     PluginHostFn plugins_;
     PluginsOff pluginsOff_;  // why plugins aren't running, shown in Settings → Plugins
     bool checking_ = false;
+    bool pluginsDot_ = false;
     std::string updateResult_;
     int interval_ = 10;
     int flashEvery_ = 6;

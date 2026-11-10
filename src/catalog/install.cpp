@@ -82,8 +82,22 @@ bool safeName(std::string name, bool isDirectory) {
     }
 }
 
-// The zip's own data/ is never unpacked: "data", "DATA", "data." and "data " all land in data/ on FAT.
-bool isDataEntry(const std::string& name) { return fatFolded(name.substr(0, name.find('/'))) == "data"; }
+// What the plugin saved, kept in <id>/ across update and roll back: data/, its storage (zk.storage)
+// and its log. A zip's own copy is never unpacked: "data", "DATA", "data." and "data " all land in
+// data/ on FAT.
+const char* const kUserItems[] = {"data", "storage.db", "storage.db-wal", "storage.db-shm", "storage.db-journal",
+                                  "plugin.log", "plugin.log.1"};
+bool isDataEntry(const std::string& name) {
+    const std::string first = fatFolded(name.substr(0, name.find('/')));
+    for (const char* item : kUserItems)
+        if (first == item) return true;
+    return false;
+}
+
+bool present(const fs::path& p) {
+    std::error_code ec;
+    return fs::exists(fs::symlink_status(p, ec));
+}
 
 bool isSymlink(const mz_zip_archive_file_stat& st) {
     const uint32_t mode = st.m_external_attr >> 16;
@@ -218,10 +232,12 @@ bool swapIn(const std::string& pluginsDir, const std::string& id, const fs::path
         if (hadCurrent) fs::rename(prev, cur, back);  // as it was (or repairInterrupted does it)
         return false;
     }
-    if (hadCurrent && fs::exists(fs::symlink_status(prev / "data", ec))) {
-        fs::rename(prev / "data", cur / "data", ec);
-        if (ec) return *why = "data/: " + ec.message(), false;  // repairInterrupted moves it at the next start
-    }
+    if (hadCurrent)
+        for (const char* item : kUserItems)
+            if (present(prev / item)) {
+                fs::rename(prev / item, cur / item, ec);
+                if (ec) return *why = std::string(item) + ": " + ec.message(), false;  // repairInterrupted moves it at the next start
+            }
     return true;
 }
 
@@ -229,10 +245,12 @@ bool swapIn(const std::string& pluginsDir, const std::string& id, const fs::path
 // go ahead (the swap would delete one of them).
 bool dataSettled(const std::string& pluginsDir, const std::string& id, std::string* why) {
     repairOne(pluginsDir, id);
-    std::error_code ec;
-    if (!fs::exists(fs::symlink_status(previousDir(pluginsDir) / id / "data", ec))) return true;
-    *why = "data/ in both " + id + " and .previous/" + id;
-    return false;
+    for (const char* item : kUserItems)
+        if (present(previousDir(pluginsDir) / id / item)) {
+            *why = std::string(item) + " in both " + id + " and .previous/" + id;
+            return false;
+        }
+    return true;
 }
 
 bool validIdOr(const std::string& id, UserError* err) {
@@ -398,10 +416,13 @@ void repairOne(const std::string& pluginsDir, const std::string& id) {
         fs::rename(prev, cur, e);
         log(LogLevel::Warn, "catalog: %s: put the previous version back after an interrupted swap%s", id.c_str(),
             e ? (" — failed: " + e.message()).c_str() : "");
-    } else if (fs::exists(fs::symlink_status(prev / "data", e)) && !fs::exists(fs::symlink_status(cur / "data", e))) {
-        fs::rename(prev / "data", cur / "data", e);
-        log(LogLevel::Warn, "catalog: %s: moved data/ in after an interrupted swap%s", id.c_str(),
-            e ? (" — failed: " + e.message()).c_str() : "");
+    } else {
+        for (const char* item : kUserItems)
+            if (present(prev / item) && !present(cur / item)) {
+                fs::rename(prev / item, cur / item, e);
+                log(LogLevel::Warn, "catalog: %s: moved %s in after an interrupted swap%s", id.c_str(), item,
+                    e ? (" — failed: " + e.message()).c_str() : "");
+            }
     }
 }
 

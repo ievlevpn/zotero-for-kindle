@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 
+#include "app/catalog_service.h"
 #include "app/settings_store.h"
 #include "screens/read_tag.h"
 #include "net/errors.h"
@@ -89,6 +90,7 @@ void SettingsScreen::load(Library& lib) {
 
 void SettingsScreen::onShow(Nav& nav) {
     load(nav.library());
+    pluginsDot_ = nav.catalog() && nav.catalog()->updatesWaiting() > 0;
     confirmRemove_ = false;
     // A check already running (the Home banner's): its answer opens the update screen as ours would.
     if (updater_ && updater_->status().phase == Updater::Status::Phase::Checking) checking_ = true;
@@ -149,6 +151,12 @@ void SettingsScreen::draw(Canvas& canvas) {
     const Rect band = pluginsRect();
     const bool canOpen = plugins_ && plugins_();
     centredText(cr, "Plugins", label, {band.x, band.y, 300, band.h}, Align::Left);
+    if (pluginsDot_) {  // plugin updates are waiting (as on Home's puzzle icon)
+        const int labelW = measureText("Plugins", label, 300, 1).width;
+        gray(cr, kInk);
+        cairo_arc(cr, band.x + labelW + 26, band.y + band.h / 2.0 - 14, 10, 0, 2 * 3.14159265);
+        cairo_fill(cr);
+    }
     centredText(cr, pluginsLine(), value, {band.x + 300, band.y, band.w - 300 - (canOpen ? 50 : 0), band.h}, Align::Right);
     if (canOpen) centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {band.x + band.w - 30, band.y, 30, band.h}, Align::Right);
     hRule(cr, rows().about - rows().rule, kMargin, W() - kMargin);
@@ -159,6 +167,10 @@ void SettingsScreen::draw(Canvas& canvas) {
 }
 
 void SettingsScreen::onTick(Nav& nav) {
+    if (const bool dot = nav.catalog() && nav.catalog()->updatesWaiting() > 0; dot != pluginsDot_) {
+        pluginsDot_ = dot;
+        nav.damage(pluginsRect(), Waveform::Ui);
+    }
     if (!checking_ || !updater_) return;
     using Phase = Updater::Status::Phase;
     const Updater::Status st = updater_->status();

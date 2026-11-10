@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -127,6 +128,7 @@ struct PluginStatus {
     std::string badge;
     std::vector<std::string> errors;  // newest last: past failures, then a current problem
     std::vector<PluginEntry> entries;  // registered by the loaded plugin, in order; empty when not loaded
+    std::string withdrawn;  // the catalog withdrew it: why ("" when it didn't); it is off and can't be turned on
 };
 
 class PluginHost {
@@ -201,6 +203,18 @@ public:
     // thread, unloaded and its folder deleted (data, settings and all). What it remembered goes
     // too, so a copy put back is new again. Its changes for Zotero stay (pending ones are sent).
     void remove(const std::string& id);
+    // Off at once and no longer listed, its state forgotten and its log closed; its files are left
+    // for the caller to delete (the catalog's remove, on its worker thread).
+    void forget(const std::string& id);
+    // The catalog swaps a plugin's files: hold() stops it (unloaded on the plugin thread, waiting up to
+    // timeoutMs; call it from a worker, never the screen or plugin thread) and keeps it from loading
+    // until release(), which rescans its folder (on the plugin thread; here when it isn't running,
+    // as in safe mode). True when it is stopped. Its on/off, storage and state stay as they are.
+    bool hold(const std::string& id, int timeoutMs = 40000);
+    void release(const std::string& id);
+    // The catalog's withdrawn ids (id → reason): each newly named one is turned off and unloaded, and
+    // can't be turned on while it is named. Any thread.
+    void setWithdrawn(std::map<std::string, std::string>);
     // The WebDAV server changed (host or URL; "" for none): zk.fetch refuses the new one from the
     // next request on. Any thread.
     void setWebdavHost(std::string);
@@ -212,6 +226,7 @@ public:
     struct Impl;
 
 private:
+    void forgetPlugin(const std::string& id, bool deleteFolder);
     std::unique_ptr<Impl> impl_;
 };
 

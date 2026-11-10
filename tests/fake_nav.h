@@ -67,6 +67,8 @@ public:
     void setSystemInk(bool on) override { systemInkOn = on; }
     PluginSink& plugins() override { return pluginSink; }
     PluginEntries* pluginEntries() override { return entries; }
+    CatalogService* catalog() override { return catalogService; }
+    CatalogService* catalogService = nullptr;
     RecordingSink pluginSink;
     PluginEntries* entries = nullptr;
     bool hasSystemInk = false, systemInkOn = false;

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "app/catalog_service.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -50,32 +51,89 @@ PluginPageScreen::PluginPageScreen(std::string id, PluginHostFn host) : id_(std:
 
 void PluginPageScreen::load(Nav& nav) {
     status_.reset();
-    if (PluginHost* h = host_ ? host_() : nullptr)
+    hostVersion_ = 0;
+    if (PluginHost* h = host_ ? host_() : nullptr) {
+        hostVersion_ = h->entriesVersion();
         for (auto& s : h->status())
             if (s.folder.dir == id_) status_ = std::move(s);
+    }
+    if (catalog_) catalogSerial_ = catalog_->state().serial;
     pending_ = static_cast<int>(nav.library().pendingPluginChanges(id_).size());
 }
 
 void PluginPageScreen::onShow(Nav& nav) {
+    catalog_ = nav.catalog();
+    if (catalog_) catalog_->poll();
     load(nav);
     ask_ = Ask::None;
 }
 
+void PluginPageScreen::onTick(Nav& nav) {
+    PluginHost* h = host_ ? host_() : nullptr;
+    if (catalog_) catalog_->poll();
+    const int serial = catalog_ ? catalog_->state().serial : -1;
+    if (serial == catalogSerial_ && (h ? h->entriesVersion() : 0) == hostVersion_) return;
+    if (catalog_ && serial != catalogSerial_) {
+        const auto& st = catalog_->state();
+        using Op = CatalogService::Op;
+        const bool ours = st.doneId == id_ && (st.doneOp == Op::Update || st.doneOp == Op::Apply || st.doneOp == Op::RollBack);
+        if (st.busy == Op::None && ours && !st.doneOk && !st.error.empty()) nav.toast(st.error);
+    }
+    load(nav);
+    nav.damage({0, 0, W(), H()}, Waveform::Ui);
+}
+
+std::string PluginPageScreen::provenance() const {
+    if (!catalog_ || !status_) return "";
+    return catalog_->state().cache.fromCatalog.count(id_) ? "From the catalog" : "Installed by hand";
+}
+
+std::string PluginPageScreen::updateLabel() const {
+    if (!catalog_ || !status_ || !status_->folder.manifest || !status_->withdrawn.empty()) return "";
+    const auto& st = catalog_->state();
+    using Op = CatalogService::Op;
+    if (st.busyId == id_ && (st.busy == Op::Update || st.busy == Op::Apply)) return st.busyText;
+    if (reasking()) return "";
+    auto l = catalog_->updateFor(id_, status_->folder.manifest->version);
+    return l ? "Update to " + l->version.str() : "";
+}
+
+std::string PluginPageScreen::rollBackLabel() const {
+    if (!catalog_ || !status_) return "";
+    const auto& kept = catalog_->state().kept;
+    auto it = kept.find(id_);
+    if (it == kept.end()) return "";
+    const auto& st = catalog_->state();
+    if (st.busyId == id_ && st.busy == CatalogService::Op::RollBack) return st.busyText;
+    return "Roll back to " + oneLine(it->second);
+}
+
+bool PluginPageScreen::reasking() const {
+    return catalog_ && catalog_->state().awaitingYes && catalog_->state().awaitingYes->manifest.id == id_ &&
+           catalog_->state().busy == CatalogService::Op::None;
+}
+
 std::string PluginPageScreen::name() const { return status_ ? pluginName(*status_) : "Plugin"; }
 
-std::vector<std::string> PluginPageScreen::permissionLines() const {
+std::vector<std::string> permissionLinesOf(const PluginManifest& m, const std::vector<Permission>* only, const PluginManifest* old) {
     std::vector<std::string> out;
-    if (!status_ || !status_->folder.manifest) return out;
-    const PluginManifest& m = *status_->folder.manifest;
     for (Permission p : m.permissions) {
+        if (only && std::find(only->begin(), only->end(), p) == only->end()) continue;
         if (p != Permission::Net) {
             out.push_back(permissionText(p));
             continue;
         }
-        for (const auto& host : m.hosts)
+        for (const auto& host : m.hosts) {
+            if (old && std::find(old->hosts.begin(), old->hosts.end(), host) != old->hosts.end()) continue;
             out.push_back(host.rfind("*.", 0) == 0 ? "Connects to sites under " + host.substr(2) : permissionText(p, host));
+        }
     }
     return out;
+}
+
+std::vector<std::string> PluginPageScreen::permissionLines() const {
+    if (!status_ || !status_->folder.manifest) return {};
+    return permissionLinesOf(*status_->folder.manifest);
 }
 
 std::vector<std::string> PluginPageScreen::errorLines() const {
@@ -86,7 +144,7 @@ std::vector<std::string> PluginPageScreen::errorLines() const {
 }
 
 std::string PluginPageScreen::turnLabel() const {
-    if (!status_ || !status_->folder.manifest || !status_->folder.problem.empty()) return "";
+    if (!status_ || !status_->folder.manifest || !status_->folder.problem.empty() || !status_->withdrawn.empty()) return "";
     return status_->enabled ? "Turn off" : "Turn on";
 }
 
@@ -103,6 +161,8 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
     if (manifest) actions.push_back(&l.changes);
     if (manifest) actions.push_back(&l.reset);
     if (status_ && pending_ > 0) actions.push_back(&l.discard);
+    const std::string rollBack = rollBackLabel();
+    if (!rollBack.empty()) actions.push_back(&l.rollBack);
     if (status_) actions.push_back(&l.remove);
     const int actionsTop = H() - 30 - static_cast<int>(actions.size()) * actionH();
     for (size_t i = 0; i < actions.size(); ++i) *actions[i] = {x, actionsTop + static_cast<int>(i) * actionH(), w, actionH()};
@@ -117,7 +177,8 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
     }
     const PluginStatus& s = *status_;
     const bool canTurn = !turnLabel().empty();
-    const int turnH = canTurn ? kTurnH + 30 : 0;
+    const std::string update = updateLabel();
+    const int turnH = canTurn || !update.empty() ? kTurnH + 30 : 0;
     auto lines = permissionLines();
     if (manifest && lines.empty()) lines.push_back("Nothing that needs your permission");
     auto lineH = [&](const std::string& line) { return measureText(line, kLine, w, 2).height + 8; };
@@ -134,6 +195,7 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
         std::string by = "Version " + oneLine(m.version);
         if (!oneLine(m.author).empty()) by += " · " + oneLine(m.author);
         y += text(cr, by, kByline, {x, y, w, 50}, 1) + 24;
+        if (const std::string from = provenance(); !from.empty()) y += text(cr, from, kQuiet, {x, y - 12, w, 50}, 1) + 12;
         if (!oneLine(m.description).empty()) {
             // Up to 3 lines (then "…"), fewer when what follows needs the room.
             int n = 3;
@@ -170,13 +232,18 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
         }
         y += 20;
     }
-    if (canTurn) {  // always on the page: above the repairs at worst
-        l.turn = {x, std::min(y, bottom - kTurnH), 360, kTurnH};
-        if (cr) {
-            fillRect(cr, {x, l.turn.y - 10, w, kTurnH + 20}, 255);
-            drawButton(cr, l.turn, turnLabel(), !s.enabled);
+    if (canTurn || !update.empty()) {  // always on the page: above the repairs at worst
+        const Rect row{x, std::min(y, bottom - kTurnH), 360, kTurnH};
+        if (cr) fillRect(cr, {x, row.y - 10, w, kTurnH + 20}, 255);
+        if (canTurn) {
+            l.turn = row;
+            if (cr) drawButton(cr, l.turn, turnLabel(), !s.enabled);
         }
-        y = l.turn.y + kTurnH + 40;
+        if (!update.empty()) {
+            l.update = canTurn ? Rect{x + 400, row.y, std::min(460, w - 400), kTurnH} : Rect{x, row.y, 460, kTurnH};
+            if (cr) drawButton(cr, l.update, update, false);
+        }
+        y = row.y + kTurnH + 40;
     }
     const auto errors = errorLines();
     if (!errors.empty() && y + 44 + 10 + 44 <= bottom) {
@@ -198,6 +265,7 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
         row(l.changes, "What it changed", true);
         row(l.reset, "Reset its data", false);
         row(l.discard, discardLabel(), false);
+        row(l.rollBack, rollBack, false);
         row(l.remove, "Remove", false);
     }
     return l;
@@ -210,6 +278,8 @@ Rect PluginPageScreen::changesRect() const { return layout().changes; }
 Rect PluginPageScreen::resetRect() const { return layout().reset; }
 Rect PluginPageScreen::discardRect() const { return layout().discard; }
 Rect PluginPageScreen::removeRect() const { return layout().remove; }
+Rect PluginPageScreen::updateRect() const { return layout().update; }
+Rect PluginPageScreen::rollBackRect() const { return layout().rollBack; }
 
 std::string PluginPageScreen::question() const {
     const std::string n = name();
@@ -220,6 +290,9 @@ std::string PluginPageScreen::question() const {
             return "Discard " + count(pending_, "change ", "changes ") + n + " hasn't sent to Zotero yet? " +
                    (pending_ == 1 ? "It won't reach Zotero." : "They won't reach Zotero.");
         case Ask::Remove:
+            if (catalog_)
+                return "Remove " + n + " and the data it saved?" +
+                       (pending_ > 0 ? " " + count(pending_, "change", "changes") + " not synced yet will still be sent." : "");
             return "Remove " + n + "? Its folder is deleted." +
                    (pending_ > 0 ? " " + count(pending_, "change", "changes") + " not synced yet will still be sent." : "");
     }
@@ -227,9 +300,21 @@ std::string PluginPageScreen::question() const {
 }
 
 std::optional<PluginConfirm> PluginPageScreen::confirm() const {
+    if (ask_ == Ask::None && reasking()) {
+        const auto& staged = *catalog_->state().awaitingYes;
+        std::vector<std::string> lines{"This version also wants to:"};
+        const PluginManifest* old = status_ && status_->folder.manifest ? &*status_->folder.manifest : nullptr;
+        for (auto& line : permissionLinesOf(staged.manifest, &staged.added, old)) lines.push_back(std::move(line));
+        return PluginConfirm(name(), lines, "Update", "Not now");
+    }
     if (ask_ == Ask::None) return std::nullopt;
     const char* action = ask_ == Ask::Reset ? "Reset" : ask_ == Ask::Discard ? "Discard" : "Remove";
     return PluginConfirm(name(), {question()}, action);
+}
+
+std::vector<std::string> PluginPageScreen::confirmLines() const {
+    const auto c = confirm();
+    return c ? c->lines() : std::vector<std::string>{};
 }
 
 Rect PluginPageScreen::yesRect() const {
@@ -259,6 +344,22 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
         if (!yes && c->rect().contains(g.pos)) return;  // on the box, not a button
         const Ask asked = ask_;
         ask_ = Ask::None;
+        if (asked == Ask::None) {  // the re-ask: the installed version runs until the yes; only its buttons answer
+            if (!yes) return;
+            if (*yes) catalog_->applyStaged(id_);
+            else catalog_->discardStaged(id_);
+            catalog_->poll();
+            load(nav);
+            nav.damage(whole, Waveform::Ui);
+            return;
+        }
+        if (yes.value_or(false) && asked == Ask::Remove && catalog_ && status_) {  // files, storage and state, on its worker
+            const std::string n = name();
+            catalog_->remove(id_);
+            nav.toast(n + " was removed.");
+            nav.pop();
+            return;
+        }
         if (yes.value_or(false) && host && status_) {
             if (asked == Ask::Reset) {
                 host->resetData(id_);
@@ -287,6 +388,18 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
     if (!l.turn.empty() && l.turn.contains(g.pos)) {
         host->setEnabled(id_, !status_->enabled);
         load(nav);
+        nav.damage(whole, Waveform::Ui);
+        return;
+    }
+    if (!l.update.empty() && l.update.contains(g.pos)) {
+        if (!catalog_->busy()) catalog_->update(id_);
+        catalog_->poll();
+        nav.damage(whole, Waveform::Ui);
+        return;
+    }
+    if (!l.rollBack.empty() && l.rollBack.contains(g.pos)) {
+        if (!catalog_->busy()) catalog_->rollBack(id_);
+        catalog_->poll();
         nav.damage(whole, Waveform::Ui);
         return;
     }

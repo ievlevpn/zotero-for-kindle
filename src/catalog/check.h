@@ -61,6 +61,10 @@ struct CheckResult {
     std::string message;
 };
 
+// One plugin's latest release (one API call): nullopt when it can't be read or lacks plugin.zip /
+// plugin.zip.sig. checkedMs = nowMs.
+std::optional<Latest> fetchLatest(Http&, const Entry&, int64_t nowMs, std::shared_ptr<std::atomic<bool>> cancel);
+
 // Fetches the registry (verified with registryKey, kept only if it verifies and parses), then the
 // latest release of each installed id that is in the registry and wasn't checked within 6 h.
 // A plugin release that can't be read or lacks plugin.zip / plugin.zip.sig is skipped quietly.

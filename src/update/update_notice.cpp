@@ -43,6 +43,7 @@ void UpdateNotice::onSyncFinished(Library& lib, bool ok) {
     if (failed && failed > checked && now - failed < kCheckEveryMs) return;
     log(LogLevel::Info, "update: the hourly check");
     updater_.check();
+    if (alsoCheck_) alsoCheck_();  // the plugin catalog, with the app's own check
     serial_ = -1;  // note its answer even if the status looks the same
 }
 

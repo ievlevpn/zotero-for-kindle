@@ -25,11 +25,14 @@ public:
     std::optional<Version> available(Library&) const;  // for the banner: newer and not dismissed
     std::optional<Version> pending(Library&) const;    // newer, dismissed or not (Settings)
     void dismiss(Library&);
+    // Also run when the hourly check starts (the plugin catalog's check).
+    void alsoCheck(std::function<void()> f) { alsoCheck_ = std::move(f); }
 
 private:
     Updater& updater_;
     std::function<int64_t()> wallMs_;
     int serial_ = -1;  // the Updater status last noted
+    std::function<void()> alsoCheck_;
 };
 
 }  // namespace zk

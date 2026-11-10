@@ -156,6 +156,17 @@ std::optional<Latest> updateFor(const Cache& c, std::string_view id, std::string
     return it->second;
 }
 
+std::optional<Latest> fetchLatest(Http& http, const Entry& e, int64_t nowMs, std::shared_ptr<std::atomic<bool>> cancel) {
+    const HttpResponse r = http.send(get("https://api.github.com/repos/" + e.repo + "/releases/latest", cancel, kMaxRegistryBytes));
+    if (r.curlCode != 0 || r.status != 200) return std::nullopt;
+    const auto pr = releaseAssets(r.body);
+    if (!pr) return std::nullopt;
+    const auto version = versionFromTag(pr->first);
+    const auto zip = pr->second.find("plugin.zip"), zipSig = pr->second.find("plugin.zip.sig");
+    if (!version || zip == pr->second.end() || zipSig == pr->second.end()) return std::nullopt;
+    return Latest{*version, zip->second.url, zipSig->second.url, zip->second.size, nowMs};
+}
+
 CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& pluginsDir,
                      const std::vector<std::string>& installedIds, bool force,
                      std::shared_ptr<std::atomic<bool>> cancel) {
@@ -196,14 +207,7 @@ CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& plu
         const int64_t now = opt.wallMs();
         if (!force && old != cache.latest.end() && now - old->second.checkedMs < kPluginCheckEveryMs) continue;
         if (cancelled(cancel)) break;
-        const HttpResponse r = http.send(get("https://api.github.com/repos/" + e->repo + "/releases/latest", cancel, kMaxRegistryBytes));
-        if (r.curlCode != 0 || r.status != 200) continue;  // quietly: tried again next time
-        const auto pr = releaseAssets(r.body);
-        if (!pr) continue;
-        const auto version = versionFromTag(pr->first);
-        const auto zip = pr->second.find("plugin.zip"), zipSig = pr->second.find("plugin.zip.sig");
-        if (!version || zip == pr->second.end() || zipSig == pr->second.end()) continue;
-        cache.latest[id] = {*version, zip->second.url, zipSig->second.url, zip->second.size, now};
+        if (auto l = fetchLatest(http, *e, now, cancel)) cache.latest[id] = *l;  // else quietly: tried again next time
     }
     if (!saveCache(pluginsDir, cache)) return {CheckStatus::Failed, "Couldn't save the catalog."};
     if (cancelled(cancel)) return stopped;

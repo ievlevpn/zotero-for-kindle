@@ -21,6 +21,7 @@ namespace zk {
 
 class Screen;
 class PluginEntries;  // plugin_entries.h
+class CatalogService;  // app/catalog_service.h
 
 class Nav {
 public:
@@ -50,6 +51,8 @@ public:
     virtual PluginSink& plugins() { return nullPluginSink(); }
     // Plugins' entry points and actions (plugin_entries.h); null: none (no plugin shows anywhere).
     virtual PluginEntries* pluginEntries() { return nullptr; }
+    // The plugin catalog (Get plugins, updates); null: none (the screens show nothing of it).
+    virtual CatalogService* catalog() { return nullptr; }
 };
 
 // What a list row shows instead of its byline (download progress or an error), by attachment key.

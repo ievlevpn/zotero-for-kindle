@@ -22,7 +22,8 @@ namespace zk {
 
 class PluginConfirm {
 public:
-    PluginConfirm(std::string pluginName, std::vector<std::string> lines, std::string action /* "Move to trash" … */);
+    PluginConfirm(std::string pluginName, std::vector<std::string> lines, std::string action /* "Move to trash" … */,
+                  std::string cancel = "Cancel");
 
     void draw(cairo_t*) const;
     // true: the action; false: Cancel; nullopt: not on a button (nothing happens).
@@ -49,6 +50,7 @@ private:
     std::string pluginName_;
     std::vector<std::string> lines_;
     std::string action_;
+    std::string cancel_;
 };
 
 }  // namespace zk

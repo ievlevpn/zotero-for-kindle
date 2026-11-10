@@ -1,5 +1,7 @@
 #include "screens/home.h"
 
+#include "app/catalog_service.h"
+
 #include "screens/item_details.h"
 #include "screens/plugin_entries.h"
 #include "screens/plugin_launcher.h"
@@ -132,9 +134,11 @@ void HomeScreen::reload(Library& lib) {
 bool HomeScreen::readPlugins(Nav& nav) {
     PluginEntries* e = nav.pluginEntries();
     const uint64_t v = e ? e->version() : 0;
-    if (e && v == pluginsVersion_) return false;
+    const bool updates = nav.catalog() && nav.catalog()->updatesWaiting() > 0;  // plugin updates waiting
+    if (e && v == pluginsVersion_ && updates == pluginUpdates_) return false;
     pluginsVersion_ = v;
-    const bool icon = e && !e->mainScreens().empty(), dot = icon && e->anyBadge();
+    pluginUpdates_ = updates;
+    const bool icon = e && !e->mainScreens().empty(), dot = icon && (e->anyBadge() || updates);
     if (icon == pluginsIcon_ && dot == pluginsDot_) return false;
     pluginsIcon_ = icon;
     pluginsDot_ = dot;

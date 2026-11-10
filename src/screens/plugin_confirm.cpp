@@ -29,8 +29,8 @@ int listLineH() { return measureText("Ag", kListItem, 1000, 1).height + 18; }
 
 }  // namespace
 
-PluginConfirm::PluginConfirm(std::string pluginName, std::vector<std::string> lines, std::string action)
-    : pluginName_(std::move(pluginName)), lines_(std::move(lines)), action_(std::move(action)) {
+PluginConfirm::PluginConfirm(std::string pluginName, std::vector<std::string> lines, std::string action, std::string cancel)
+    : pluginName_(std::move(pluginName)), lines_(std::move(lines)), action_(std::move(action)), cancel_(std::move(cancel)) {
     if (lines_.empty()) lines_.push_back(pluginName_ + " wants to make a change.");
     if (action_.empty()) action_ = "Allow";
 }
@@ -112,7 +112,7 @@ void PluginConfirm::draw(cairo_t* cr) const {
         drawText(cr, "and " + std::to_string(rest) + " more", kMore, {b.x + kPad + kBulletW, y + 6, textW - kBulletW, listLineH()}, 1);
     }
     drawButton(cr, yesRect(), action_, true);
-    drawButton(cr, noRect(), "Cancel", false);
+    drawButton(cr, noRect(), cancel_, false);
     cairo_restore(cr);
 }
 

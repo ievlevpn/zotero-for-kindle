@@ -6,6 +6,13 @@
 // some), Remove. Reset, Discard and Remove ask first, in the app's own confirmation box.
 // A folder that can't load shows its problem and can't be turned on; it can still be removed.
 //
+// With the catalog (Nav::catalog): "From the catalog" / "Installed by hand" under the byline;
+// "Update to 1.3" beside Turn on/off when the catalog has a newer version (applied at once when it
+// asks for nothing more; else "This version also wants to:" lists what it adds, with Update and
+// Not now, and the installed version keeps running until the yes); "Roll back to 1.2" among the
+// repairs when a previous version is kept; Remove asks "Remove <Name> and the data it saved?" and
+// deletes its folder, kept version, storage and state on the catalog's worker.
+//
 // PluginChangesScreen (What it changed): its change log, newest first, a line per change — what,
 // on which item, and how it ended (Sent, Pending, Refused and why, Cancelled, Declined).
 
@@ -25,9 +32,16 @@ public:
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onShow(Nav&) override;
+    void onTick(Nav&) override;
     bool showsTabBar() const override { return false; }
 
     std::vector<std::string> permissionLines() const;
+    // The catalog's parts (empty / "" without one).
+    std::string provenance() const;   // "From the catalog" / "Installed by hand"
+    std::string updateLabel() const;  // "Update to 1.3.0", "Downloading…"; "" when there is none
+    Rect updateRect() const;
+    std::string rollBackLabel() const;  // "Roll back to 1.2.0"; "" when none is kept
+    Rect rollBackRect() const;
     std::vector<std::string> errorLines() const;  // up to 3, newest first
     std::string turnLabel() const;                // "Turn on" / "Turn off"; "" when it can't be
     Rect turnRect() const;                        // empty when it can't be turned on; else always on the page
@@ -41,13 +55,14 @@ public:
     Rect removeRect() const;
     // The question being asked ("" when none), and its buttons.
     std::string question() const;
+    std::vector<std::string> confirmLines() const;  // the box's question and list (the re-ask's too)
     Rect yesRect() const;
     Rect noRect() const;
 
 private:
     enum class Ask { None, Reset, Discard, Remove };
     struct Layout {
-        Rect turn, more, changes, reset, discard, remove;
+        Rect turn, update, more, changes, reset, discard, rollBack, remove;
         int permissions = 0;  // what it can do, shown here (the rest behind "+N more")
     };
     void load(Nav&);
@@ -56,12 +71,22 @@ private:
     std::optional<PluginConfirm> confirm() const;
     std::string name() const;
 
+    bool reasking() const;  // the catalog staged an update of this one that adds permissions
+
     std::string id_;
     PluginHostFn host_;
+    CatalogService* catalog_ = nullptr;
+    int catalogSerial_ = -1;
+    uint64_t hostVersion_ = 0;
     std::optional<PluginStatus> status_;  // nullopt: no longer installed (or no host)
     int pending_ = 0;
     Ask ask_ = Ask::None;
 };
+
+// What a manifest can do, as the page words it: `only` (null: all of its permissions), and with
+// `old` given, only the hosts it doesn't have.
+std::vector<std::string> permissionLinesOf(const PluginManifest&, const std::vector<Permission>* only = nullptr,
+                                           const PluginManifest* old = nullptr);
 
 // What it can do, every line, paged (from "+N more" on a crowded plugin page).
 class PluginPermissionsScreen final : public Screen {

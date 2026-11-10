@@ -58,6 +58,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -305,6 +306,8 @@ struct PluginHost::Impl {
     std::vector<PluginFolder> folders;
     std::set<std::string> loadedIds;
     std::map<std::string, std::string> problems;  // a current problem, shown on its row
+    std::set<std::string> held;                    // its files are being swapped: not loaded (hold/release)
+    std::map<std::string, std::string> withdrawn;  // id → why the catalog withdrew it
     std::deque<PluginHostEvent> events;
     std::string webdavHost;  // zk.fetch refuses it; the app may change it (setWebdavHost)
     std::mutex runningMu;
@@ -529,6 +532,10 @@ struct PluginHost::Impl {
     // `afresh`: a restart after a stop, whose success doesn't clear the failure that caused it.
     void load(const PluginFolder& f, bool afresh = false) {
         const std::string& id = f.dir;
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            if (held.count(id) || withdrawn.count(id)) return;
+        }
         setProblem(id, "");
         const fs::path dir = fs::path(deps.pluginsDir) / id;
         std::string source;
@@ -1975,6 +1982,7 @@ std::vector<PluginStatus> PluginHost::status() const {
         s.failures = h.state.failures(f.dir);
         s.loaded = h.loadedIds.count(f.dir) > 0;
         s.badge = h.state.badge(f.dir);
+        if (auto w = h.withdrawn.find(f.dir); w != h.withdrawn.end()) s.withdrawn = w->second;
         if (auto e = h.entryList.find(f.dir); e != h.entryList.end() && s.loaded) s.entries = e->second;
         s.errors = h.state.lastErrors(f.dir);
         if (auto p = h.problems.find(f.dir); p != h.problems.end()) {
@@ -1991,7 +1999,7 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
         std::lock_guard<std::mutex> lock(impl_->mu);
         const auto& fs_ = impl_->folders;
         auto f = std::find_if(fs_.begin(), fs_.end(), [&](const PluginFolder& f) { return f.dir == id; });
-        if (f == fs_.end() || (on && (!f->manifest || !f->problem.empty()))) return;
+        if (f == fs_.end() || (on && (!f->manifest || !f->problem.empty() || impl_->withdrawn.count(id)))) return;
     }
     impl_->state.setEnabled(id, on);
     ++impl_->version;
@@ -2007,7 +2015,11 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
     });
 }
 
-void PluginHost::remove(const std::string& id) {
+void PluginHost::remove(const std::string& id) { forgetPlugin(id, true); }
+
+void PluginHost::forget(const std::string& id) { forgetPlugin(id, false); }
+
+void PluginHost::forgetPlugin(const std::string& id, bool deleteFolder) {
     Impl& h = *impl_;
     {
         std::lock_guard<std::mutex> lock(h.mu);
@@ -2019,16 +2031,73 @@ void PluginHost::remove(const std::string& id) {
     }
     h.state.forget(id);
     ++h.version;
-    h.post([id](Impl& h) {
+    h.post([id, deleteFolder](Impl& h) {
         h.failedLoad.erase(id);
         h.turnOffs.erase(id);
         h.restarts.erase(id);
         h.unload(id);
         h.logs.erase(id);
         std::error_code ec;
-        fs::remove_all(fs::path(h.deps.pluginsDir) / id, ec);  // what stays (it failed) is listed again by a rescan
+        if (deleteFolder) fs::remove_all(fs::path(h.deps.pluginsDir) / id, ec);  // what stays (it failed) is listed again by a rescan
         h.state.forget(id);  // what a call ending meanwhile recorded
     });
+}
+
+bool PluginHost::hold(const std::string& id, int timeoutMs) {
+    Impl& h = *impl_;
+    {
+        std::lock_guard<std::mutex> lock(h.mu);
+        h.held.insert(id);
+    }
+    ++h.version;
+    if (!h.started || h.joined) return true;  // no plugin thread: nothing runs
+    auto done = std::make_shared<std::promise<void>>();
+    auto stopped = done->get_future();
+    h.post([id, done](Impl& h) {
+        h.unload(id);
+        h.logs.erase(id);  // reopened in its new folder
+        done->set_value();
+    });
+    // Until it is unloaded, the host stops (nothing runs after that), or the time is up.
+    for (int waited = 0; waited < timeoutMs; waited += 50)
+        if (stopped.wait_for(std::chrono::milliseconds(50)) == std::future_status::ready || h.stopping) return true;
+    return false;
+}
+
+void PluginHost::release(const std::string& id) {
+    Impl& h = *impl_;
+    {
+        std::lock_guard<std::mutex> lock(h.mu);
+        h.held.erase(id);
+    }
+    ++h.version;
+    if (h.started && !h.joined) {
+        h.post([id](Impl& h) { h.reload(&id); });
+        return;
+    }
+    auto fresh = scanPlugins(h.deps.pluginsDir, h.deps.appVersion);  // no plugin thread to do it
+    std::lock_guard<std::mutex> lock(h.mu);
+    h.folders = std::move(fresh);
+}
+
+void PluginHost::setWithdrawn(std::map<std::string, std::string> withdrawn) {
+    Impl& h = *impl_;
+    std::vector<std::string> off;
+    {
+        std::lock_guard<std::mutex> lock(h.mu);
+        if (h.withdrawn == withdrawn) return;
+        for (const auto& [id, why] : withdrawn)
+            if (!h.withdrawn.count(id)) off.push_back(id);
+        h.withdrawn = std::move(withdrawn);
+    }
+    for (const auto& id : off) {
+        h.state.turnOff(id);
+        h.post([id](Impl& h) {
+            h.unload(id);
+            h.log(id, LogLevel::Warn, "Withdrawn from the catalog — turned off");
+        });
+    }
+    ++h.version;
 }
 
 void PluginHost::setWebdavHost(std::string host) {

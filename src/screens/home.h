@@ -40,7 +40,7 @@ public:
     static Rect syncIndicatorRect();
     static Rect settingsRect();
     // The puzzle-piece icon left of the gear (Plugins, the launcher): only when some plugin has a
-    // main screen; a dot on it when a plugin has a badge.
+    // main screen; a dot on it when a plugin has a badge or plugin updates are waiting.
     static Rect pluginsRect();
     bool pluginsIcon() const { return pluginsIcon_; }
     bool pluginsDot() const { return pluginsDot_; }
@@ -82,6 +82,7 @@ private:
     std::optional<std::string> update_;  // the version the banner names
     bool pluginsIcon_ = false, pluginsDot_ = false;
     uint64_t pluginsVersion_ = 0;
+    bool pluginUpdates_ = false;  // the catalog has updates waiting: the dot too
     bool readPlugins(Nav&);  // true if the icon changed
 };
 

@@ -92,6 +92,8 @@ public:
     void setPluginSink(PluginSink& s) { pluginSink_ = &s; }
     PluginEntries* pluginEntries() override { return pluginEntries_; }
     void setPluginEntries(PluginEntries* e) { pluginEntries_ = e; }
+    CatalogService* catalog() override { return catalog_; }
+    void setCatalog(CatalogService* c) { catalog_ = c; }
 
     // The app's own confirmation (a plugin's removal): drawn over whatever screen shows, taking
     // every gesture, key and pen stroke until one of its buttons answers it; `answered` is then
@@ -182,6 +184,7 @@ private:
     std::function<void()> pollHook_;
     PluginSink* pluginSink_ = &nullPluginSink();
     PluginEntries* pluginEntries_ = nullptr;
+    CatalogService* catalog_ = nullptr;
     struct Question {
         uint64_t id = 0;
         PluginConfirm view;
