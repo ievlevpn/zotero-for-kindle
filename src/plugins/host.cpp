@@ -126,6 +126,7 @@ struct Call {
     // run (zk.ui.open allowed); what they asked for, applied when the call ends.
     uint64_t screen = 0;
     bool action = false;
+    uint64_t actionRun = 0;  // an action's run: PluginHost::runAction's number
     Opens opens;
     bool closes = false;
     std::optional<nlohmann::json> closeResult;
@@ -217,6 +218,8 @@ int64_t steadyMs() { return js::Runtime::nowMs(); }
 // Screen instances, unique in the process (a host made again after an update's install never
 // reuses one the app still holds); openScreen takes one on the screen thread.
 std::atomic<uint64_t> gNextInstance{0};
+// Action runs (PluginHost::runAction), numbered on the screen thread.
+std::atomic<uint64_t> gNextRun{0};
 
 [[maybe_unused]] constexpr int kPluginNice = 10;
 
@@ -286,7 +289,8 @@ void trackRejection(JSContext*, JSValueConst promise, JSValueConst reason, bool 
 // ---- The host -------------------------------------------------------------------------------
 
 struct PluginHost::Impl {
-    enum class Limit { Time, Memory, Pool, Stack, Cancel };  // Cancel: cut short on purpose, not a failure
+    // Cancel: cut short on purpose (sleep), Closed: the user closed what waited for it; neither a failure.
+    enum class Limit { Time, Memory, Pool, Stack, Cancel, Closed };
 
     PluginHostDeps deps;
     PluginState state;
@@ -294,6 +298,7 @@ struct PluginHost::Impl {
     pthread_t thread{};
     bool started = false, joined = false;
     std::atomic<bool> stopping{false};
+    std::atomic<uint64_t> version{0};  // entriesVersion()
 
     // Shared with the screen thread.
     mutable std::mutex mu;  // folders, loadedIds, problems, events
@@ -354,6 +359,7 @@ struct PluginHost::Impl {
     }
 
     void postEvent(PluginHostEvent ev) {
+        if (ev.kind == PluginHostEvent::Kind::Badge) ++version;
         std::lock_guard<std::mutex> lock(mu);
         events.push_back(std::move(ev));
     }
@@ -373,6 +379,7 @@ struct PluginHost::Impl {
     }
 
     void setLoaded(const std::string& id, bool on) {
+        ++version;
         std::lock_guard<std::mutex> lock(mu);
         entryList.erase(id);  // a fresh load registers again
         if (on) loadedIds.insert(id);
@@ -601,9 +608,14 @@ struct PluginHost::Impl {
         if (it == loaded.end()) return;
         for (auto& [wid, w] : it->second->run->work) w.cancel->store(true);
         withdrawAsks(*it->second, 0);
-        if (!stopping)  // turned off, restarted, reloaded: its open screens can't be shown any more
+        if (!stopping) {  // turned off, restarted, reloaded: its open screens can't be shown any more
             for (const auto& [instance, sc] : it->second->run->screens)
                 if (!sc.closed && !sc.failed) postScreen(*it->second, PluginHostEvent::Kind::ScreenError, instance, cantShow(*it->second));
+            for (const auto& [cid, c] : it->second->run->calls)  // and its actions still running won't answer
+                if (c.actionRun && c.done)
+                    postAction(PluginHostEvent::Kind::ActionError, id, it->second->manifest.name, c.actionRun,
+                               it->second->manifest.name + " couldn't do that: it stopped");
+        }
         if (net) net->sweep();  // its queued fetches (and their bodies) go now
         loaded.erase(it);  // the runtime and everything in it
         setLoaded(id, false);
@@ -630,6 +642,7 @@ struct PluginHost::Impl {
             restarts.erase(id);
             unload(id);
             state.stop(id);
+            ++version;
             const std::string name = nameOf(id);
             log(id, LogLevel::Error, name + " stopped working — turned off after 3 failures in a row");
             postEvent({PluginHostEvent::Kind::Disabled, id, name, name + " stopped working — turned off", {}, 0, ""});
@@ -838,18 +851,20 @@ struct PluginHost::Impl {
         if (!c) return;
         const std::string what = c->what;
         const CallKind kind = c->kind;
-        const char* limitName = limit == Limit::Time || limit == Limit::Cancel ? "time" : limit == Limit::Stack ? "stack" : "memory";
+        const bool onPurpose = limit == Limit::Cancel || limit == Limit::Closed;
+        const char* limitName = limit == Limit::Time || onPurpose ? "time" : limit == Limit::Stack ? "stack" : "memory";
         std::string text = "Stopped: " + what;
         if (limit == Limit::Cancel) text += " was cut short (the Kindle went to sleep)";
+        else if (limit == Limit::Closed) text += " was stopped: the user closed its pop-up";
         else if (limit == Limit::Time) text += " took longer than " + seconds(c->budgetMs);
         else if (limit == Limit::Memory) text += " used more than " + std::to_string(deps.memoryPerPlugin >> 20) + " MB of memory";
         else if (limit == Limit::Pool) text += " — plugins together used more than " + std::to_string(deps.memoryTotal >> 20) + " MB of memory";
         else text += " ran out of stack (too much recursion)";
         if (kind == CallKind::Load) p.run->loadFailed = true;
         callDone(*c, false, limit == Limit::Time ? "it took longer than " + seconds(c->budgetMs)
-                            : limit == Limit::Stack ? "it ran out of stack" : limit == Limit::Cancel ? "" : "it used too much memory");
+                            : limit == Limit::Stack ? "it ran out of stack" : onPurpose ? "" : "it used too much memory");
         p.run->calls.erase(callId);
-        if (limit == Limit::Cancel) log(p.manifest.id, LogLevel::Info, text);
+        if (onPurpose) log(p.manifest.id, LogLevel::Info, text);
         else {
             backgroundEnded(p, kind);
             recordFailure(p.manifest.id, text);  // a stopped cleanup counts too
@@ -1340,6 +1355,125 @@ struct PluginHost::Impl {
         applyTurnOffs();
     }
 
+    // ---- Actions -------------------------------------------------------------------------------
+    //
+    // An action's run is a user-caused call with the action budget; the runner (installEntry)
+    // hands back "" or the JSON text of what it returned, checked here when the call has ended.
+
+    void postAction(PluginHostEvent::Kind kind, const std::string& pluginId, const std::string& name, uint64_t run,
+                    std::string text, nlohmann::json value = nullptr) {
+        PluginHostEvent ev{kind, pluginId, name, std::move(text), {}, run, ""};
+        ev.value = std::move(value);
+        postEvent(std::move(ev));
+    }
+
+    void runAction(uint64_t run, const std::string& pluginId, const std::string& kind, const std::string& actionId,
+                   const nlohmann::ordered_json& target, const nlohmann::json& again) {
+        activate();
+        auto it = loaded.find(pluginId);
+        const PluginRun::Entry* entry = nullptr;
+        if (it != loaded.end() && !turnOffs.count(pluginId) && !restarts.count(pluginId))
+            for (const auto& e : it->second->run->entries)
+                if (e.info.kind == kind && e.info.id == actionId) entry = &e;
+        if (!entry) {
+            const std::string name = nameOf(pluginId);
+            postAction(PluginHostEvent::Kind::ActionError, pluginId, name, run, name + " couldn't do that: it isn't running");
+            return;
+        }
+        PluginCtx& p = *it->second;
+        const uint64_t serial = p.run->serial;
+        {  // no Value of the plugin may outlive it: turning it off frees its runtime
+            const js::Value fn = entry->fn;
+            startCall(p, CallKind::Event, "the " + actionId + " action", deps.actionBudgetMs, true,
+                      [&] {
+                          return p.cx.call(p.actionRunner, {fn, js::Value::fromOrderedJson(p.cx, target),
+                                                            again.is_null() ? js::Value(p.cx.raw(), JS_UNDEFINED) : js::Value::fromJson(p.cx, again)});
+                      },
+                      true, [&](Call& c) {
+                          c.action = true;
+                          c.actionRun = run;
+                          c.done = [this, serial, run, pluginId, name = p.manifest.name](Call& c, bool ok, const std::string& text) {
+                              post([serial, run, ok, text, pluginId, name, opens = std::move(c.opens)](Impl& h) mutable {
+                                  h.actionDone(serial, run, pluginId, name, ok, text, std::move(opens));
+                              });
+                          };
+                      });
+        }
+        applyTurnOffs();
+    }
+
+    static constexpr size_t kMaxReplyBytes = 64 * 1024;
+
+    // What run returned, as the pop-up takes it: {text, actions} or a discarded value (*why says why).
+    static nlohmann::json replyOf(const std::string& text, std::string* why) {
+        auto j = nlohmann::json::parse(text, nullptr, false);
+        const nlohmann::json bad = nlohmann::json::value_t::discarded;
+        if (!j.is_object() || !j.contains("text") || !j["text"].is_string()) {
+            *why = "expected a string or { text, actions }";
+            return bad;
+        }
+        std::string t = j["text"].get<std::string>();
+        if (t.size() > kMaxReplyBytes) {
+            size_t cut = kMaxReplyBytes;
+            while (cut > 0 && (static_cast<unsigned char>(t[cut]) & 0xC0) == 0x80) --cut;
+            t = t.substr(0, cut) + "…";
+        }
+        nlohmann::json out = {{"text", t}, {"actions", nlohmann::json::array()}};
+        if (j.contains("actions") && !j["actions"].is_null()) {
+            const auto& a = j["actions"];
+            if (!a.is_array() || a.size() > 2) {
+                *why = "`actions` must be a list of at most 2 buttons";
+                return bad;
+            }
+            for (const auto& b : a) {
+                if (!b.is_object() || !b.contains("id") || !b["id"].is_string() || b["id"].get<std::string>().empty() ||
+                    !b.contains("title") || !b["title"].is_string() || oneLine(b["title"].get<std::string>()).empty() ||
+                    oneLine(b["title"].get<std::string>()).size() > 120) {
+                    *why = "each of `actions` must be { id, title } with a short title";
+                    return bad;
+                }
+                out["actions"].push_back({{"id", b["id"]}, {"title", oneLine(b["title"].get<std::string>())}});
+            }
+        }
+        return out;
+    }
+
+    void actionDone(uint64_t serial, uint64_t run, const std::string& pluginId, const std::string& name, bool ok,
+                    const std::string& text, Opens opens) {
+        if (stopping) return;
+        if (!ok) {  // stopped by the user (or the app): nobody waits; else the error
+            if (!text.empty()) postAction(PluginHostEvent::Kind::ActionError, pluginId, name, run, name + " couldn't do that: " + text);
+            return;
+        }
+        nlohmann::json value = nullptr;
+        if (!text.empty()) {
+            std::string why;
+            value = replyOf(text, &why);
+            if (value.is_discarded()) {
+                log(pluginId, LogLevel::Error, "The action's run returned what can't be shown: " + why);
+                postAction(PluginHostEvent::Kind::ActionError, pluginId, name, run,
+                           name + " couldn't do that: it returned what can't be shown (" + why + ")");
+                return;
+            }
+        }
+        postAction(PluginHostEvent::Kind::ActionResult, pluginId, name, run, "", std::move(value));
+        if (PluginCtx* p = bySerial(serial)) {
+            applyOpens(*p, 0, std::move(opens));
+            applyTurnOffs();
+        }
+    }
+
+    void stopAction(uint64_t run) {
+        for (auto& [id, owned] : loaded) {
+            PluginCtx& p = *owned;
+            for (const auto& [cid, c] : p.run->calls)
+                if (c.actionRun == run) {
+                    stopCall(p, cid, Limit::Closed, false);
+                    return;
+                }
+        }
+    }
+
     // ---- Commands ----------------------------------------------------------------------------
 
     void dispatch(const PluginEvent& ev) {
@@ -1632,6 +1766,7 @@ bool hasEntry(PluginCtx& p, const std::string& kind, const std::string& id) {
 void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, const std::string& title, js::Value fn) {
     PluginEntry info{kind, id, title};
     p.run->entries.push_back({info, std::move(fn), {}});
+    ++p.host.version;
     std::lock_guard<std::mutex> lock(p.host.mu);
     p.host.entryList[p.manifest.id].push_back(std::move(info));
 }
@@ -1639,6 +1774,7 @@ void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, cons
 void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent) {
     PluginEntry info{"screen", id, title, main};
     p.run->entries.push_back({info, std::move(render), std::move(onEvent)});
+    ++p.host.version;
     std::lock_guard<std::mutex> lock(p.host.mu);
     p.host.entryList[p.manifest.id].push_back(std::move(info));
 }
@@ -1795,6 +1931,25 @@ void PluginHost::closeScreen(uint64_t instance) {
     impl_->post([instance](Impl& h) { h.closeScreen(instance); });
 }
 
+uint64_t PluginHost::runAction(const std::string& pluginId, const std::string& kind, const std::string& actionId,
+                               nlohmann::ordered_json target, nlohmann::json again) {
+    const uint64_t run = ++gNextRun;
+    impl_->post([run, pluginId, kind, actionId, target = std::move(target), again = std::move(again)](Impl& h) {
+        h.runAction(run, pluginId, kind, actionId, target, again);
+    });
+    return run;
+}
+
+void PluginHost::stopAction(uint64_t run) {
+    impl_->post([run](Impl& h) { h.stopAction(run); });
+}
+
+void PluginHost::wake() {
+    impl_->post([](Impl& h) { h.activate(); });
+}
+
+uint64_t PluginHost::entriesVersion() const { return impl_->version.load(); }
+
 void PluginHost::answer(uint64_t requestId, bool yes) {
     impl_->post([requestId, yes](Impl& h) { h.answer(requestId, yes); });
 }
@@ -1839,6 +1994,7 @@ void PluginHost::setEnabled(const std::string& id, bool on) {
         if (f == fs_.end() || (on && (!f->manifest || !f->problem.empty()))) return;
     }
     impl_->state.setEnabled(id, on);
+    ++impl_->version;
     if (on) impl_->state.clearFailures(id);
     // Developer mode (loadEagerly): a plugin turned on loads at once, as at start. Otherwise
     // (the Kindle) it waits for its first event. Before start(), start() loads it.
@@ -1862,6 +2018,7 @@ void PluginHost::remove(const std::string& id) {
         h.problems.erase(id);
     }
     h.state.forget(id);
+    ++h.version;
     h.post([id](Impl& h) {
         h.failedLoad.erase(id);
         h.turnOffs.erase(id);

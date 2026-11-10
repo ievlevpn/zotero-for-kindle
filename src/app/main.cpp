@@ -383,6 +383,9 @@ int main(int argc, char** argv) {
     };
     updateListening();
     app.setPluginSink(pluginSink);
+    // Where plugins show in the app's screens (the reader's More…, item details, Home's launcher).
+    pluginEvents.attach(app);
+    app.setPluginEntries(&pluginEvents);
     // After a successful sync, plugins' background tasks run (the host allows each one once an
     // hour) inside a keep-awake hold of the screen thread's: see app/plugin_background.h.
     BackgroundRound backgroundRound(

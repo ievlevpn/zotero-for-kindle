@@ -338,12 +338,22 @@ TEST_CASE("plugin screen: the error state, with Back; Back always closes and tel
         CHECK(r.link.sent.size() == 1);  // the waiting tap is dropped
         CHECK(r.link.leftScreens.size() == 1);
     }
-    SUBCASE("an onEvent error is a toast") {
+    SUBCASE("an onEvent error shows in the action error pop-up; Close takes it away; Back still works") {
         Rig r;
         r.give(treeEvent(deckScreen()));
         r.give(PluginHostEvent{Kind::ScreenActionError, "riffle", "Feed Riffle", "Feed Riffle couldn't do that: boom", {}, 0, ""});
-        CHECK(r.nav.toasts == std::vector<std::string>{"Feed Riffle couldn't do that: boom"});
+        CHECK(r.nav.toasts.empty());
+        REQUIRE(r.screen.errorPopup());
+        CHECK(r.screen.errorPopup()->text() == "Feed Riffle couldn't do that: boom");
         CHECK(r.screen.state() == PluginScreen::State::Shown);
+        const size_t sent = r.link.sent.size();
+        r.tap(r.centre(r.laid().children.at(3).parts.at(0).rect));  // under the pop-up: not a tap on the screen
+        CHECK(r.link.sent.size() == sent);
+        r.tap(r.centre(r.screen.errorPopup()->closeRect()));
+        CHECK_FALSE(r.screen.errorPopup());
+        r.give(PluginHostEvent{Kind::ScreenActionError, "riffle", "Feed Riffle", "Feed Riffle couldn't do that: again", {}, 0, ""});
+        r.tap(r.centre(headerBackRect()));
+        CHECK(r.nav.pops == 1);
     }
 }
 

@@ -66,7 +66,9 @@ public:
     bool systemInk() const override { return hasSystemInk; }
     void setSystemInk(bool on) override { systemInkOn = on; }
     PluginSink& plugins() override { return pluginSink; }
+    PluginEntries* pluginEntries() override { return entries; }
     RecordingSink pluginSink;
+    PluginEntries* entries = nullptr;
     bool hasSystemInk = false, systemInkOn = false;
     int orientationChanges = 0;
 

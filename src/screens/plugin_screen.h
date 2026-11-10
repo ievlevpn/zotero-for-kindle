@@ -5,7 +5,8 @@
 // trees that come back (through a ScreenLink: PluginEvents over the PluginHost).
 //
 // - "Loading…" until the first tree; "<Plugin> can't show this screen right now" with Back when
-//   the host says so (ScreenError). An onEvent error is a toast; the tree that follows is drawn.
+//   the host says so (ScreenError). An onEvent error shows in the action result pop-up
+//   ("<Plugin> couldn't do that: …", Close); the tree that follows is drawn under it.
 // - Events go one at a time: the next is sent when the tree answering the last arrives. Taps made
 //   meanwhile wait in order; a deck swipe waiting already in the same direction isn't queued
 //   again. After 1 s of waiting, "Working…" shows.
@@ -25,6 +26,7 @@
 
 #include "plugins/host.h"
 #include "screens/plugin_blocks.h"
+#include "screens/plugin_result.h"
 #include "screens/screen.h"
 
 namespace zk {
@@ -66,6 +68,7 @@ public:
     bool sending() const { return acked_ < sent_; }   // an event is with the plugin
     const Laid* laid() const { return tree_ ? &laid_ : nullptr; }
     const FocusState& focus() const { return focus_; }
+    const PluginResult* errorPopup() const { return popup_.get(); }
     Rect area(Nav&) const;  // where the blocks go (above the keyboard)
     static Rect workingRect();
     static Rect backButtonRect();  // the error state's Back button
@@ -100,6 +103,7 @@ private:
     int64_t sentAtMs_ = 0;
     bool working_ = false;
     bool closedByPlugin_ = false, left_ = false;
+    std::unique_ptr<PluginResult> popup_;  // an onEvent error
 };
 
 }  // namespace zk

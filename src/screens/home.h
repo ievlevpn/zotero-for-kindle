@@ -39,6 +39,11 @@ public:
 
     static Rect syncIndicatorRect();
     static Rect settingsRect();
+    // The puzzle-piece icon left of the gear (Plugins, the launcher): only when some plugin has a
+    // main screen; a dot on it when a plugin has a badge.
+    static Rect pluginsRect();
+    bool pluginsIcon() const { return pluginsIcon_; }
+    bool pluginsDot() const { return pluginsDot_; }
     static Rect closeRect();  // "×": close Zotero, back to the Kindle
     static Rect searchFieldRect();
     static Rect cardRect();
@@ -75,6 +80,9 @@ private:
     int64_t total_ = 0;
     bool safe_ = false;                  // the safe-mode notice is wanted
     std::optional<std::string> update_;  // the version the banner names
+    bool pluginsIcon_ = false, pluginsDot_ = false;
+    uint64_t pluginsVersion_ = 0;
+    bool readPlugins(Nav&);  // true if the icon changed
 };
 
 }  // namespace zk

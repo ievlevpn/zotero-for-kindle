@@ -67,6 +67,8 @@ struct PluginCtx {
     js::Value zk;  // the plugin's global `zk`; installers add their members to it
     js::Value makePermissionError, makeLimitError;  // the error classes' factories (installCore)
     js::Value uiRender;  // (render, params) => Promise<JSON text of the tree> (installUi)
+    // (run, target, again) => Promise<"" (nothing returned) or JSON text of {text, actions?}> (installEntry)
+    js::Value actionRunner;
     std::unique_ptr<PluginRun> run;
     std::shared_ptr<void> storage;  // bindings_storage.cpp's state (no JavaScript values in it)
     std::shared_ptr<void> zotero;   // bindings_zotero.cpp's state (no JavaScript values in it)

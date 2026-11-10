@@ -117,6 +117,7 @@ void PluginScreen::receive(const PluginHostEvent& ev, Nav& nav) {
         case PluginHostEvent::Kind::ScreenError:
             state_ = State::Failed;
             error_ = ev.text;
+            popup_.reset();
             queue_.clear();
             pendingChange_.clear();
             working_ = false;
@@ -125,7 +126,9 @@ void PluginScreen::receive(const PluginHostEvent& ev, Nav& nav) {
             nav.redrawAll(Waveform::Quality);
             break;
         case PluginHostEvent::Kind::ScreenActionError:
-            nav.toast(ev.text);
+            if (popup_) nav.damage(popup_->rect(), Waveform::Quality);
+            popup_ = std::make_unique<PluginResult>(pluginName_ + " · " + title_, ev.text, Rect{0, 0, W(), H()});
+            nav.damage(popup_->rect(), Waveform::Ui);
             break;
         case PluginHostEvent::Kind::ScreenClose:
             closedByPlugin_ = true;
@@ -282,6 +285,10 @@ void PluginScreen::onGesture(const Gesture& g, Nav& nav) {
         leave(nav);
         return;
     }
+    if (popup_) {  // the error pop-up takes every other gesture until it is closed
+        if (popup_->onGesture(g, nav) == PluginResult::Status::Closed) popup_.reset();
+        return;
+    }
     if (state_ == State::Failed) {
         if (g.type == GestureType::Tap && backButtonRect().contains(g.pos)) leave(nav);
         return;
@@ -348,6 +355,7 @@ void PluginScreen::draw(Canvas& canvas) {
             if (working_) drawToast(cr, workingRect(), "Working…");
             break;
     }
+    if (popup_) popup_->draw(cr);
 }
 
 }  // namespace zk

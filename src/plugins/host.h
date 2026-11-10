@@ -87,10 +87,17 @@ struct PluginHostDeps {
 // ScreenError: the screen can't be shown (render failed, an invalid tree, the plugin turned off or
 // restarted): `text` "<Plugin> can't show this screen right now"; nothing more comes for it.
 // ScreenActionError: its onEvent failed: `text` "<Plugin> couldn't do that: <message>"; a tree follows.
+//
+// Actions (zk.selectionAction / zk.itemAction; `requestId` is runAction's number):
+// ActionResult: `value` {text, actions: [{id, title}] (at most 2)} for the result pop-up, or null
+// (run returned nothing: no pop-up). ActionError: `text` "<Plugin> couldn't do that: <message>"
+// (run threw, went over its budget, returned what can't be shown, or the plugin stopped).
+// A run stopped with stopAction() gets neither.
 struct PluginHostEvent {
     enum class Kind {
         Confirm, Badge, Disabled, ChangesQueued, Log, Withdrawn, BackgroundDone,
-        ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError
+        ScreenTree, ScreenOpen, ScreenClose, ScreenError, ScreenActionError,
+        ActionResult, ActionError
     } kind;
     std::string pluginId, pluginName, text;
     std::vector<std::string> lines;
@@ -169,6 +176,20 @@ public:
     // The user left the screen (Back, or it went with its tab): it is closed now; the plugin gets
     // a `back` event, and the screen below a `result` event.
     void closeScreen(uint64_t instance);
+    // Runs a plugin's action (kind "selectionAction" or "itemAction") on `target` (zk.d.ts's
+    // TextSelection or Item); `again` ({action, text}: a pop-up button) or null. User-caused, with
+    // deps.actionBudgetMs (waiting for the user's confirmation is free). Returns its number at
+    // once; an ActionResult or ActionError with it follows. zk.ui.open from the run opens its
+    // screens (ScreenOpen, parent 0) when the run ends well.
+    uint64_t runAction(const std::string& pluginId, const std::string& kind, const std::string& actionId,
+                       nlohmann::ordered_json target, nlohmann::json again = nullptr);
+    // The user closed the result pop-up: the run is stopped (not a failure); nothing more comes for it.
+    void stopAction(uint64_t run);
+    // Loads every enabled plugin not loaded yet (so their entry points are known), as an event would.
+    void wake();
+    // Changes whenever the entry points, badges, or which plugins are on or loaded may have changed
+    // (cheap; any thread).
+    uint64_t entriesVersion() const;
     // The user's answer to a Confirm event.
     void answer(uint64_t requestId, bool yes);
     bool poll(PluginHostEvent&);

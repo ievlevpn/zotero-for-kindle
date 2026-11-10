@@ -23,7 +23,83 @@ void PluginEvents::rebind(PluginHost* host, App& app) {
         mail_[instance].push_back(std::move(ev));
     }
     screens_.clear();  // nothing of them goes to the next host (take() still hands over the error)
+    for (const auto& [run, name] : runs_) outcomes_[run] = ActionOutcome{true, false, name + " couldn't do that: it stopped", {}};
+    runs_.clear();
     host_ = host;
+    woken_ = false;
+    ++rebinds_;
+}
+
+std::vector<PluginStatus> PluginEvents::running() {
+    if (!host_ || !running_) return {};
+    std::vector<PluginStatus> all = host_->status(), out;
+    bool asleep = false;
+    for (auto& s : all) {
+        if (!s.enabled || s.stopped || !s.folder.manifest || !s.folder.problem.empty()) continue;
+        if (!s.loaded) asleep = true;
+        else out.push_back(std::move(s));
+    }
+    if (asleep && !woken_) {
+        woken_ = true;
+        host_->wake();
+    }
+    return out;
+}
+
+std::vector<PluginAction> PluginEvents::actions(const std::string& kind) {
+    std::vector<PluginAction> out;
+    for (const auto& s : running())
+        for (const auto& e : s.entries)
+            if (e.kind == kind) out.push_back({s.folder.dir, s.folder.manifest->name, e.id, e.title});
+    return out;
+}
+
+std::vector<PluginLaunch> PluginEvents::mainScreens() {
+    std::vector<PluginLaunch> out;
+    for (const auto& s : running())
+        for (const auto& e : s.entries)
+            if (e.kind == "screen" && e.main) out.push_back({s.folder.dir, s.folder.manifest->name, e.id, e.title, s.badge});
+    return out;
+}
+
+bool PluginEvents::anyBadge() {
+    for (const auto& s : running())
+        if (!s.badge.empty()) return true;
+    return false;
+}
+
+uint64_t PluginEvents::version() {
+    // Plugins starting or stopping to run, or another host, change it too.
+    return ((host_ ? host_->entriesVersion() : 0) << 8) + (rebinds_ << 1) + (running_ ? 1 : 0);
+}
+
+uint64_t PluginEvents::run(const PluginAction& a, const std::string& kind, nlohmann::ordered_json target, nlohmann::json again) {
+    if (!host_ || !running_) {
+        static uint64_t offline = 0;
+        const uint64_t run = (uint64_t{1} << 63) + ++offline;  // never a host's
+        outcomes_[run] = ActionOutcome{true, false, a.pluginName + " couldn't do that: plugins aren't running", {}};
+        return run;
+    }
+    const uint64_t run = host_->runAction(a.pluginId, kind, a.id, std::move(target), std::move(again));
+    runs_[run] = a.pluginName;
+    return run;
+}
+
+std::optional<ActionOutcome> PluginEvents::take(uint64_t run) {
+    auto it = outcomes_.find(run);
+    if (it == outcomes_.end()) return std::nullopt;
+    ActionOutcome out = std::move(it->second);
+    outcomes_.erase(it);
+    return out;
+}
+
+void PluginEvents::stop(uint64_t run) {
+    outcomes_.erase(run);
+    if (runs_.erase(run) && host_) host_->stopAction(run);
+}
+
+void PluginEvents::openScreen(const std::string& pluginId, const std::string& screenId) {
+    if (app_) openScreen(*app_, pluginId, screenId);
 }
 
 void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pluginName, const std::string& title) {
@@ -113,6 +189,21 @@ void PluginEvents::poll(App& app) {
             case PluginHostEvent::Kind::ScreenClose:
                 if (screens_.erase(ev.instance)) mail_[ev.instance].push_back(std::move(ev));  // the screen pops itself
                 break;
+            case PluginHostEvent::Kind::ActionResult:
+            case PluginHostEvent::Kind::ActionError: {
+                if (!runs_.erase(ev.requestId)) break;  // stopped meanwhile
+                ActionOutcome out;
+                out.error = ev.kind == PluginHostEvent::Kind::ActionError;
+                if (out.error) out.text = ev.text;
+                else if (ev.value.is_null()) out.none = true;
+                else {
+                    out.text = ev.value.value("text", "");
+                    for (const auto& b : ev.value.value("actions", nlohmann::json::array()))
+                        out.buttons.emplace_back(b.value("id", ""), b.value("title", ""));
+                }
+                outcomes_[ev.requestId] = std::move(out);
+                break;
+            }
             case PluginHostEvent::Kind::ScreenTree:
             case PluginHostEvent::Kind::ScreenError:
             case PluginHostEvent::Kind::ScreenActionError:

@@ -1,6 +1,7 @@
 // zk.selectionAction, zk.itemAction: entry points the app shows; checked and recorded (kept in the
 // plugin's run state, listed in PluginStatus). zk.screen is bindings_ui.cpp's.
 #include <regex>
+#include <stdexcept>
 
 #include "plugins/plugin_ctx.h"
 
@@ -80,11 +81,28 @@ JSValue jsItemAction(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     return action(c, argc > 0 ? argv[0] : JS_UNDEFINED, "zk.itemAction", "itemAction");
 }
 
+// Runs an action's `run` and turns what it returned into JSON text inside the call (a toJSON or a
+// getter runs in the call's budget): "" for nothing, else {text, actions?} (a string is {text}).
+constexpr char kRunnerJs[] = R"JS((run, target, again) => Promise.resolve()
+  .then(() => run(target, again))
+  .then((r) => {
+    if (r === undefined || r === null) return "";
+    const s = JSON.stringify(typeof r === "string" ? { text: r } : r);
+    return typeof s === "string" ? s : "null";
+  }))JS";
+
 }  // namespace
 
 void installEntry(PluginCtx& p) {
-    defineFunction<jsSelectionAction>(p.cx.raw(), p.zk.raw(), "selectionAction", 1);
-    defineFunction<jsItemAction>(p.cx.raw(), p.zk.raw(), "itemAction", 1);
+    JSContext* c = p.cx.raw();
+    defineFunction<jsSelectionAction>(c, p.zk.raw(), "selectionAction", 1);
+    defineFunction<jsItemAction>(c, p.zk.raw(), "itemAction", 1);
+    const char* name = "<zk actions>";
+    p.actionRunner = js::Value(c, JS_Eval(c, kRunnerJs, sizeof kRunnerJs - 1, name, JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_STRICT));
+    if (JS_IsException(p.actionRunner.raw())) {
+        js::Value ex(c, JS_GetException(c));
+        throw std::runtime_error(std::string(name) + ": " + text(c, ex.raw()));
+    }
 }
 
 }  // namespace zk::plugins

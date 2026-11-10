@@ -90,6 +90,8 @@ public:
     // Where the screens' plugin events go (the plugin host's queue); none until set.
     PluginSink& plugins() override { return *pluginSink_; }
     void setPluginSink(PluginSink& s) { pluginSink_ = &s; }
+    PluginEntries* pluginEntries() override { return pluginEntries_; }
+    void setPluginEntries(PluginEntries* e) { pluginEntries_ = e; }
 
     // The app's own confirmation (a plugin's removal): drawn over whatever screen shows, taking
     // every gesture, key and pen stroke until one of its buttons answers it; `answered` is then
@@ -179,6 +181,7 @@ private:
     int64_t lastInkPresentMs_ = -1'000'000;
     std::function<void()> pollHook_;
     PluginSink* pluginSink_ = &nullPluginSink();
+    PluginEntries* pluginEntries_ = nullptr;
     struct Question {
         uint64_t id = 0;
         PluginConfirm view;

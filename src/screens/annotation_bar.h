@@ -2,14 +2,20 @@
 // The bar over a selection or a tapped highlight (spec §6.3 state 3): Zotero's 8 colours as
 // gray dots with their names, then Highlight · Underline · Note (new) or Comment · Delete
 // (existing). Picking a colour only selects it; the buttons commit.
+//
+// When some plugin has selection actions, the Create bar has a fourth button, More…: it turns
+// the bar into a short list of those actions (title, the plugin's name dimmed beside it). While
+// one runs, More… reads "Working…".
 
 #include <array>
 #include <string>
+#include <vector>
 
 #include <cairo.h>
 
 #include "core/geometry.h"
 #include "platform/input.h"
+#include "screens/plugin_entries.h"
 #include "store/records.h"
 
 namespace zk {
@@ -23,14 +29,15 @@ const std::array<ZoteroColour, 8>& zoteroColours();
 class AnnotationBar {
 public:
     enum class Mode { Create, Edit };
-    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete };
+    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin };
     struct Hit {
         Action action = Action::None;
-        int colour = -1;
+        int colour = -1;  // Colour: the dot; Plugin: the action's index
     };
 
     // `anchor`: the selection or highlight; the bar sits above it, or below if there's no room.
-    AnnotationBar(Mode, Rect anchor, std::string colour);
+    // `more`: the More… button (Create only; some plugin has selection actions).
+    AnnotationBar(Mode, Rect anchor, std::string colour, bool more = false);
 
     Mode mode() const { return mode_; }
     Rect rect() const { return rect_; }
@@ -38,6 +45,12 @@ public:
     Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete
     const std::string& colour() const { return colour_; }
     void setColour(std::string c) { colour_ = std::move(c); }
+    // More… tapped: the bar lists these instead (empty: back to the buttons).
+    void showActions(std::vector<PluginAction>);
+    bool listing() const { return !actions_.empty(); }
+    Rect actionRect(int i) const;  // a listed action's row
+    void setWorking(bool w) { working_ = w; }
+    bool working() const { return working_; }
 
     void draw(cairo_t*) const;
     Hit hit(Point) const;
@@ -45,11 +58,14 @@ public:
     static constexpr int kH = 250;
 
 private:
-    int buttons() const { return mode_ == Mode::Create ? 3 : 2; }
+    int buttons() const { return mode_ == Mode::Create ? 3 + more_ : 2; }
+    void place(int h);
 
     Mode mode_;
-    Rect rect_;
+    Rect anchor_, rect_;
     std::string colour_;
+    bool more_ = false, working_ = false;
+    std::vector<PluginAction> actions_;
 };
 
 class Nav;

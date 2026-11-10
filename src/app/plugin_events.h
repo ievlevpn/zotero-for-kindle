@@ -15,6 +15,10 @@
 //    parent (if the parent is still open; else the host is told it went); trees, errors and
 //    ScreenClose wait for their screen, which takes them when it is visible (PluginScreen::onTick).
 //    rebind() gives every open plugin screen the error state.
+//  - Entry points (PluginEntries, for the reader's bar, item details and Home): what the enabled
+//    plugins registered, only while plugins run; asking wakes the host once (plugins load lazily)
+//    so their entries become known. ActionResult/ActionError wait for take(); a rebind answers
+//    the runs still waiting with an error.
 
 #include <cstdint>
 #include <deque>
@@ -25,6 +29,7 @@
 #include <vector>
 
 #include "plugins/host.h"
+#include "screens/plugin_entries.h"
 #include "screens/plugin_screen.h"
 #include "sync/sync_control.h"
 
@@ -37,7 +42,7 @@ class App;
 // the other events of that sync. The first full sync of a library carries no per-item events.
 void forwardSyncToPlugins(const SyncEvent&, PluginSink&);
 
-class PluginEvents final : public ScreenLink {
+class PluginEvents final : public ScreenLink, public PluginEntries {
 public:
     explicit PluginEvents(PluginHost*);  // nullptr: no host (nothing to poll)
     void poll(App&);
@@ -59,6 +64,16 @@ public:
     void send(uint64_t instance, nlohmann::json event) override;
     void left(uint64_t instance) override;
     bool take(uint64_t instance, PluginHostEvent& out) override;
+    // PluginEntries. attach() first: the app the launcher pushes screens on.
+    void attach(App& app) { app_ = &app; }
+    std::vector<PluginAction> actions(const std::string& kind) override;
+    std::vector<PluginLaunch> mainScreens() override;
+    bool anyBadge() override;
+    uint64_t version() override;
+    uint64_t run(const PluginAction&, const std::string& kind, nlohmann::ordered_json target, nlohmann::json again = nullptr) override;
+    std::optional<ActionOutcome> take(uint64_t run) override;
+    void stop(uint64_t run) override;
+    void openScreen(const std::string& pluginId, const std::string& screenId) override;
 
     static constexpr int64_t kToastGapMs = 3000;  // a toast's time on screen
 
@@ -72,6 +87,12 @@ private:
     std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them
     void pushScreen(App&, uint64_t instance, const std::string& pluginName, const std::string& title);
+    App* app_ = nullptr;
+    bool woken_ = false;
+    uint64_t rebinds_ = 0;
+    std::map<uint64_t, std::string> runs_;            // actions running: run → plugin name
+    std::map<uint64_t, ActionOutcome> outcomes_;      // come, not taken yet
+    std::vector<PluginStatus> running();              // enabled, loaded plugins (wakes the host once)
 };
 
 }  // namespace zk

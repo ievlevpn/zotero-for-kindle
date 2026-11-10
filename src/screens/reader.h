@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "docs/render_worker.h"
+#include "screens/plugin_result.h"
 #include "screens/screen.h"
 #include "ui/text_field.h"
 
@@ -119,6 +120,7 @@ public:
     bool noteOpen() const { return note_.has_value(); }
     AnnotationEditor* annotationEditor() { return editor_.get(); }
     Rect noteRect() const { return noteBox_; }  // the note box, above the keyboard as it was when opened
+    const PluginResult* pluginResult() const { return result_.get(); }  // a selection action's run
 
     // Handwriting (PDF, Scribe): strokes wait this long after the last one, then become one
     // Zotero ink annotation (a page turn sends them at once).
@@ -145,7 +147,10 @@ public:
     static constexpr int64_t kMaxInkSpanMs = 10000;
     void onHide(Nav&) override { commitInk(); }
     void onBackground(Nav&) override { commitInk(); }
-    void onClose(Nav& nav) override { flushInk(nav); }
+    void onClose(Nav& nav) override {
+        if (result_) result_->stop();
+        flushInk(nav);
+    }
 
 private:
     void startSelection(Point at, Nav&);
@@ -199,6 +204,10 @@ private:
     Rect noteBox_;
     std::string colour_ = "#ffd400";  // the colour used last
     std::unique_ptr<AnnotationEditor> editor_;
+    // A plugin's selection action (More… on the bar): running ("Working…" on the bar), then its pop-up.
+    std::unique_ptr<PluginResult> result_;
+    void tickResult(Nav&);
+    void dropSelection();  // selection and bar gone (no repaint); a first run still going is stopped
     std::optional<AnnotationRecord> openAt_;  // asked for before the book opened
     void markJumpOrigin();  // before a jump: where Back returns to
     void back(Nav&);

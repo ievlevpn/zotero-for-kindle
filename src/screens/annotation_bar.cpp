@@ -8,6 +8,7 @@
 #include "docs/document.h"
 #include "screens/reader.h"
 #include "screens/screen.h"
+#include "ui/text.h"
 #include "ui/text_field.h"
 #include "ui/paint.h"
 #include "ui/theme.h"
@@ -35,14 +36,31 @@ const std::array<ZoteroColour, 8>& zoteroColours() {
     return colours;
 }
 
-AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour)
-    : mode_(mode), colour_(std::move(colour)) {
+AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more)
+    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode == Mode::Create) {
+    place(kH);
+}
+
+void AnnotationBar::place(int h) {
     const Rect page = ReaderScreen::pageArea();
     const int w = page.w - 2 * kSide;
-    int y = anchor.y - kH - kGap;
-    if (y < page.y + kGap) y = anchor.y + anchor.h + kGap;      // no room above: below
-    if (y + kH > page.y + page.h - kGap) y = page.y + page.h - kGap - kH;  // and never off the page
-    rect_ = {page.x + kSide, y, w, kH};
+    int y = anchor_.y - h - kGap;
+    if (y < page.y + kGap) y = anchor_.y + anchor_.h + kGap;      // no room above: below
+    if (y + h > page.y + page.h - kGap) y = page.y + page.h - kGap - h;  // and never off the page
+    rect_ = {page.x + kSide, y, w, h};
+}
+
+constexpr int kActionRowH = 96;
+
+void AnnotationBar::showActions(std::vector<PluginAction> actions) {
+    actions_ = std::move(actions);
+    const int fit = (ReaderScreen::pageArea().h - 2 * kGap - 2 * kPad) / kActionRowH;
+    if (static_cast<int>(actions_.size()) > fit) actions_.resize(static_cast<size_t>(std::max(fit, 0)));
+    place(actions_.empty() ? kH : 2 * kPad + static_cast<int>(actions_.size()) * kActionRowH);
+}
+
+Rect AnnotationBar::actionRect(int i) const {
+    return {rect_.x + kPad, rect_.y + kPad + i * kActionRowH, rect_.w - 2 * kPad, kActionRowH};
 }
 
 Rect AnnotationBar::dotRect(int i) const {
@@ -63,6 +81,17 @@ void AnnotationBar::draw(cairo_t* cr) const {
     gray(cr, kInk);
     cairo_set_line_width(cr, 3);
     cairo_stroke(cr);
+    if (listing()) {  // More…: the plugins' actions, the plugin's name dimmed beside each
+        const TextStyle title{kSans, 8, 500}, name{kSans, 7, 400, false, kSecondary};
+        for (int i = 0; i < static_cast<int>(actions_.size()); ++i) {
+            const Rect r = actionRect(i);
+            const int nameW = std::min(measureText(actions_[i].pluginName, name, r.w / 2, 1).width + 10, r.w / 2);
+            centredText(cr, actions_[i].title, title, {r.x + 20, r.y, r.w - nameW - 60, r.h}, Align::Left);
+            centredText(cr, actions_[i].pluginName, name, {r.x + r.w - nameW - 20, r.y, nameW, r.h}, Align::Right);
+            if (i + 1 < static_cast<int>(actions_.size())) hRule(cr, r.y + r.h - 1, r.x, r.x + r.w);
+        }
+        return;
+    }
     for (int i = 0; i < 8; ++i) {
         const Rect d = dotRect(i);
         const auto& c = zoteroColours()[i];
@@ -81,16 +110,21 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         centredText(cr, c.name, {kSans, 6, colour_ == c.hex ? 700 : 400, false, kSecondary}, {d.x, d.y + 84, d.w, 40});
     }
-    static const char* create[] = {"Highlight", "Underline", "Note"};
+    static const char* create[] = {"Highlight", "Underline", "Note", "More…"};
     static const char* edit[] = {"Comment", "Delete"};
     for (int i = 0; i < buttons(); ++i)
-        drawButton(cr, buttonRect(i), mode_ == Mode::Create ? create[i] : edit[i], false);
+        drawButton(cr, buttonRect(i), mode_ == Mode::Create ? (i == 3 && working_ ? "Working…" : create[i]) : edit[i], false);
 }
 
 AnnotationBar::Hit AnnotationBar::hit(Point p) const {
+    if (listing()) {
+        for (int i = 0; i < static_cast<int>(actions_.size()); ++i)
+            if (actionRect(i).contains(p)) return {Action::Plugin, i};
+        return {};
+    }
     for (int i = 0; i < 8; ++i)
         if (dotRect(i).contains(p)) return {Action::Colour, i};
-    static const Action create[] = {Action::Highlight, Action::Underline, Action::Note};
+    static const Action create[] = {Action::Highlight, Action::Underline, Action::Note, Action::More};
     static const Action edit[] = {Action::Comment, Action::Delete};
     for (int i = 0; i < buttons(); ++i)
         if (buttonRect(i).contains(p)) return {mode_ == Mode::Create ? create[i] : edit[i], -1};

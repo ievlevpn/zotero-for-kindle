@@ -1,6 +1,8 @@
 #include "screens/home.h"
 
 #include "screens/item_details.h"
+#include "screens/plugin_entries.h"
+#include "screens/plugin_launcher.h"
 
 #include <algorithm>
 
@@ -53,6 +55,7 @@ HomeScreen::HomeScreen(SyncStatus& status, HomeActions actions, std::function<in
 Rect HomeScreen::closeRect() { return {W() - kMargin - 80, 34, 80, 96}; }
 Rect HomeScreen::syncIndicatorRect() { return {W() - kMargin - 180, 34, 80, 96}; }
 Rect HomeScreen::settingsRect() { return {W() - kMargin - 280, 34, 80, 96}; }
+Rect HomeScreen::pluginsRect() { return {W() - kMargin - 380, 34, 80, 96}; }
 Rect HomeScreen::searchFieldRect() { return {kMargin, 150, W() - 2 * kMargin, 92}; }
 Rect HomeScreen::cardRect() { return {kMargin, kCardY, W() - 2 * kMargin, kCoverH}; }
 
@@ -126,7 +129,20 @@ void HomeScreen::reload(Library& lib) {
     }
 }
 
+bool HomeScreen::readPlugins(Nav& nav) {
+    PluginEntries* e = nav.pluginEntries();
+    const uint64_t v = e ? e->version() : 0;
+    if (e && v == pluginsVersion_) return false;
+    pluginsVersion_ = v;
+    const bool icon = e && !e->mainScreens().empty(), dot = icon && e->anyBadge();
+    if (icon == pluginsIcon_ && dot == pluginsDot_) return false;
+    pluginsIcon_ = icon;
+    pluginsDot_ = dot;
+    return true;
+}
+
 void HomeScreen::onShow(Nav& nav) {
+    readPlugins(nav);
     nowMs_ = nav.nowMs();
     update_ = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
     safe_ = actions_.safeModeNotice && actions_.safeModeNotice();
@@ -135,6 +151,7 @@ void HomeScreen::onShow(Nav& nav) {
 }
 
 void HomeScreen::onTick(Nav& nav) {
+    if (nav.pluginEntries() && readPlugins(nav)) nav.damage(pluginsRect(), Waveform::Ui);
     auto now = actions_.updateNotice ? actions_.updateNotice() : std::nullopt;
     const bool safe = actions_.safeModeNotice && actions_.safeModeNotice();
     if (now == update_ && safe == safe_) return;
@@ -163,6 +180,28 @@ void HomeScreen::draw(Canvas& canvas) {
     if (!line.empty()) drawText(cr, line, {kSans, 6.5, 400, false, kTertiary}, {kMargin + 4, 108, contentW - 300, 34}, 1);
     const Rect gear = settingsRect();
     gearIcon(cr, gear.x + gear.w / 2.0, gear.y + gear.h / 2.0, 22, kSecondary);
+    if (pluginsIcon_) {  // a puzzle piece: a square with a knob on top and on the right
+        const Rect pr = pluginsRect();
+        const double cx = pr.x + pr.w / 2.0 - 4, cy = pr.y + pr.h / 2.0 + 4, s = 17;
+        gray(cr, kSecondary);
+        cairo_set_line_width(cr, 5);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_move_to(cr, cx - s, cy - s);
+        cairo_line_to(cr, cx - 6, cy - s);
+        cairo_arc(cr, cx, cy - s - 2, 7, 3.14159265 * 0.85, 3.14159265 * 2.15);
+        cairo_line_to(cr, cx + s, cy - s);
+        cairo_line_to(cr, cx + s, cy - 6);
+        cairo_arc(cr, cx + s + 2, cy, 7, 3.14159265 * 1.35, 3.14159265 * 2.65);
+        cairo_line_to(cr, cx + s, cy + s);
+        cairo_line_to(cr, cx - s, cy + s);
+        cairo_close_path(cr);
+        cairo_stroke(cr);
+        if (pluginsDot_) {
+            gray(cr, kInk);
+            cairo_arc(cr, pr.x + pr.w - 10, pr.y + 22, 10, 0, 2 * 3.14159265);
+            cairo_fill(cr);
+        }
+    }
     status_.drawIndicator(cr, syncIndicatorRect());
     {
         const Rect x = closeRect();
@@ -307,6 +346,10 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (settingsRect().contains(g.pos)) {
         if (actions_.openSettings) actions_.openSettings();
+        return;
+    }
+    if (pluginsIcon_ && pluginsRect().contains(g.pos)) {
+        nav.push(std::make_unique<PluginLauncherScreen>());
         return;
     }
     if (searchFieldRect().contains(g.pos)) {

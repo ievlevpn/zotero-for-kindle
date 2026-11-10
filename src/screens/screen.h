@@ -20,6 +20,7 @@
 namespace zk {
 
 class Screen;
+class PluginEntries;  // plugin_entries.h
 
 class Nav {
 public:
@@ -47,6 +48,8 @@ public:
     virtual void setSystemInk(bool /*on*/) {}
     // Where plugin events go (src/plugins/events.h): queuing only, never waits. Drops them by default.
     virtual PluginSink& plugins() { return nullPluginSink(); }
+    // Plugins' entry points and actions (plugin_entries.h); null: none (no plugin shows anywhere).
+    virtual PluginEntries* pluginEntries() { return nullptr; }
 };
 
 // What a list row shows instead of its byline (download progress or an error), by attachment key.

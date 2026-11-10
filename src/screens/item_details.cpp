@@ -1,6 +1,7 @@
 #include "screens/item_details.h"
 
 #include "screens/item_sheet.h"
+#include "plugins/identifiers.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -38,9 +39,37 @@ std::vector<Rect> ItemDetailsScreen::removeRects() const {
     return out;
 }
 
+std::vector<Rect> ItemDetailsScreen::actionRects() const { return actionRects_; }
+
 void ItemDetailsScreen::onShow(Nav& nav) {
     if (auto d = nav.library().details(row_.key)) details_ = std::move(*d);
     if (auto r = nav.library().rowFor(row_.key)) row_ = std::move(*r);
+    PluginEntries* e = nav.pluginEntries();
+    entriesVersion_ = e ? e->version() : 0;
+    if (!result_) actions_ = e ? e->actions("itemAction") : std::vector<PluginAction>{};
+}
+
+void ItemDetailsScreen::onTick(Nav& nav) {
+    PluginEntries* e = nav.pluginEntries();
+    if (e && !result_ && e->version() != entriesVersion_) {  // plugins loaded, turned on or off meanwhile
+        entriesVersion_ = e->version();
+        auto now = e->actions("itemAction");
+        bool same = now.size() == actions_.size();
+        for (size_t i = 0; same && i < now.size(); ++i) same = now[i].pluginId == actions_[i].pluginId && now[i].id == actions_[i].id;
+        actions_ = std::move(now);
+        if (!same) nav.damage({0, 0, W(), H()}, Waveform::Ui);
+    }
+    if (!result_) return;
+    const bool working = result_->running() && !result_->shown();
+    if (result_->tick(nav) == PluginResult::Status::Closed) result_.reset();
+    const bool now = result_ && result_->running() && !result_->shown();
+    if (working != now && running_ >= 0 && running_ < static_cast<int>(actionRects_.size()))
+        nav.damage(actionRects_[static_cast<size_t>(running_)], Waveform::Ui);
+    if (!result_) running_ = -1;
+}
+
+void ItemDetailsScreen::onClose(Nav&) {
+    if (result_) result_->stop();
 }
 
 void ItemDetailsScreen::draw(Canvas& canvas) {
@@ -94,6 +123,25 @@ void ItemDetailsScreen::draw(Canvas& canvas) {
         }
         y += 12;
     }
+    // The plugins' item actions: title, and the plugin's name (or "Working…") on the right.
+    actionRects_.clear();
+    if (!actions_.empty()) {
+        drawText(cr, "Plugins", label, {x, y, w, 40}, 1);
+        y += 50;
+        const TextStyle quiet{kSans, 7, 400, false, kSecondary};
+        for (size_t i = 0; i < actions_.size(); ++i) {
+            const Rect r{x, y, w, 84};
+            const bool working = static_cast<int>(i) == running_ && result_ && result_->running() && !result_->shown();
+            const std::string side = working ? "Working…" : actions_[i].pluginName;
+            const int sideW = std::min(measureText(side, quiet, w / 2, 1).width + 10, w / 2);
+            centredText(cr, actions_[i].title, value, {r.x, r.y, r.w - sideW - 30, r.h}, Align::Left);
+            centredText(cr, side, quiet, {r.x + r.w - sideW, r.y, sideW, r.h}, Align::Right);
+            hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
+            actionRects_.push_back(r);
+            y += 84;
+        }
+        y += 28;
+    }
     if (!details_.abstract.empty()) {
         drawText(cr, "Abstract", label, {x, y, w, 40}, 1);
         y += 44;
@@ -101,9 +149,17 @@ void ItemDetailsScreen::draw(Canvas& canvas) {
         if (bottom - y > 50) drawText(cr, details_.abstract, body, {x, y, w, bottom - y}, 1000);
     }
     if (!details_.files.empty() && open_) drawButton(cr, openRect(), "Open", true);
+    if (result_) result_->draw(cr);
 }
 
 void ItemDetailsScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (result_ && result_->shown()) {  // the result pop-up takes every gesture until it is closed
+        if (result_->onGesture(g, nav) == PluginResult::Status::Closed) {
+            result_.reset();
+            running_ = -1;
+        }
+        return;
+    }
     if (g.type != GestureType::Tap) return;
     if (headerBackRect().contains(g.pos)) {
         nav.pop();
@@ -113,6 +169,17 @@ void ItemDetailsScreen::onGesture(const Gesture& g, Nav& nav) {
         open_(row_);
         return;
     }
+    for (size_t i = 0; i < actionRects_.size() && i < actions_.size(); ++i)
+        if (actionRects_[i].contains(g.pos)) {
+            PluginEntries* e = nav.pluginEntries();
+            auto item = nav.library().item(row_.key);
+            if (!e || !item || result_) return;  // one run at a time
+            result_ = std::make_unique<PluginResult>(*e, actions_[i], "itemAction",
+                                                     plugins::itemJson(*item, nav.library().isRead(row_.key)), Rect{0, 0, W(), H()});
+            running_ = static_cast<int>(i);
+            nav.damage(actionRects_[i], Waveform::Ui);
+            return;
+        }
     for (const auto& [key, r] : removeTargets_)
         if (r.contains(g.pos)) {
             if (confirming_ != key) {

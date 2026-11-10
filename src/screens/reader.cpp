@@ -11,6 +11,8 @@
 #include "app/settings_store.h"
 #include "core/log.h"
 #include "screens/annotation_bar.h"
+#include "plugins/events.h"
+#include "plugins/identifiers.h"
 #include "screens/reader_menus.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -303,6 +305,34 @@ void ReaderScreen::onTick(Nav& nav) {
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     if (!inkPending_.empty() && !inkDown_ && nav.nowMs() - inkLastMs_ >= kInkCommitMs) commitInk();
     pumpEvents(nav, true);
+    tickResult(nav);
+}
+
+void ReaderScreen::tickResult(Nav& nav) {
+    if (!result_) return;
+    const bool before = result_->shown();
+    const PluginResult::Status st = result_->tick(nav);
+    if (st == PluginResult::Status::Closed) {  // nothing to show: the selection stays as it was
+        result_.reset();
+        if (bar_ && bar_->working()) {
+            bar_->setWorking(false);
+            nav.damage(bar_->rect(), Waveform::Ui);
+        }
+    } else if (!before && result_->shown() && (selection_ || bar_)) {  // the pop-up replaces the selection
+        dropSelection();
+        nav.damage(pageArea(), Waveform::Quality);
+    }
+}
+
+void ReaderScreen::dropSelection() {
+    if (result_ && !result_->shown()) {
+        result_->stop();
+        result_.reset();
+    }
+    selecting_ = selDragging_ = false;
+    selection_.reset();
+    bar_.reset();
+    note_.reset();
 }
 
 void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
@@ -374,10 +404,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 if (e.page != page_ && (selecting_ || selection_ || editor_)) {  // the page changed under them
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
-                    selecting_ = selDragging_ = false;
-                    selection_.reset();
-                    bar_.reset();
-                    note_.reset();
+                    dropSelection();
                 }
                 image_ = e.image;
                 highlights_ = e.highlights;
@@ -562,6 +589,10 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
             nav.sync().pushSoon();
             nav.toast("Marked as read.");
         }
+        return;
+    }
+    if (result_ && result_->shown()) {  // the result pop-up takes every gesture until it is closed
+        if (result_->onGesture(g, nav) == PluginResult::Status::Closed) result_.reset();
         return;
     }
     if (linkPopup_) {  // any gesture closes it; its button follows the link
@@ -759,7 +790,10 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
 
 void ReaderScreen::showBar(Nav& nav) {
     if (!selection_) return;
-    bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_);
+    PluginEntries* e = nav.pluginEntries();
+    const bool more = e && !e->actions("selectionAction").empty();
+    bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more);
+    bar_->setWorking(result_ && result_->running());
     nav.damage(bar_->rect(), Waveform::Ui);
 }
 
@@ -777,6 +811,33 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
         case AnnotationBar::Action::Underline:
             saveSelection("underline", "", nav);
             break;
+        case AnnotationBar::Action::More: {
+            PluginEntries* e = nav.pluginEntries();
+            if (!e || result_) break;  // one run at a time ("Working…")
+            const Rect before = bar_->rect();
+            bar_->showActions(e->actions("selectionAction"));
+            nav.damage(before.united(bar_->rect()), Waveform::Ui);
+            break;
+        }
+        case AnnotationBar::Action::Plugin: {
+            PluginEntries* e = nav.pluginEntries();
+            const auto actions = e ? e->actions("selectionAction") : std::vector<PluginAction>{};
+            const Rect before = bar_->rect();
+            bar_->showActions({});
+            nav.damage(before.united(bar_->rect()), before.h > bar_->rect().h ? Waveform::Quality : Waveform::Ui);
+            auto item = nav.library().item(row_.key);
+            auto att = nav.library().attachment(row_.attachmentKey);
+            if (!e || !selection_ || !item || !att || hit.colour < 0 || hit.colour >= static_cast<int>(actions.size())) break;
+            nlohmann::ordered_json target = {{"text", selection_->text},
+                                             {"item", plugins::itemJson(*item, nav.library().isRead(row_.key))},
+                                             {"attachment", plugins::attachmentJson(*att)},
+                                             {"pageLabel", selection_->pageLabel.empty() ? nlohmann::ordered_json(nullptr)
+                                                                                         : nlohmann::ordered_json(selection_->pageLabel)}};
+            result_ = std::make_unique<PluginResult>(*e, actions[static_cast<size_t>(hit.colour)], "selectionAction", std::move(target),
+                                                     pageArea());
+            bar_->setWorking(true);
+            break;
+        }
         case AnnotationBar::Action::Note:
             nav.damage(bar_->rect(), Waveform::Ui);
             bar_.reset();
@@ -812,10 +873,7 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
 
 void ReaderScreen::closeSelection(Nav& nav) {
     if (note_) nav.keyboard().hide();
-    selecting_ = selDragging_ = false;
-    selection_.reset();
-    bar_.reset();
-    note_.reset();
+    dropSelection();
     nav.damage(pageArea(), Waveform::Quality);
 }
 
@@ -941,6 +999,7 @@ void ReaderScreen::draw(Canvas& canvas) {
         if (!button.empty())
             drawButton(cr, button, linkButtonLabel(), false);
     }
+    if (result_ && !menus_) result_->draw(cr);
     if (menus_) menus_->draw(canvas);
 }
 
