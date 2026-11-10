@@ -33,7 +33,7 @@ zk.selectionAction({
   may change Zotero and ask for removals.
 - What `run` returns goes into the **result pop-up**: a string, `{ text, actions }`, or nothing
   (no pop-up). `actions` are at most 2 buttons. Tapping one calls `run` again with the same target
-  and `again = { action, text }`; what that call returns replaces the pop-up.
+  and `again = { action, text }` (`run`'s second argument); what that call returns replaces the pop-up.
 - If `run` throws, the pop-up says "<Plugin> couldn't do that: <message>".
 
 An item action may also `zk.ui.open` one of the plugin's screens (see the [form recipe](recipes.md#a-form)).
@@ -57,6 +57,12 @@ zk.screen("counter", {
 });
 ```
 
+### Names
+
+Screen and action ids are lowercase letters, digits and dashes, at most 64 characters, unique per
+kind; `title` is at most 40 characters. Otherwise the plugin fails to load. A `main` screen opens
+with no params, so its `render` must not need any.
+
 ### Blocks
 
 | Block | Helper | Sends |
@@ -73,13 +79,24 @@ zk.screen("counter", {
 
 Children skip falsy values, so `message && zk.ui.notice(message)` works. A block the user can act
 on needs an `id`, unique on its screen. There are no sizes, colours or images; the app lays the
-blocks out on every Kindle. Caps: 2,000 blocks, 256 KB of text, 16 levels deep, at most 6
+blocks out on every Kindle. A screen taller than the display is paged by swipes. Caps: 2,000 blocks (every list row, chip and
+button counts as one), 256 KB of text, 16 levels deep, at most 6
 children in a row.
 
 ### Events
 
-`open` (first, before the first render), `tap`, `select`, `swipe`, `change`, `submit`, `chips`,
-`result` and `back`. Events arrive one at a time, in order; typing not yet sent as `change` is sent
+| `kind` | When | Fields |
+|---|---|---|
+| `open` | the screen opens, before the first render | |
+| `tap` | a button | `id` |
+| `select` | a list row | `id` (the list), `row` |
+| `swipe` | the deck's card | `id`, `direction` (`"left"` or `"right"`) |
+| `change`, `submit` | a search or field | `id`, `text` (the whole text) |
+| `chips` | a chip tapped | `id`, `chip`, `selected` (the selection it makes) |
+| `result` | a screen this one opened has closed | `from` (its id), `value` (absent after Back) |
+| `back` | the user left this screen | |
+
+Events arrive one at a time, in order; typing not yet sent as `change` is sent
 before any other event, so a **Save** tap sees the note just typed. Chips and fields show what the
 user did at once; keep the selection or text and render it, or the next render puts it back.
 
@@ -91,14 +108,16 @@ from the text last sent. That is how a box is cleared after `submit`.
 ```ts
 onEvent: (e) => {
   if (e.kind === "tap" && e.id === "keep") zk.ui.open("file", { cardId: top.id });
-  if (e.kind === "result") message = String(e.value);   // the screen below hears the result
+  if (e.kind === "result" && typeof e.value === "string") message = e.value;  // not after Back
 },
 // in "file": zk.ui.close("Kept into Inbox")
 ```
 
 `zk.ui.open(id, params)` shows another of your screens over this one, with `params` for its
 `render` and `onEvent`. It works from `onEvent` and from an action's `run`. `zk.ui.close(result)`
-closes the screen whose `onEvent` is running; the screen below gets a `result` event.
+closes the screen whose `onEvent` is running; the screen below gets a `result` event. Back on a
+child screen also delivers `result`, with no `value`: always check it, as the snippet does.
+`open` and `close` are dropped when `onEvent` throws, and during `back`.
 `zk.ui.refresh()` redraws the showing screen after work outside `onEvent`, such as the background
 task. Inside `render` it does nothing.
 
@@ -110,7 +129,6 @@ task. Inside `render` it does nothing.
 | `onEvent` | at least 30 s, user-caused: may write to Zotero and ask for removals |
 
 While `onEvent` runs the screen stays drawn and taps queue; after 1 s the app shows **Working…**.
-Tapping it again stops the run.
 
 ### Leaving, and what goes wrong
 
@@ -120,7 +138,7 @@ Tapping it again stops the run.
 - A `render` that throws, goes over 1 s, or returns an invalid or too large tree shows
   "<Plugin> can't show this screen right now" with Back, and counts as a failure.
 - An `onEvent` error shows in the result pop-up as "<Plugin> couldn't do that: <message>", and the
-  screen renders again.
+  screen renders again. It counts as a failure too: three in a row turn the plugin off.
 
 ## Recipes
 

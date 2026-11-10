@@ -180,7 +180,7 @@ changed, and an id to withdraw it while it is unsent.
 More about removals:
 
 - They are only asked in answer to something the user just did on the Kindle: an event with
-  `origin: "kindle"` (later, a plugin's own action or screen), including a timer that call set
+  `origin: "kindle"`, a plugin's own action, or a screen's `onEvent` (not `back`), including a timer that call set
   while the call is still running. Asked from the background task, from an event that came in with
   a sync, from a timer that fires after the call that set it has ended, or while loading, they
   resolve `null` without asking (the log says so).
