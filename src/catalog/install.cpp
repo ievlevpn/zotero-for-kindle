@@ -83,11 +83,11 @@ bool safeName(std::string name, bool isDirectory) {
     }
 }
 
-// What the plugin saved, kept in <id>/ across update and roll back: data/, its storage (zk.storage)
-// and its log. A zip's own copy is never unpacked: "data", "DATA", "data." and "data " all land in
+// What is the user's, kept in <id>/ across update and roll back: data/, its storage (zk.storage),
+// its log, and the user's settings.json (a plugin reads its settings from it). A zip's own copy is never unpacked: "data", "DATA", "data." and "data " all land in
 // data/ on FAT.
 const char* const kUserItems[] = {"data", "storage.db", "storage.db-wal", "storage.db-shm", "storage.db-journal",
-                                  "plugin.log", "plugin.log.1"};
+                                  "plugin.log", "plugin.log.1", "settings.json"};
 bool isDataEntry(const std::string& name) {
     const std::string first = fatFolded(name.substr(0, name.find('/')));
     for (const char* item : kUserItems)

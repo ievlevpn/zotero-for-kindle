@@ -47,6 +47,10 @@ packages are installed. It refuses a `data/` folder (that is the user's, and an 
 touches it) and any file whose name starts with a dot. The zip is at most 8 MB, and 32 MB and 2000
 files unpacked.
 
+`settings.json` is the user's: a `settings.json` in your zip is never installed, and an update or
+roll back keeps the one the user wrote. Give your settings defaults in code, and document the file
+in your README.
+
 ## 3. Tag and release on GitHub
 
 1. Set `"version"` in `plugin.json` (for example `1.2.0`) and rebuild.
