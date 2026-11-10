@@ -1,5 +1,5 @@
 {
-  "name": "zk-plugin-feed-riffle-skeleton",
+  "name": "zk-plugin-feed-riffle",
   "version": "0.1.0",
   "private": true,
   "type": "module",

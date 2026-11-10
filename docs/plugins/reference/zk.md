@@ -6,6 +6,7 @@
 
 - [files](zk/files.md)
 - [library](zk/library.md)
+- [ui](zk/ui.md)
 - [zotero](zk/zotero.md)
 
 ## Classes
@@ -16,6 +17,8 @@
 ## Interfaces
 
 - [Action](zk/Action.md)
+- [ActionAgain](zk/ActionAgain.md)
+- [ActionReply](zk/ActionReply.md)
 - [Annotation](zk/Annotation.md)
 - [AnnotationsEvent](zk/AnnotationsEvent.md)
 - [Attachment](zk/Attachment.md)
@@ -32,6 +35,7 @@
 - [Note](zk/Note.md)
 - [RequestInit](zk/RequestInit.md)
 - [Response](zk/Response.md)
+- [ScreenSpec](zk/ScreenSpec.md)
 - [Settings](zk/Settings.md)
 - [Storage](zk/Storage.md)
 - [Tag](zk/Tag.md)
@@ -45,8 +49,6 @@
 - [Origin](zk/Origin.md)
 - [PendingChange](zk/PendingChange.md)
 - [Permission](zk/Permission.md)
-- [ScreenContent](zk/ScreenContent.md)
-- [ScreenParams](zk/ScreenParams.md)
 
 ## Variables
 

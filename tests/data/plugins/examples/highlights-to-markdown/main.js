@@ -61,7 +61,7 @@ zk.on("syncFinished", async ({ initial }) => {
   if (initial) return;
   await exportBooks((await loadState()).todo.slice(0, WRITE_AFTER_SYNC));
 });
-zk.background(async () => {
+async function catchUp() {
   const started = (/* @__PURE__ */ new Date()).toISOString();
   const { lastRun } = await loadState();
   const changed = /* @__PURE__ */ new Set();
@@ -71,7 +71,45 @@ zk.background(async () => {
     state.lastRun = started;
   });
   await exportBooks((await loadState()).todo);
+}
+zk.background(async () => {
+  await catchUp();
+  zk.ui.refresh();
 });
+var lastMessage = null;
+zk.screen("status", {
+  title: "Highlights to Markdown",
+  main: true,
+  render: async () => {
+    const state = await loadState();
+    const books = Object.values(state.books);
+    const highlights = books.reduce((n, b) => n + b.highlights, 0);
+    const latest = Object.values(state.books).sort((a, b) => b.written.localeCompare(a.written)).slice(0, 10);
+    return zk.ui.column([
+      zk.ui.text(`${books.length} book${books.length === 1 ? "" : "s"} exported`, { style: "title" }),
+      zk.ui.text(`${highlights} highlights \xB7 last run ${state.lastRun ? when(state.lastRun) : "never"}`, { style: "meta" }),
+      state.todo.length > 0 && zk.ui.text(`${state.todo.length} waiting to be written`, { style: "meta" }),
+      zk.ui.text(`Files are in ${zk.plugin.dataDir}`, { style: "meta" }),
+      zk.ui.button({ id: "export", title: "Export now", primary: true }),
+      lastMessage && zk.ui.notice(lastMessage),
+      latest.length > 0 && zk.ui.divider(),
+      latest.length > 0 && zk.ui.list({
+        id: "latest",
+        rows: latest.map((b) => ({ id: b.file, title: b.file, meta: `${b.highlights}`, subtitle: when(b.written) }))
+      })
+    ], { gap: "medium" });
+  },
+  onEvent: async (e) => {
+    if (e.kind === "tap" && e.id === "export") {
+      await catchUp();
+      const { todo } = await loadState();
+      lastMessage = todo.length ? `${todo.length} books still to write: tap again` : "Up to date";
+    }
+  }
+});
+function when(iso) {
+  return iso.slice(0, 16).replace("T", " ");
+}
 function fileNameFor(item, state) {
   const base = (item.citationKey ?? item.title).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 100) || item.key;
   const taken = Object.entries(state.books).some(([key, b]) => key !== item.key && b.file === `${base}.md`);

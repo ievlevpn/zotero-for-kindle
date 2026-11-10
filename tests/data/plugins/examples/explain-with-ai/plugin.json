@@ -5,7 +5,7 @@
   "api": 0,
   "minApp": "0.3.0",
   "author": "Zotero for Kindle",
-  "description": "Select a passage and choose Explain: Claude explains it in the context of the book. Sends the passage and the book's title to Anthropic.",
+  "description": "Select a passage and choose Explain: Claude explains it in the context of the book. Sends the passage and the book's title to Anthropic; can save the answer as a note.",
   "main": "main.js",
-  "permissions": ["net:api.anthropic.com"]
+  "permissions": ["net:api.anthropic.com", "zotero:notes"]
 }

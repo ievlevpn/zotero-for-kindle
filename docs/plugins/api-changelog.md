@@ -6,6 +6,37 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## v0, part 2 — screens, entry points, the result pop-up (unreleased)
+
+Still API 0 (v0 is unstable); plugins written for 0.3.0 keep loading, except a `zk.screen` call
+(below). Reference: [reference/](reference/README.md).
+
+```ts
+zk.screen(id, { title, main?, render(params), onEvent?(event, params) })  // a plugin screen
+zk.ui.column/row/text/card/deck/list/search/field/chips/button/buttons/divider/space/notice
+zk.ui.open(screenId, params?), zk.ui.close(result?), zk.ui.refresh()
+zk.ui.Event: open, tap, select, swipe, change, submit, chips, result, back
+run(target, again?) → string | { text, actions?: [{ id, title }] (≤ 2) } | void
+```
+
+- **`zk.screen` changed** (it was provisional): `zk.screen(id, render)` is now
+  `zk.screen(id, { title, main?, render, onEvent? })`. `render(params)` returns building blocks
+  (`zk.ui.Block`), may be async, and has 1 s; `onEvent(event, params)` has an action's time (at
+  least 30 s) and may change Zotero and ask for removals. `main: true` lists the screen in the
+  Plugins launcher on Home. `ScreenParams` and `ScreenContent` are gone (`ScreenSpec<P>` instead;
+  `P` is what `zk.ui.open` passed). Caps: 2,000 blocks and 256 KB of text a tree.
+- **`zk.ui`**: one helper per block, each returning a plain object (`{ kind: "text", … }`);
+  children skip falsy values, so `cond && block` works. `open`/`close` push and pop the plugin's
+  screens (the screen below gets a `result` event); `refresh` re-renders after work outside
+  `onEvent`.
+- **Entry points are shown**: selection actions under *More…* in the selection bar, item actions
+  in the item details page's *Plugins* section. Their notes "not shown in this version yet" are
+  gone.
+- **Action results**: `run` may return `{ text, actions }`; a button re-runs the action with
+  `again = { action, text }` (the button and the text shown). `ActionResult` gained
+  `ActionReply`; `run` gained its second argument.
+- Budgets: a screen's `render` 1 s; `onEvent` and actions at least 30 s.
+
 ## v0 — the first plugin API (app 0.3.0)
 
 ### What it has

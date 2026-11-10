@@ -1,16 +1,14 @@
 // Explain with AI — select a passage in a book, choose "Explain", read Claude's explanation.
 //
-// The plugin adds one action to the selection bar. When the user picks it, the app hands `run`
-// the selected text, the item being read and the file; `run` asks Anthropic's Messages API and
-// returns the answer as text, which the app shows in its result pop-up.
+// The plugin adds one action to the selection bar (under More…). When the user picks it, the
+// app hands `run` the selected text, the item being read and the file; `run` asks Anthropic's
+// Messages API and returns the answer with one button, "Save as note". The app shows it in its
+// result pop-up. Tapping the button runs the action again, with `again` saying which button and
+// what the pop-up showed: the answer is saved as a child note of the book, and the pop-up says so.
 //
-// Selection actions aren't shown in this version yet: in API v0 the action is checked and recorded but not shown
-// yet, so this plugin type-checks and loads today and starts working when the selection bar
-// learns to show plugin actions.
-//
-// Permissions (plugin.json): only "net:api.anthropic.com" — the one host it talks to. The
-// selection and its item are handed over because the user chose the action, so it needs no
-// "library:read".
+// Permissions (plugin.json): "net:api.anthropic.com" — the one host it talks to — and
+// "zotero:notes" for "Save as note". The selection and its item are handed over because the user
+// chose the action, so it needs no "library:read".
 
 // settings.json, next to plugin.json, edited over USB:
 //   { "apiKey": "sk-ant-…", "model": "claude-sonnet-5-5", "language": "English" }
@@ -45,12 +43,20 @@ interface ErrorReply {
 zk.selectionAction({
   id: "explain",
   title: "Explain",
-  run: async ({ text, item }) => {
+  run: async ({ text, item, pageLabel }, again) => {
+    // "Save as note": the pop-up's text comes back with the tap, so nothing is asked twice.
+    if (again?.action === "note") {
+      const where = pageLabel ? ` (p. ${pageLabel})` : "";
+      const html = [`<p><b>Explained${where}:</b> ${escapeHtml(passageOf(text))}</p>`, ...paragraphs(again.text)].join("");
+      await zk.zotero.addNote(item.key, html);
+      return "Saved as a note on this book."; // replaces the pop-up's text; no buttons this time
+    }
+
     const { apiKey, model = "claude-sonnet-5-5", language, maxTokens = 600 } = zk.settings;
     // A thrown error is shown to the user as the action having failed, with its message.
     if (!apiKey) throw new Error('Add your Anthropic API key to settings.json: { "apiKey": "sk-ant-…" }');
 
-    const passage = text.length > MAX_PASSAGE ? `${text.slice(0, MAX_PASSAGE)}…` : text;
+    const passage = passageOf(text);
     const prompt = [
       `I am reading "${item.title}"${item.year ? ` (${item.year})` : ""}.`,
       "Explain this passage briefly and plainly: what it says, and any term or step a reader might miss.",
@@ -83,6 +89,20 @@ zk.selectionAction({
     const reply = await res.json<MessagesReply>();
     const answer = reply.content.find((block) => block.type === "text")?.text?.trim();
     if (!answer) throw new Error("Anthropic: the reply had no text");
-    return answer; // the string an action returns is what the pop-up shows
+    // The pop-up shows `text`; each of `actions` (at most 2) is a button beside Close.
+    return { text: answer, actions: [{ id: "note", title: "Save as note" }] };
   },
 });
+
+function passageOf(text: string): string {
+  return text.length > MAX_PASSAGE ? `${text.slice(0, MAX_PASSAGE)}…` : text;
+}
+
+/** The answer's paragraphs (blank-line separated) as note HTML. */
+function paragraphs(text: string): string[] {
+  return text.split(/\n\s*\n/).map((p) => `<p>${escapeHtml(p.trim()).replace(/\n/g, "<br>")}</p>`);
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}

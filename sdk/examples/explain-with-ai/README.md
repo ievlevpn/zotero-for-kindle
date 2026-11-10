@@ -1,10 +1,8 @@
 # Explain with AI
 
-Select a passage in a book, choose **Explain** in the selection bar, and read Claude's plain
-explanation of it in a pop-up.
-
-Selection actions aren't shown in this version yet: in plugin API v0 the action is recorded but not shown yet.
-The plugin is complete; it starts working when the selection bar shows plugin actions.
+Select a passage in a book, choose **More… → Explain** in the selection bar, and read Claude's
+plain explanation of it in a pop-up. **Save as note** keeps the explanation as a child note of
+the book (with the passage it explains).
 
 ## What it does
 
@@ -20,6 +18,7 @@ Nothing else leaves the Kindle: not the rest of the book, not your library.
 | Permission | Why |
 |---|---|
 | `net:api.anthropic.com` | the one host it talks to |
+| `zotero:notes` | **Save as note**: adds the explanation as a note to the book |
 
 The selection and its book are handed to the action because you chose it, so it needs no
 `library:read`.

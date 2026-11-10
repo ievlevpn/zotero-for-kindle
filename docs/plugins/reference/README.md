@@ -23,8 +23,8 @@ interleave at each `await`, as in any async JavaScript: a read-modify-write of s
 awaits in between can lose another call's write, so do it with [zk.Storage.update](zk/Storage.md#update),
 which runs a plugin's updates strictly one after another.
 
-Each call has a time budget (event handlers 5 s, the background task 30 s, actions at least
-30 s). It counts from when the call starts running: time queued behind other plugins' calls
+Each call has a time budget (event handlers 5 s, the background task 30 s, actions and a
+screen's `onEvent` at least 30 s, a screen's `render` 1 s). It counts from when the call starts running: time queued behind other plugins' calls
 doesn't count, and neither does time waiting for the user to answer a confirmation (code that
 runs meanwhile does). A call that goes over is stopped (see [zk.LimitError](zk/LimitError.md)).
 

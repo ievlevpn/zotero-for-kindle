@@ -12,7 +12,7 @@
 // Read this file top to bottom: it is a walk-through of the plugin API. Every `zk.…` call is
 // documented, with an example, in sdk/types/zk.d.ts.
 //
-// The plan, in four pieces (the sections below):
+// The plan, in five pieces (the sections below):
 //
 //   1. State         what the plugin remembers in zk.storage, chiefly a "to do" list of books.
 //   2. Writing       exportBook() writes one book's file from what the library holds now. It
@@ -23,6 +23,8 @@
 //   4. Background    after a sync, at most hourly, writes what is noted, and catches anything
 //                    missed (changes made while the plugin was off; on its first run, every
 //                    book in the library).
+//   5. Screen        a main screen, opened from the Plugins launcher on Home: how many books
+//                    are exported, when it last ran, and an "Export now" button.
 //
 // Permissions (plugin.json): "annotations:read" to hear highlight events and read annotations,
 // "library:read" to read each book's title, authors and attachments, "background" for piece 4.
@@ -169,7 +171,7 @@ zk.on("syncFinished", async ({ initial }) => {
 // recentAnnotations() is lazy (`for await`): it reads the library a page at a time, newest
 // change first, and stops at `since`. Deleted annotations aren't in it — the events above
 // take care of those.
-zk.background(async () => {
+async function catchUp(): Promise<void> {
   const started = new Date().toISOString();
   const { lastRun } = await loadState();
   const changed = new Set<string>();
@@ -180,7 +182,63 @@ zk.background(async () => {
   });
 
   await exportBooks((await loadState()).todo);
+}
+
+zk.background(async () => {
+  await catchUp();
+  zk.ui.refresh(); // if the status screen is showing, it shows the new figures
 });
+
+// ───────────────────────────── 5. The status screen ─────────────────────────────
+
+// A screen is described, not drawn: render() returns building blocks (zk.ui.*) for what the
+// plugin knows now, and the app draws them in its own style. `main: true` lists it in the
+// Plugins launcher on Home. render may await quick reads (it has 1 second); here, the state.
+//
+// What the user does arrives at onEvent — here, one button. onEvent has the time of an action
+// (at least 30 seconds), so "Export now" can do the background task's work while the user
+// waits: the app keeps the screen drawn and shows "Working…" after a second. When onEvent
+// returns, the app renders again and redraws only what changed.
+
+/** The outcome of the last "Export now", shown under the button. Module state: gone on restart. */
+let lastMessage: string | null = null;
+
+zk.screen("status", {
+  title: "Highlights to Markdown",
+  main: true,
+  render: async () => {
+    const state = await loadState();
+    const books = Object.values(state.books);
+    const highlights = books.reduce((n, b) => n + b.highlights, 0);
+    const latest = Object.values(state.books).sort((a, b) => b.written.localeCompare(a.written)).slice(0, 10);
+    return zk.ui.column([
+      zk.ui.text(`${books.length} book${books.length === 1 ? "" : "s"} exported`, { style: "title" }),
+      zk.ui.text(`${highlights} highlights · last run ${state.lastRun ? when(state.lastRun) : "never"}`, { style: "meta" }),
+      state.todo.length > 0 && zk.ui.text(`${state.todo.length} waiting to be written`, { style: "meta" }),
+      zk.ui.text(`Files are in ${zk.plugin.dataDir}`, { style: "meta" }),
+      zk.ui.button({ id: "export", title: "Export now", primary: true }),
+      lastMessage && zk.ui.notice(lastMessage),
+      latest.length > 0 && zk.ui.divider(),
+      latest.length > 0 &&
+        zk.ui.list({
+          id: "latest",
+          rows: latest.map((b) => ({ id: b.file, title: b.file, meta: `${b.highlights}`, subtitle: when(b.written) })),
+        }),
+    ], { gap: "medium" });
+  },
+  onEvent: async (e) => {
+    if (e.kind === "tap" && e.id === "export") {
+      await catchUp();
+      const { todo } = await loadState();
+      lastMessage = todo.length ? `${todo.length} books still to write: tap again` : "Up to date";
+    }
+  },
+});
+
+/** "2026-11-10 14:05" from an ISO date. */
+function when(iso: string): string {
+  return iso.slice(0, 16).replace("T", " ");
+}
 
 // ───────────────────────────── Markdown ─────────────────────────────
 

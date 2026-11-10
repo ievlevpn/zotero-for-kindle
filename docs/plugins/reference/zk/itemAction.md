@@ -6,12 +6,9 @@
 function itemAction(action): void;
 ```
 
-Adds an action to an item's *More…* menu.
-
-**Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear.
-
-`run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
-waiting for the user's confirmation doesn't count.
+Adds an action to an item's details page (the long-press sheet's *More…*), in its
+**Plugins** section: a row with the action's title and the plugin's name. Runs and shows its
+result as [selectionAction](selectionAction.md) does.
 
 No permission: the item is handed over because the user chose the action.
 

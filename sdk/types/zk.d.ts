@@ -22,8 +22,8 @@
  * awaits in between can lose another call's write, so do it with {@link zk.Storage.update},
  * which runs a plugin's updates strictly one after another.
  *
- * Each call has a time budget (event handlers 5 s, the background task 30 s, actions at least
- * 30 s). It counts from when the call starts running: time queued behind other plugins' calls
+ * Each call has a time budget (event handlers 5 s, the background task 30 s, actions and a
+ * screen's `onEvent` at least 30 s, a screen's `render` 1 s). It counts from when the call starts running: time queued behind other plugins' calls
  * doesn't count, and neither does time waiting for the user to answer a confirmation (code that
  * runs meanwhile does). A call that goes over is stopped (see {@link zk.LimitError}).
  *
@@ -921,16 +921,18 @@ declare namespace zk {
    */
   function setBadge(text: string | null): void;
 
-  // ───────────────────────── Entry points (not shown in this version yet) ─────────────────────────
+  // ───────────────────────────── Entry points ─────────────────────────────
 
   /**
-   * Adds an action to the selection bar (what appears when the user selects text in a book).
+   * Adds an action to the reader's selection bar (what appears when the user selects text in a
+   * book): the bar gets a **More…** button listing every plugin's selection actions, with the
+   * plugin's name beside each. While `run` runs, the app shows "Working…"; then the result pop-up
+   * shows what it returned (see {@link ActionResult}), or "<Plugin> couldn't do that: <message>"
+   * if it threw. The user can close the pop-up early; the call is then stopped.
    *
-   * **Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear;
-   * plugins written now keep working when it does.
-   *
-   * `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
-   * waiting for the user's confirmation doesn't count.
+   * `run` has at least 30 seconds, counted from when it starts running; time waiting for the
+   * user's confirmation doesn't count. It is user-caused: it may change Zotero and ask for
+   * removals.
    *
    * No permission: the selection and its item are handed over because the user chose the action.
    *
@@ -940,19 +942,16 @@ declare namespace zk {
    *   title: "Explain",
    *   run: async ({ text, item }) => {
    *     const answer = await explain(text, item.title);
-   *     return answer; // shown in the result pop-up
+   *     return { text: answer, actions: [{ id: "note", title: "Save as note" }] };
    *   },
    * });
    */
   function selectionAction(action: Action<TextSelection>): void;
 
   /**
-   * Adds an action to an item's *More…* menu.
-   *
-   * **Not shown in this version yet.** In API v0 the action is checked and recorded but doesn't appear.
-   *
-   * `run` has at least 30 seconds (the fetch cap), counted from when it starts running; time
-   * waiting for the user's confirmation doesn't count.
+   * Adds an action to an item's details page (the long-press sheet's *More…*), in its
+   * **Plugins** section: a row with the action's title and the plugin's name. Runs and shows its
+   * result as {@link selectionAction} does.
    *
    * No permission: the item is handed over because the user chose the action.
    *
@@ -965,18 +964,6 @@ declare namespace zk {
    */
   function itemAction(action: Action<Item>): void;
 
-  /**
-   * Registers a screen of the plugin's own.
-   *
-   * **Not shown in this version yet, and provisional.** A later version designs screens and the building blocks
-   * they are made of; `render`'s argument and result will be typed then. In API v0 the screen is
-   * recorded but can't be opened.
-   *
-   * @example
-   * zk.screen("cards", () => ({}));
-   */
-  function screen(id: string, render: (params: ScreenParams) => ScreenContent | Promise<ScreenContent>): void;
-
   /** An action the user starts ({@link selectionAction}, {@link itemAction}). */
   interface Action<T> {
     /** Unique within the plugin: lowercase letters, digits and dashes. */
@@ -984,14 +971,50 @@ declare namespace zk {
     /** What the user sees, short (one or two words). */
     title: string;
     /**
-     * Does the work. A returned string is shown to the user in the result pop-up (not shown in this version yet);
-     * a thrown error is shown as the plugin having failed.
+     * Does the work, and returns what the result pop-up shows (see {@link ActionResult}); a
+     * thrown error is shown as "<Plugin> couldn't do that: <message>".
+     *
+     * When the user taps one of the pop-up's buttons (from {@link ActionReply.actions}), `run` is
+     * called again with the same `target` and `again`: which button, and the text the pop-up was
+     * showing. What that call returns replaces the pop-up's content; returning nothing closes it.
+     *
+     * @example
+     * run: async ({ item }, again) => {
+     *   if (again?.action === "note") {
+     *     await zk.zotero.addNote(item.key, `<p>${again.text}</p>`);
+     *     return "Saved as a note.";
+     *   }
+     *   return { text: await explain(item), actions: [{ id: "note", title: "Save as note" }] };
+     * }
      */
-    run(target: T): ActionResult | Promise<ActionResult>;
+    run(target: T, again?: ActionAgain): ActionResult | Promise<ActionResult>;
   }
 
-  /** What an action's `run` may return: text for the result pop-up, or nothing. */
-  type ActionResult = string | void;
+  /**
+   * What an action's `run` may return: text for the result pop-up (plain text; a blank line
+   * separates paragraphs; paged when long), text with up to two buttons, or nothing (no pop-up).
+   *
+   * @example
+   * return "Written to adler2007.md";
+   * return { text: answer, actions: [{ id: "note", title: "Save as note" }] };
+   */
+  type ActionResult = string | ActionReply | void;
+
+  /** The result pop-up with buttons of the plugin's own, beside **Close**. */
+  interface ActionReply {
+    /** What the pop-up shows. */
+    text: string;
+    /** At most 2 buttons; tapping one runs the action again (see {@link Action.run}). */
+    actions?: { id: string; title: string }[];
+  }
+
+  /** What `run` gets when the user tapped one of the result pop-up's buttons. */
+  interface ActionAgain {
+    /** The button's `id`. */
+    action: string;
+    /** The text the pop-up was showing. */
+    text: string;
+  }
 
   /** What {@link selectionAction} hands to `run`. */
   interface TextSelection {
@@ -1005,11 +1028,479 @@ declare namespace zk {
     pageLabel: string | null;
   }
 
-  /** **Provisional.** What a screen is opened with. */
-  type ScreenParams = Readonly<Record<string, Json>>;
+  // ───────────────────────────── Screens ─────────────────────────────
 
-  /** **Provisional**: what `render` returns; defined when screens are. */
-  type ScreenContent = unknown;
+  /**
+   * Registers a screen of the plugin's own. A screen is described, not drawn: `render` returns a
+   * tree of building blocks ({@link zk.ui.Block}, made with the {@link zk.ui} helpers or written
+   * as plain objects), and the app draws it in its own style, with its fonts, header, buttons and
+   * page turns. What the user does arrives as events ({@link zk.ui.Event}) at `onEvent`; after
+   * each one the app calls `render` again and redraws only what changed. The plugin keeps all the
+   * state (module variables, {@link zk.storage}); the app keeps none.
+   *
+   * A screen marked `main` is listed in the app's **Plugins** launcher (the puzzle-piece icon on
+   * Home, shown when some plugin has a main screen; a dot on it when a plugin has a badge, see
+   * {@link setBadge}). Other screens are opened from the plugin's own with {@link zk.ui.open}.
+   *
+   * The header shows `title` and the plugin's name, and its back arrow always works: the plugin
+   * is told (a `back` event) but can't keep the screen open. Leaving a screen (Back, the Home
+   * tab) closes it; nothing of a screen runs once it is closed.
+   *
+   * Budgets: `render` 1 s (it is usually milliseconds; it may `await` quick reads such as
+   * {@link zk.storage}); `onEvent` at least 30 s, like an action (user-caused: it may change
+   * Zotero and ask for removals; time waiting for the user's answer doesn't count). While
+   * `onEvent` runs the screen stays drawn; taps are queued in order, and after 1 s the app shows
+   * "Working…". A tree over the caps (2,000 blocks, 256 KB of text) or an invalid one, a `render`
+   * that throws or goes over its budget, shows "<Plugin> can't show this screen right now" with
+   * Back, and counts as a failure. An error thrown by `onEvent` is shown as an action's is
+   * ("<Plugin> couldn't do that: <message>"), and the screen is rendered again.
+   *
+   * No permission.
+   *
+   * @typeParam P - What the screen is opened with: the `params` of {@link zk.ui.open} (a JSON
+   *   copy), or `undefined` when opened from the launcher or without params.
+   *
+   * @example
+   * let count = 0;
+   * zk.screen("counter", {
+   *   title: "Counter",
+   *   main: true,
+   *   render: () => zk.ui.column([
+   *     zk.ui.text(`Tapped ${count} times`, { style: "title" }),
+   *     zk.ui.button({ id: "more", title: "Tap", primary: true }),
+   *   ]),
+   *   onEvent: (e) => { if (e.kind === "tap" && e.id === "more") count++; },
+   * });
+   *
+   * @example
+   * // a screen opened with params: zk.ui.open("file", { cardId: card.id })
+   * zk.screen<{ cardId: string }>("file", {
+   *   title: "File",
+   *   render: async ({ cardId }) => zk.ui.text((await cardById(cardId))?.title ?? "Gone"),
+   * });
+   */
+  function screen<P = undefined>(id: string, screen: ScreenSpec<P>): void;
+
+  /** A screen, as {@link zk.screen} registers it. */
+  interface ScreenSpec<P = undefined> {
+    /** Shown in the header (with the plugin's name), and in the launcher for a main screen. Short. */
+    title: string;
+    /** List this screen in the Plugins launcher (opened there with no params). Default `false`. */
+    main?: boolean;
+    /**
+     * The screen as it should look now: one block, usually a {@link zk.ui.column}. Called when the
+     * screen opens (after the `open` event), after every event, and on {@link zk.ui.refresh}.
+     * Budget 1 s. The app compares the new tree with the last one and redraws only the top-level
+     * children of the root that changed.
+     */
+    render(params: P): ui.Block | Promise<ui.Block>;
+    /**
+     * Handles what the user did ({@link zk.ui.Event}). After it returns, the screen is rendered
+     * again. Budget at least 30 s. Optional: a screen that only shows things needs none.
+     */
+    onEvent?(event: ui.Event, params: P): void | Promise<void>;
+  }
+
+  /**
+   * Building blocks for {@link zk.screen}, and the calls that open and close screens.
+   *
+   * Each helper returns a plain object — `zk.ui.text("Hi")` is `{ kind: "text", text: "Hi" }` —
+   * so a plugin may write the objects directly. Blocks have no pixel sizes, colours, fonts or
+   * images: the app lays them out on every Kindle (paging what doesn't fit, as its own lists do)
+   * and picks the e-ink refresh. Every block the user can act on has an `id`, unique within the
+   * screen; the events it causes name it. Where blocks take a list of children, falsy values
+   * (`null`, `undefined`, `false`, `""`, `0`) are skipped, so `cond && block` works.
+   *
+   * Caps: 2,000 blocks (a list row, a chip or a button counts as one) and 256 KB of text a tree.
+   */
+  namespace ui {
+    // ── Blocks ──
+
+    /**
+     * Stacks blocks top to bottom. The usual root of a screen.
+     *
+     * @example
+     * zk.ui.column([zk.ui.text("Feeds", { style: "title" }), feedList], { gap: "medium" });
+     */
+    function column(children: Child[], opts?: { gap?: Gap }): ColumnBlock;
+
+    /**
+     * Places blocks side by side, sharing the width (e.g. a label and a button). Wraps nothing:
+     * keep it to two or three short blocks.
+     *
+     * @example
+     * zk.ui.row([zk.ui.text("math.PR · 12 left", { style: "label" }), zk.ui.button({ id: "feeds", title: "Feeds" })]);
+     */
+    function row(children: Child[], opts?: { gap?: Gap }): RowBlock;
+
+    /**
+     * Text in one of four styles; `"\n"` breaks a line. `spans` mark bold and italic stretches.
+     * `lines` caps it, ending with "…".
+     *
+     * @example
+     * zk.ui.text("Gaussian random fields", { style: "title", lines: 2 });
+     * zk.ui.text(["Filed into ", { text: "Probability / SPDEs", bold: true }], { style: "meta" });
+     */
+    function text(text: string | Span[], opts?: { style?: TextStyle; lines?: number }): TextBlock;
+
+    /**
+     * A card: title, a meta line, a body (paged with up/down swipes when long), and a badge
+     * (e.g. "In library"). Shown alone, or one at a time in a {@link deck}.
+     *
+     * @example
+     * zk.ui.card({ title: card.title, meta: "Adler, Taylor · 2024-01-03", body: card.summary, badge: "In library" });
+     */
+    function card(card: Omit<CardBlock, "kind">): CardBlock;
+
+    /**
+     * Shows one card at a time; swiping it left or right sends a `swipe` event (the app turns the
+     * card with the reader's page-turn feel when the next render shows another). With no card,
+     * shows `empty`.
+     *
+     * @example
+     * zk.ui.deck({ id: "cards", card: top && zk.ui.card({ title: top.title }), empty: "Nothing left to riffle" });
+     */
+    function deck(deck: Omit<DeckBlock, "kind">): DeckBlock;
+
+    /**
+     * Rows the user picks from, paged like the app's lists; tapping a row sends a `select`
+     * event. `selected` marks a row as chosen.
+     *
+     * @example
+     * zk.ui.list({
+     *   id: "collections",
+     *   rows: matches.map((c) => ({ id: c.key, title: c.path.join(" / "), selected: c.key === chosen })),
+     *   empty: "No collection matches",
+     * });
+     */
+    function list(list: Omit<ListBlock, "kind">): ListBlock;
+
+    /**
+     * A search box. Typing shows at once; `change` events are sent 700 ms after the user stops
+     * typing (like the app's own searches), `submit` on Enter. See {@link FieldBlock.value} for
+     * replacing the text.
+     *
+     * @example
+     * zk.ui.search({ id: "find", placeholder: "Collection", focus: true });
+     */
+    function search(search: Omit<SearchBlock, "kind">): SearchBlock;
+
+    /**
+     * A text input: one line (Enter sends `submit`), or several (`lines` > 1; Enter makes a new
+     * line). `change` events as for {@link search}.
+     *
+     * @example
+     * zk.ui.field({ id: "note", label: "Note", lines: 3 });
+     */
+    function field(field: Omit<FieldBlock, "kind">): FieldBlock;
+
+    /**
+     * Small chips in a wrapping row: tags, recent collections. With `select: "many"` (the
+     * default) each tap toggles one; `"one"` keeps at most one selected; `"none"` makes them act
+     * like small buttons. Every tap sends a `chips` event. A chip given as a string is its own id
+     * and title.
+     *
+     * @example
+     * zk.ui.chips({ id: "tags", chips: ["to-read", "spde"], selected: chosen });
+     * zk.ui.chips({ id: "recent", select: "none", chips: recent.map((c) => ({ id: c.key, title: c.name })) });
+     */
+    function chips(chips: Omit<ChipsBlock, "kind">): ChipsBlock;
+
+    /**
+     * A button, full width; tapping sends a `tap` event. `primary` for the screen's main action.
+     *
+     * @example
+     * zk.ui.button({ id: "file", title: "File", primary: true });
+     */
+    function button(button: Omit<ButtonBlock, "kind">): ButtonBlock;
+
+    /**
+     * Up to 3 buttons in a row, sharing the width.
+     *
+     * @example
+     * zk.ui.buttons([{ id: "discard", title: "Discard" }, { id: "skip", title: "Skip" }, { id: "keep", title: "Keep", primary: true }]);
+     */
+    function buttons(buttons: (Omit<ButtonBlock, "kind"> | Falsy)[]): ButtonsBlock;
+
+    /**
+     * A thin line between sections.
+     *
+     * @example
+     * zk.ui.column([summary, zk.ui.divider(), feedList]);
+     */
+    function divider(): DividerBlock;
+
+    /**
+     * Empty space (default `"medium"`).
+     *
+     * @example
+     * zk.ui.space("large");
+     */
+    function space(size?: Size): SpaceBlock;
+
+    /**
+     * A quiet one-line message: the outcome of the last step, a hint.
+     *
+     * @example
+     * zk.ui.notice("Discarded. 3 cards skipped for later.");
+     */
+    function notice(text: string): NoticeBlock;
+
+    // ── Navigation ──
+
+    /**
+     * Opens one of the plugin's screens over the current one, with `params` (copied as JSON) for
+     * its `render` and `onEvent`. Takes effect when the current call ends. Only in answer to the
+     * user: from `onEvent` or an action's `run`; elsewhere (the background task, an event
+     * handler) it throws an `Error`.
+     *
+     * @example
+     * onEvent: (e) => {
+     *   if (e.kind === "swipe" && e.direction === "right") zk.ui.open("file", { cardId: top.id });
+     * }
+     */
+    function open(screenId: string, params?: unknown): void;
+
+    /**
+     * Closes the screen whose `onEvent` is running, when that call ends. The screen below gets a
+     * `result` event with `result` (copied as JSON). Throws an `Error` outside `onEvent`.
+     *
+     * @example
+     * if (e.kind === "tap" && e.id === "file") { await fileIt(); zk.ui.close("Filed into Probability"); }
+     */
+    function close(result?: unknown): void;
+
+    /**
+     * Renders the plugin's showing screen again, if one is showing: after work outside `onEvent`
+     * changed what it shows (a background refresh brought new cards). Callable from anywhere;
+     * does nothing when no screen of the plugin is showing.
+     *
+     * @example
+     * zk.background(async () => { await refreshFeeds(); zk.ui.refresh(); });
+     */
+    function refresh(): void;
+
+    // ── Types ──
+
+    /** A building block: what `render` returns, and what layout blocks contain. */
+    type Block =
+      | ColumnBlock
+      | RowBlock
+      | TextBlock
+      | CardBlock
+      | DeckBlock
+      | ListBlock
+      | SearchBlock
+      | FieldBlock
+      | ChipsBlock
+      | ButtonBlock
+      | ButtonsBlock
+      | DividerBlock
+      | SpaceBlock
+      | NoticeBlock;
+
+    /** A child of a layout block, or a falsy value to skip (so `cond && block` works). */
+    type Child = Block | Falsy;
+
+    /** What a list of children skips. */
+    type Falsy = null | undefined | false | "" | 0;
+
+    /** Spacing between children. */
+    type Gap = "none" | "small" | "medium" | "large";
+
+    /** A size of {@link space}. */
+    type Size = "small" | "medium" | "large";
+
+    /** `title` (large), `body` (reading text), `meta` (small, dimmed), `label` (small caps-like). */
+    type TextStyle = "title" | "body" | "meta" | "label";
+
+    /** A stretch of text, bold or italic. */
+    type Span = string | { text: string; bold?: boolean; italic?: boolean };
+
+    /** See {@link column}. */
+    interface ColumnBlock {
+      kind: "column";
+      children: Child[];
+      /** Default `"small"`. */
+      gap?: Gap;
+    }
+
+    /** See {@link row}. */
+    interface RowBlock {
+      kind: "row";
+      children: Child[];
+      /** Default `"small"`. */
+      gap?: Gap;
+    }
+
+    /** See {@link text}. */
+    interface TextBlock {
+      kind: "text";
+      text: string | Span[];
+      /** Default `"body"`. */
+      style?: TextStyle;
+      /** At most this many lines, ending with "…". */
+      lines?: number;
+    }
+
+    /** See {@link card}. */
+    interface CardBlock {
+      kind: "card";
+      title: string;
+      /** One line under the title (authors · date). */
+      meta?: string;
+      /** Plain text; a blank line separates paragraphs. Paged with up/down swipes when long. */
+      body?: string;
+      /** A short mark in the card's corner. */
+      badge?: string;
+    }
+
+    /** See {@link deck}. */
+    interface DeckBlock {
+      kind: "deck";
+      id: string;
+      /** The card on top; `null` (or absent) when there is none. */
+      card?: CardBlock | null;
+      /** Shown when there is no card. */
+      empty?: string;
+    }
+
+    /** See {@link list}. */
+    interface ListBlock {
+      kind: "list";
+      id: string;
+      rows: ListRow[];
+      /** Shown when there are no rows. */
+      empty?: string;
+    }
+
+    /** A row of a {@link list}. */
+    interface ListRow {
+      /** Unique within the list; the `select` event names it. */
+      id: string;
+      title: string;
+      /** A second line. */
+      subtitle?: string;
+      /** Small text at the right (a count, a date). */
+      meta?: string;
+      /** A short mark ("already in"). */
+      badge?: string;
+      /** Marked as chosen. */
+      selected?: boolean;
+    }
+
+    /** See {@link search}. */
+    interface SearchBlock {
+      kind: "search";
+      id: string;
+      placeholder?: string;
+      /** As {@link FieldBlock.value}. */
+      value?: string;
+      /** Has the keyboard when the screen opens. */
+      focus?: boolean;
+    }
+
+    /** See {@link field}. */
+    interface FieldBlock {
+      kind: "field";
+      id: string;
+      /** A small label above the input. */
+      label?: string;
+      placeholder?: string;
+      /**
+       * The text to show. Omitted, the app keeps whatever the user typed. Given, the app shows it
+       * whenever it differs from the text last sent to the plugin in a `change` or `submit`
+       * event — so a plugin that keeps the text can replace it (clear a tag box after `submit`)
+       * without ever undoing what is being typed.
+       */
+      value?: string;
+      /** Lines tall; more than 1 makes Enter a new line instead of `submit`. Default 1. */
+      lines?: number;
+      /** Has the keyboard when the screen opens. */
+      focus?: boolean;
+    }
+
+    /** See {@link chips}. */
+    interface ChipsBlock {
+      kind: "chips";
+      id: string;
+      /** A string is its own id and title. */
+      chips: (string | { id: string; title: string })[];
+      /** Ids of the selected chips. */
+      selected?: string[];
+      /** Default `"many"`. */
+      select?: "none" | "one" | "many";
+    }
+
+    /** See {@link button}. */
+    interface ButtonBlock {
+      kind: "button";
+      id: string;
+      title: string;
+      /** The screen's main action, drawn filled. */
+      primary?: boolean;
+    }
+
+    /** See {@link buttons}. */
+    interface ButtonsBlock {
+      kind: "buttons";
+      /** At most 3. */
+      buttons: (Omit<ButtonBlock, "kind"> | Falsy)[];
+    }
+
+    /** See {@link divider}. */
+    interface DividerBlock {
+      kind: "divider";
+    }
+
+    /** See {@link space}. */
+    interface SpaceBlock {
+      kind: "space";
+      /** Default `"medium"`. */
+      size?: Size;
+    }
+
+    /** See {@link notice}. */
+    interface NoticeBlock {
+      kind: "notice";
+      text: string;
+    }
+
+    /**
+     * What `onEvent` receives. Events arrive one at a time, in the order they happened; a
+     * pending `change` (typing not yet sent) is always sent before any other event of the same
+     * screen, so a tap on "File" sees the note just typed.
+     *
+     * - `open` — the screen is opening; first, before its first render ("Loading…" shows until
+     *   it returns). For set-up slower than `render`'s 1 s.
+     * - `tap` — a {@link button}, or one of {@link buttons}, by its `id`.
+     * - `select` — a {@link list} row: `id` is the list's, `row` the row's.
+     * - `swipe` — the {@link deck}'s card, left or right.
+     * - `change` / `submit` — a {@link search} or {@link field}: its whole text.
+     * - `chips` — a chip tapped: which one, and the selection it makes (keep it and render it as
+     *   `selected`, or the chips go back as they were).
+     * - `result` — a screen this one opened has closed: its id and what {@link close} gave
+     *   (`undefined` if closed with Back or without a result).
+     * - `back` — the user left this screen. It is already closed; nothing is rendered after.
+     *
+     * @example
+     * onEvent: async (e) => {
+     *   if (e.kind === "swipe") await (e.direction === "left" ? discard() : keep());
+     *   else if (e.kind === "tap" && e.id === "undo") message = await undo();
+     *   else if (e.kind === "result" && typeof e.value === "string") message = e.value;
+     * }
+     */
+    type Event =
+      | { kind: "open" }
+      | { kind: "tap"; id: string }
+      | { kind: "select"; id: string; row: string }
+      | { kind: "swipe"; id: string; direction: "left" | "right" }
+      | { kind: "change"; id: string; text: string }
+      | { kind: "submit"; id: string; text: string }
+      | { kind: "chips"; id: string; chip: string; selected: string[] }
+      | { kind: "result"; from: string; value: Json | undefined }
+      | { kind: "back" };
+  }
 
   // ───────────────────────────── Data ─────────────────────────────
 
@@ -1208,8 +1699,8 @@ declare namespace zk {
    * it. `time`, `memory` and `stack` stop the running handler or task; the fetch limits
    * (`responseSize`, `responseTime`, `fetches`) only fail that fetch.
    *
-   * `time` is the call's budget: event handlers 5 s, the background task 30 s, actions at least
-   * 30 s. It counts from when the call starts running; time queued behind other plugins' calls
+   * `time` is the call's budget: event handlers 5 s, the background task 30 s, actions and a
+   * screen's `onEvent` at least 30 s, a screen's `render` 1 s. It counts from when the call starts running; time queued behind other plugins' calls
    * and time waiting for the user to answer a confirmation never count. `memory` is 32 MB for a
    * plugin, and 96 MB for all plugins together: a call whose allocation would pass either is
    * stopped.

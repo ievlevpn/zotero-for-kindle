@@ -6,8 +6,8 @@ Thrown (or rejected with) when the plugin goes over one of the app's limits; the
 it. `time`, `memory` and `stack` stop the running handler or task; the fetch limits
 (`responseSize`, `responseTime`, `fetches`) only fail that fetch.
 
-`time` is the call's budget: event handlers 5 s, the background task 30 s, actions at least
-30 s. It counts from when the call starts running; time queued behind other plugins' calls
+`time` is the call's budget: event handlers 5 s, the background task 30 s, actions and a
+screen's `onEvent` at least 30 s, a screen's `render` 1 s. It counts from when the call starts running; time queued behind other plugins' calls
 and time waiting for the user to answer a confirmation never count. `memory` is 32 MB for a
 plugin, and 96 MB for all plugins together: a call whose allocation would pass either is
 stopped.

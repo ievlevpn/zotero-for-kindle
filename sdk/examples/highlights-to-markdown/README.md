@@ -32,6 +32,8 @@ BibTeX keeps in *Extra*), or after its title. Copy the folder off over USB.
   stopped.
 - A book whose last highlight is deleted, or that leaves the library, loses its file; a renamed
   book's file is renamed.
+- **Plugins** on Home (the puzzle-piece icon) opens its status: how many books are exported, when
+  it last ran, the latest files, and **Export now** to catch up without waiting for the hour.
 
 ## Permissions
 
