@@ -104,6 +104,7 @@ test_sources = files(
   'test_plugin_entry.cpp',
   'test_plugins_screen.cpp',
   'test_safe_mode.cpp',
+  'test_ui_tree.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
