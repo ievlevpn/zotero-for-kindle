@@ -45,6 +45,11 @@ Rect ReaderMenus::markAreaRect() {
     return {searchRect().x - 20 - w, 35, w, 70};
 }
 Rect ReaderMenus::sliderRect() { return {kMargin, H() - kPanelH + 100, W() - 2 * kMargin, 70}; }
+Rect ReaderMenus::sliderHitRect() {
+    const Rect s = sliderRect();
+    return {s.x - 30, s.y - 15, s.w + 60, s.h + 30};
+}
+Rect ReaderMenus::pageLabelRect() { return {W() - kMargin - 380, H() - kPanelH + 30, 380, 50}; }
 Rect ReaderMenus::buttonRect(int i) {
     const int w = (W() - 2 * kMargin) / 5;
     return {kMargin + i * w, H() - kPanelH + 210, w - 12, 120};
@@ -404,18 +409,53 @@ void ReaderMenus::openNotes(Nav& nav) {
     nav.push(std::make_unique<BookNotesScreen>(reader_.row(), [r](const AnnotationRecord& a) { r->jumpToAnnotation(a); }));
 }
 
-void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
+std::string ReaderMenus::pageLabel() const {
+    const int shown = dragPage_ ? *dragPage_ : reader_.page();
+    return reader_.type() == DocType::Pdf
+               ? "Page " + std::to_string(reader_.shownPage(shown)) + " of " + std::to_string(reader_.shownPageCount())
+               : "Page " + std::to_string(shown + 1) + " of " + std::to_string(reader_.pageCount());
+}
+
+void ReaderMenus::showDrag(Nav& nav) {
+    // Only what moves, fast: the knob along the track (and its old place), and the page label.
     const Rect s = sliderRect();
-    if (g.type == GestureType::DragStart || g.type == GestureType::DragMove) {
-        if (!s.contains(g.start) && !dragPage_) return;
+    nav.damage({s.x - 24, s.y, s.w + 48, s.h}, Waveform::Fast);
+    nav.damage(pageLabelRect(), Waveform::Fast);
+    dragShownMs_ = nav.nowMs();
+    dragBehind_ = false;
+}
+
+void ReaderMenus::onTick(Nav& nav) {
+    if (!dragPage_ || !dragBehind_) return;
+    if (nav.nowMs() - dragShownMs_ >= kDragFrameMs) return showDrag(nav);
+    nav.wakeAt(dragShownMs_ + kDragFrameMs);
+}
+
+void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
+    if (g.type == GestureType::DragStart) {  // the app drags at once from the slider (dragsFrom)
+        if (picker_ || !sliderHitRect().contains(g.start)) return;
         dragPage_ = sliderPage(g.pos.x);
-        nav.damage(panelRect(), Waveform::Fast);
+        return showDrag(nav);
+    }
+    if (g.type == GestureType::DragMove) {
+        if (!dragPage_) return;
+        const int page = sliderPage(g.pos.x);
+        if (page == *dragPage_) return;
+        dragPage_ = page;
+        dragBehind_ = true;
+        if (nav.nowMs() - dragShownMs_ >= kDragFrameMs) return showDrag(nav);
+        nav.wakeAt(dragShownMs_ + kDragFrameMs);  // shown by onTick, unless a move comes first
         return;
     }
     if (g.type == GestureType::DragEnd) {
-        if (dragPage_) reader_.turnTo(sliderPage(g.pos.x) / reader_.viewsPerPage() * reader_.viewsPerPage());
+        if (!dragPage_) return;
+        const int page = sliderPage(g.pos.x);
         dragPage_.reset();
-        nav.damage(panelRect(), Waveform::Ui);  // the grays back after the fast drag
+        dragBehind_ = false;
+        const Rect s = sliderRect();
+        nav.damage({s.x - 24, s.y, s.w + 48, s.h}, Waveform::Ui);  // the grays back after the fast drag
+        nav.damage(pageLabelRect(), Waveform::Ui);
+        reader_.turnTo(page / reader_.viewsPerPage() * reader_.viewsPerPage());  // the page, only now
         return;
     }
     if (g.type != GestureType::Tap) return;
@@ -461,7 +501,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         setLight(g.pos.x, nav);
         return;
     }
-    if (s.contains(g.pos)) {
+    if (sliderHitRect().contains(g.pos)) {
         reader_.turnTo(sliderPage(g.pos.x) / reader_.viewsPerPage() * reader_.viewsPerPage());  // a page's start
         return;
     }
@@ -513,11 +553,9 @@ void ReaderMenus::draw(Canvas& canvas) {
     fillRect(cr, p, 255);
     hRule(cr, p.y, 0, W(), 190);
     const int shown = dragPage_ ? *dragPage_ : reader_.page();
-    const std::string where = reader_.type() == DocType::Pdf
-                                  ? "Page " + std::to_string(reader_.shownPage(shown)) + " of " + std::to_string(reader_.shownPageCount())
-                                  : "Page " + std::to_string(shown + 1) + " of " + std::to_string(reader_.pageCount());
+    const std::string where = pageLabel();
     drawText(cr, reader_.chapter(), {kSans, 8, 500}, {kMargin, p.y + 28, W() - 2 * kMargin - 380, 50}, 1);
-    drawText(cr, where, {kSans, 7.5, 400, false, kSecondary}, {W() - kMargin - 380, p.y + 30, 380, 50}, 1, Align::Right);
+    drawText(cr, where, {kSans, 7.5, 400, false, kSecondary}, pageLabelRect(), 1, Align::Right);
     const Rect s = sliderRect();
     const double f = reader_.pageCount() > 1 ? static_cast<double>(shown) / (reader_.pageCount() - 1) : 0;
     progressBar(cr, {s.x, s.y + s.h / 2 - 6, s.w, 12}, f);

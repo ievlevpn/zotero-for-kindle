@@ -95,6 +95,8 @@ public:
     virtual bool wantsKeyboard() const { return false; }
     // A finger moving past the slop drags at once, without a long press first (Mark an area).
     virtual bool dragsAtOnce() const { return false; }
+    // The same for a touch going down at `at` (the reader's page slider): asked on every Down.
+    virtual bool dragsAtOnceFrom(Point /*at*/) const { return dragsAtOnce(); }
     // Its Fast damages are shown one by one, not merged into the box around them (a moving frame).
     virtual bool fastPartsApart() const { return false; }
     virtual bool showsTabBar() const { return true; }
