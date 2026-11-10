@@ -7,7 +7,7 @@ npm install
 node build.mjs     # dist/<id>/ is the folder to copy to the Kindle
 ```
 
-See [Getting started](../../docs/plugins/getting-started.md).
+See [Getting started](https://github.com/ievlevpn/zotero-for-kindle/blob/master/docs/plugins/getting-started.md).
 
 ## Publishing
 
@@ -22,4 +22,4 @@ node path/to/sdk/zk-plugin.mjs sign     # dist/plugin.zip.sig
 ```
 
 Attach both files to a GitHub release tagged with the version. The first listing is a pull request
-to the registry. See [Publishing a plugin](../../docs/plugins/publishing.md).
+to the registry. See [Publishing a plugin](https://github.com/ievlevpn/zotero-for-kindle/blob/master/docs/plugins/publishing.md).

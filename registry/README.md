@@ -19,8 +19,8 @@ to `plugins` in its `registry.json`:
 ```
 
 The plugin's repo needs a latest GitHub release with `plugin.zip` and `plugin.zip.sig`, made with
-[`sdk/zk-plugin.mjs`](../sdk/zk-plugin.mjs). The whole path is in
-[Publishing a plugin](../docs/plugins/publishing.md). Check your entry:
+[`sdk/zk-plugin.mjs`](https://github.com/ievlevpn/zotero-for-kindle/blob/master/sdk/zk-plugin.mjs). The whole path is in
+[Publishing a plugin](https://github.com/ievlevpn/zotero-for-kindle/blob/master/docs/plugins/publishing.md). Check your entry:
 
 ```sh
 # in a zotero-for-kindle checkout (check.mjs needs its sdk/), on the registry repo's file:
