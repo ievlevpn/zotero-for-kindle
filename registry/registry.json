@@ -1,1 +1,15 @@
-{"registry":1,"updated":"2026-11-10T00:00:00Z","plugins":[],"revoked":[]}
+{
+  "registry": 1,
+  "updated": "2026-11-10T00:00:00Z",
+  "plugins": [
+    {
+      "id": "feed-riffle",
+      "name": "Feed Riffle",
+      "author": "Pavel Ievlev",
+      "description": "Clear an RSS backlog one card at a time: discard, keep (filed, tagged, with a note) or skip. Swipe left to discard, right to keep.",
+      "repo": "ievlevpn/zk-feed-riffle",
+      "publicKey": "3TgVEKiRcNwfs6Dth8wUvbIBwx0XQVJndGCyME0610A="
+    }
+  ],
+  "revoked": []
+}
