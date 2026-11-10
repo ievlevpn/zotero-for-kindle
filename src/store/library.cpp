@@ -21,6 +21,15 @@ namespace {
 
 constexpr int64_t kSchemaVersion = 8;
 
+// Deletes an attachment's downloaded copy: the file, and its <files>/<attachmentKey>/ folder.
+void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& localPath) {
+    if (attachmentKey.empty() || localPath.empty()) return;
+    const std::filesystem::path file(localPath);
+    std::error_code ec;
+    std::filesystem::remove(file, ec);
+    if (file.parent_path().filename() == attachmentKey) std::filesystem::remove_all(file.parent_path(), ec);
+}
+
 // The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
 // readableKey/readableType: the item's file to open (EPUB preferred), kept by reindex().
@@ -647,8 +656,22 @@ void Library::removeObject(const std::string& type, const std::string& key) {
             links.bind(1, key).step();
             Stmt st = db_.prepare("DELETE FROM items WHERE key = ?");
             st.bind(1, key).step();
+            // Its files go from the Kindle too (deleted or trashed in Zotero). The attachment rows
+            // stay until Zotero deletes them, so an item restored from the trash downloads again.
+            Stmt kids = db_.prepare("SELECT key, localPath FROM attachments WHERE parentKey = ? AND localPath != ''");
+            kids.bind(1, key);
+            std::vector<std::pair<std::string, std::string>> copies;
+            while (kids.step()) copies.emplace_back(kids.text(0), kids.text(1));
+            for (const auto& [att, localPath] : copies) {
+                deleteDownloadedCopy(att, localPath);
+                Stmt remote = db_.prepare("UPDATE attachments SET state = ?, localPath = '' WHERE key = ?");
+                remote.bind(1, static_cast<int64_t>(AttachmentRecord::State::Remote)).bind(2, att).step();
+            }
         } else if (type == "attachment") {
             const std::string parent = itemOfAttachment(key);
+            Stmt file = db_.prepare("SELECT localPath FROM attachments WHERE key = ?");
+            file.bind(1, key);
+            if (file.step()) deleteDownloadedCopy(key, file.text(0));  // else nothing could find it again
             Stmt st = db_.prepare("DELETE FROM attachments WHERE key = ?");
             st.bind(1, key).step();
             touch(parent);
@@ -1257,11 +1280,7 @@ void Library::setSettingsVersion(int64_t v) { setMetaValue("settings.version", s
 void Library::removeDownload(const std::string& attachmentKey) {
     auto a = attachment(attachmentKey);
     if (!a || a->localPath.empty()) return;
-    const std::filesystem::path file(a->localPath);
-    std::error_code ec;
-    std::filesystem::remove(file, ec);
-    // Downloads live in <files>/<attachmentKey>/<name>: that folder goes too.
-    if (file.parent_path().filename() == attachmentKey) std::filesystem::remove_all(file.parent_path(), ec);
+    deleteDownloadedCopy(attachmentKey, a->localPath);  // <files>/<attachmentKey>/<name>, folder too
     setFileState(attachmentKey, AttachmentRecord::State::Remote, "");
 }
 
@@ -1515,6 +1534,15 @@ void Library::setFileState(const std::string& attachmentKey, AttachmentRecord::S
     guarded([&] {
         Stmt st = db_.prepare("UPDATE attachments SET state = ?, localPath = ? WHERE key = ?");
         st.bind(1, static_cast<int64_t>(state)).bind(2, localPath).bind(3, attachmentKey).step();
+    });
+}
+
+std::vector<std::string> Library::attachmentKeys() {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT key FROM attachments");
+        std::vector<std::string> out;
+        while (st.step()) out.push_back(st.text(0));
+        return out;
     });
 }
 

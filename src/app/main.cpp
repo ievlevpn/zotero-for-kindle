@@ -51,6 +51,7 @@
 #include "store/db.h"
 #include "store/library.h"
 #include "sync/config.h"
+#include "sync/files_sweep.h"
 #include "sync/null_sync.h"
 #include "screens/update_screen.h"
 #include "sync/sync_service.h"
@@ -303,6 +304,17 @@ int main(int argc, char** argv) {
         return 1;
     }
     Library lib(*db);
+    // Before the sync worker can download anything: the folders of attachments deleted in Zotero,
+    // and downloads cut short by a kill. Not on a library never pulled (or just rebuilt), which
+    // would take every download for an orphan.
+    try {
+        if (lib.libraryVersion() > 0) {
+            const auto keys = lib.attachmentKeys();
+            sweepFiles(paths.filesDir, {keys.begin(), keys.end()});
+        }
+    } catch (const DbError& e) {
+        log(LogLevel::Warn, "files: no sweep, the library can't be read: %s", e.what());
+    }
     auto lipc = makeLipc();
     KeepAwake keepAwake(*lipc);
     auto keyboard = makeKeyboard(*lipc);
