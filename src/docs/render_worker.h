@@ -39,6 +39,7 @@ struct RenderEvent {
     std::vector<std::pair<std::string, int>> bookmarkPlaces;
     bool landed = false;  // Page: where a show/showPosition/showAnnotation request took it
     std::vector<LinkBox> links;      // Page: the page's links
+    Rect pageBox;                    // Page: where the page itself is drawn (empty: all of it)
     std::optional<LinkInfo> link;    // Link: what the asked-for link is (nullopt: nothing to follow)
     std::string zoteroPosition;      // Page: this page in Zotero's terms (lastPageIndex), "" if none
                                      // Placed: page (-1 if it can't be placed), chapter, progress

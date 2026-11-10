@@ -367,8 +367,8 @@ TEST_CASE("pen ink: set to tap, or with the side button held, the pen is a finge
     REQUIRE(rig.nav.systemInkOn);
 
     PenEvent b = pen(PenEvent::Type::Down, {300, 400});
-    b.button = true;  // side button: no ink (a touch that hardly moves taps; a drag draws an area)
-    rig.reader->onPen(b, rig.nav);
+    b.button = true;  // side button: this stroke taps
+    CHECK_FALSE(rig.reader->onPen(b, rig.nav));
     rig.reader->onPen(pen(PenEvent::Type::Up, {300, 400}), rig.nav);
     CHECK(rig.reader->pendingInkStrokes() == 0);
 

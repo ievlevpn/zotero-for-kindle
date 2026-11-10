@@ -149,6 +149,7 @@ struct RenderWorker::Impl {
         ev.zoteroPosition = engine->zoteroPosition(page);
         ev.bookmarkPlaces = bookmarkPlaces;
         ev.links = engine->links(page);
+        ev.pageBox = engine->pageBox(page);
         return ev;
     }
     void relaid(int page) {

@@ -129,6 +129,7 @@ public:
     bool areaArmed() const { return areaArmed_; }  // "Mark an area": waiting for the drag
     void markArea(Nav&);                           // the menus' "Mark an area" (closes them)
     bool dragsAtOnce() const override { return areaArmed_; }
+    bool fastPartsApart() const override { return areaDrawing_; }
     static Rect areaBannerRect();  // "Drag across the area to mark" while armed, at the top of the page
     static Rect areaCancelRect();
     static constexpr int kMinAreaPx = 59;  // ~5 mm at 300 ppi: smaller on either side is a slip
@@ -159,9 +160,13 @@ public:
     // that a touch of the eraser deletes whole (and that Zotero might refuse).
     static constexpr size_t kMaxInkStrokes = 24, kMaxInkPoints = 2000;
     static constexpr int64_t kMaxInkSpanMs = 10000;
-    void onHide(Nav&) override { commitInk(); }
+    void onHide(Nav&) override {
+        commitInk();
+        dropArea();
+    }
     void onBackground(Nav&) override {
         commitInk();
+        dropArea();
         if (worker_) worker_->trimCaches();  // MuPDF's store is refilled when we're back
     }
     void onClose(Nav& nav) override {
@@ -192,6 +197,7 @@ private:
     void moveArea(Point to, Nav&);
     void endArea(Point to, Nav&);  // saves it when big enough
     void cancelArea(Nav&);         // armed or drawn: neither any more
+    void dropArea();               // the same without repainting (the page or screen changes anyway)
     void onArea(const RenderEvent&, Nav&);
 
     ItemRow row_;
@@ -272,17 +278,20 @@ private:
     bool areaArmed_ = false, areaDrawing_ = false;
     bool areaPen_ = false;  // drawn with the pen (its side button or Mark an area)
     Point areaFrom_, areaTo_;
-    Point selLast_;  // the finger's last place while a long press waits to learn if it is on text
+    Point selLast_;
+    Rect pageBox_;  // where the page is drawn (an area stays on it); empty: the whole page area  // the finger's last place while a long press waits to learn if it is on text
     int64_t areaDownMs_ = 0;
     struct SentArea {
         int page = -1;
         Rect rect;
+        std::string colour;  // what it is saved in
     };
     std::map<uint64_t, SentArea> areaSent_;  // being placed by the worker
     struct SavedArea {
         std::string key;
         int page = -1;
         Rect rect;
+        std::string colour;
     };
     std::vector<SavedArea> areaSaved_;  // saved; framed until the page comes back with it
     std::string newAreaKey_;                 // just made: its colour, picked on the bar, is the next one's

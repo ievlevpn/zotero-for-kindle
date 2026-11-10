@@ -441,10 +441,11 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
                     dropSelection();
-                    areaDrawing_ = areaPen_ = false;
                 }
+                if (e.page != page_) dropArea();
                 image_ = e.image;
                 highlights_ = e.highlights;
+                pageBox_ = e.pageBox;
                 // Saved ink is drawn by the page once the page carries its annotation.
                 inkSaved_.erase(std::remove_if(inkSaved_.begin(), inkSaved_.end(),
                                                [&](const SavedInk& s) {
@@ -505,6 +506,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
 }
 
 void ReaderScreen::turn(int delta, Nav& nav) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
     linkId_ = 0;
     commitInk();
@@ -534,6 +536,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
 }
 
 void ReaderScreen::turnTo(int page) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (!worker_ || layoutPending_) return;
     linkId_ = 0;
     markJumpOrigin();
@@ -543,6 +546,7 @@ void ReaderScreen::turnTo(int page) {
 }
 
 void ReaderScreen::jumpTo(const DocPosition& pos) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     menus_.reset();  // we're not visible (a pushed screen called us); the next Page repaints all
     if (!worker_) return;
     linkId_ = 0;
@@ -553,6 +557,7 @@ void ReaderScreen::jumpTo(const DocPosition& pos) {
 }
 
 void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     menus_.reset();
     if (!worker_) {
         openAt_ = a;  // opening from Notes: the worker starts in onShow
@@ -1037,9 +1042,9 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
         cairo_clip(cr);
         for (const auto& [id, s] : areaSent_)
-            if (s.page == page_) strokeFrame(cr, s.rect, kInk, 3);
+            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(s.colour)), 3);
         for (const auto& s : areaSaved_)
-            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(colour_)), 3);
+            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(s.colour)), 3);
         if (auto r = drawnArea()) strokeFrame(cr, *r, kInk, 3);
         if (editor_)  // the area its bar is for: framed in ink while selected
             for (const auto& b : highlights_)
@@ -1158,6 +1163,7 @@ std::optional<std::string> ReaderScreen::backLabel() const {
 Rect ReaderScreen::backRect() { return {0, H() - kFooterH, W() * 3 / 5, kFooterH}; }
 
 void ReaderScreen::back(Nav& nav) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (turning_ || back_.empty()) return;
     const BackEntry to = back_.back();
     back_.pop_back();
@@ -1224,6 +1230,7 @@ void ReaderScreen::goToPage(int page) {
 int ReaderScreen::shownPage(int page) const { return page / views_ + 1; }
 
 void ReaderScreen::jumpToHit(const SearchHit& h) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     // A PDF hit knows its view (column view); its position only the page.
     if (type_ != DocType::Pdf || h.page < 0 || (pageCount_ > 0 && h.page >= pageCount_)) return jumpTo(h.pos);
     menus_.reset();
@@ -1264,6 +1271,7 @@ bool ReaderScreen::tapLink(Point p, Nav&) {
 }
 
 void ReaderScreen::followLink(const LinkInfo& l) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (!worker_ || (l.target.value.empty() && l.targetPage < 0)) return;
     markJumpOrigin();
     commitInk();
@@ -1326,6 +1334,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (!question_) return;
     nav.library().answerRemotePosition(row_.attachmentKey, go, remoteVersion_);
     if (go && worker_) {
+        dropArea();
         markJumpOrigin();
         turning_ = true;
         worker_->show(question_->page * views_);  // its first view (PDF column view)
@@ -1340,7 +1349,7 @@ std::optional<Rect> ReaderScreen::drawnArea() const {
     if (!areaDrawing_) return std::nullopt;
     const Rect r{std::min(areaFrom_.x, areaTo_.x), std::min(areaFrom_.y, areaTo_.y), std::abs(areaTo_.x - areaFrom_.x),
                  std::abs(areaTo_.y - areaFrom_.y)};
-    return r.intersected(pageArea());
+    return r.intersected(pageBox_.empty() ? pageArea() : pageBox_.intersected(pageArea()));
 }
 
 Rect ReaderScreen::areaBannerRect() { return {kMargin / 2, 30, W() - kMargin, 150}; }
@@ -1391,8 +1400,13 @@ void ReaderScreen::endArea(Point to, Nav& nav) {
         areaArmed_ = false;
         nav.damage(areaBannerRect(), Waveform::Quality);
     }
-    areaSent_[worker_->area(page_, r)] = SentArea{page_, r};  // framed meanwhile
+    areaSent_[worker_->area(page_, r)] = SentArea{page_, r, colour_};  // framed meanwhile
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+}
+
+void ReaderScreen::dropArea() {
+    areaArmed_ = areaDrawing_ = areaPen_ = false;
+    if (selecting_ && !selection_) selecting_ = false;  // a long press still waiting can't start one later
 }
 
 void ReaderScreen::cancelArea(Nav& nav) {
@@ -1415,15 +1429,15 @@ void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
     AnnotationRecord a;
     a.parentKey = row_.attachmentKey;
     a.type = "image";
-    a.color = colour_;
+    a.color = sent.colour;
     a.position = e.ink->position;
     a.sortIndex = e.ink->sortIndex;
     a.pageLabel = e.ink->pageLabel;
     const std::string key = nav.library().createAnnotation(a);
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
-    nav.library().setMetaValue(kColourKey, colour_);
+    nav.library().setMetaValue(kColourKey, sent.colour);
     nav.sync().pushSoon();
-    areaSaved_.push_back(SavedArea{key, sent.page, sent.rect});
+    areaSaved_.push_back(SavedArea{key, sent.page, sent.rect, sent.colour});
     refreshHighlights(nav);
     // Its bar, as a new highlight gets one: unless the reader moved on meanwhile.
     if (sent.page != page_ || editor_ || menus_ || selecting_ || selection_ || note_ || areaDrawing_ || areaArmed_ ||
@@ -1532,10 +1546,9 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     if (p.type == PenEvent::Type::Near) return false;
     if (p.type == PenEvent::Type::Down && type_ == DocType::Pdf && pageArea().contains(p.pos) &&
         !(question_ && positionBannerRect().contains(p.pos))) {
-        // The side button held (or Mark an area on): the pen draws an area. Mark an area's Cancel
-        // is tapped as with a finger.
-        const bool armed = areaArmed_ && worker_ && image_ && !menus_ && !areaCancelRect().contains(p.pos);
-        if (armed || (p.button && penAllowed())) {
+        // Mark an area on: the pen draws the area (its Cancel is tapped as with a finger). With the
+        // side button held the pen is a finger, which draws one the same way.
+        if (areaArmed_ && !p.button && worker_ && image_ && !menus_ && !areaCancelRect().contains(p.pos)) {
             areaPen_ = true;
             areaDownMs_ = nav.nowMs();
             beginArea(p.pos, p.pos, nav);

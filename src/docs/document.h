@@ -181,6 +181,9 @@ public:
                                                     int /*widthPx*/) {
         return std::nullopt;
     }
+    // Where the page itself is drawn on the page area (a PDF page fitted with white around it);
+    // empty: all of it.
+    virtual Rect pageBox(int /*page*/) { return {}; }
     // A rectangle drawn on `page` (device pixels) as a Zotero image annotation: {pageIndex, rects:
     // [[x1, y1, x2, y2]]} in PDF points, as highlights; nullopt where the format has none (EPUB).
     virtual std::optional<InkPlacement> areaPosition(int /*page*/, Rect /*r*/) { return std::nullopt; }

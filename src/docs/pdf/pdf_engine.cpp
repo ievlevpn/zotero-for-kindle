@@ -1056,6 +1056,25 @@ std::optional<InkPlacement> PdfEngine::inkPosition(int page, const std::vector<s
     return out;
 }
 
+Rect PdfEngine::pageBox(int page) {
+    double scale, dx, dy;
+    if (!doc_ || !fit(page, scale, dx, dy)) return {};
+    fz_rect b = fz_empty_rect;
+    fz_page* p = nullptr;
+    fz_var(p);
+    bool ok = true;
+    fz_try(ctx_) {
+        p = fz_load_page(ctx_, doc_, src(page));
+        b = fz_bound_page(ctx_, p);
+    }
+    fz_always(ctx_) { fz_drop_page(ctx_, p); }
+    fz_catch(ctx_) { ok = false; }
+    if (!ok) return {};
+    const int x0 = static_cast<int>(std::ceil(b.x0 * scale + dx)), y0 = static_cast<int>(std::ceil(b.y0 * scale + dy));
+    const int x1 = static_cast<int>(std::floor(b.x1 * scale + dx)), y1 = static_cast<int>(std::floor(b.y1 * scale + dy));
+    return Rect{x0, y0, x1 - x0, y1 - y0}.intersected({0, 0, layout_.width, layout_.height});
+}
+
 // A rectangle in device pixels -> PDF user space, as a Zotero image annotation. The sort index is
 // a highlight's: the page, the first character inside the area (else how many come above it),
 // and the area's top from the top of the page.
@@ -1068,6 +1087,7 @@ std::optional<InkPlacement> PdfEngine::areaPosition(int page, Rect r) {
     fz_var(st);
     fz_matrix userToPage = fz_identity;
     fz_rect media = fz_empty_rect;
+    fz_rect bound = fz_empty_rect;
     char label[64] = "";
     bool ok = true;
     const int pdfPage = src(page);
@@ -1075,11 +1095,14 @@ std::optional<InkPlacement> PdfEngine::areaPosition(int page, Rect r) {
         p = fz_load_page(ctx_, doc_, pdfPage);
         if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
         fz_page_label(ctx_, p, label, sizeof label);
+        bound = fz_bound_page(ctx_, p);
         st = fz_new_stext_page_from_page(ctx_, p, nullptr);
     }
     fz_catch(ctx_) { ok = false; }
-    const fz_rect area = fz_make_rect(static_cast<float>((r.x - dx) / scale), static_cast<float>((r.y - dy) / scale),
-                                      static_cast<float>((r.x + r.w - dx) / scale), static_cast<float>((r.y + r.h - dy) / scale));
+    fz_rect area = fz_make_rect(static_cast<float>((r.x - dx) / scale), static_cast<float>((r.y - dy) / scale),
+                                static_cast<float>((r.x + r.w - dx) / scale), static_cast<float>((r.y + r.h - dy) / scale));
+    if (ok) area = fz_intersect_rect(area, bound);  // nothing off the page
+    if (fz_is_empty_rect(area)) ok = false;
     int offset = -1, above = 0, index = 0;
     if (ok && st)
         forEachChar(st, [&](fz_stext_line*, fz_stext_char* ch) {

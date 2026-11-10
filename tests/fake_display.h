@@ -59,13 +59,14 @@ public:
         touch(TouchEvent::Type::Down, p, t);
         touch(TouchEvent::Type::Up, p, t + 60);
     }
-    void pen(PenEvent::Type type, Point p, int64_t t, bool eraser = false) {
+    void pen(PenEvent::Type type, Point p, int64_t t, bool eraser = false, bool button = false) {
         InputEvent e;
         e.kind = InputEvent::Kind::Pen;
         e.pen.type = type;
         e.pen.pos = p;
         e.pen.t_ms = t;
         e.pen.eraser = eraser;
+        e.pen.button = button;
         input.push_back(e);
     }
     void key(KeyEvent k) {

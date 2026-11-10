@@ -60,13 +60,17 @@ struct Rig {
     ItemRow row;
     std::unique_ptr<ReaderScreen> reader;
 
-    explicit Rig(DocType type = DocType::Pdf, int page = 0) {
+    explicit Rig(DocType type = DocType::Pdf, int page = 0, Rect box = {}) {
         addFontDir("assets/fonts-device");
         fillFixtureLibrary(lib, 10);
         for (auto& a : lib.annotationsFor("EP000003")) lib.removeObject("annotation", a.key);
         row = *lib.rowFor("IT000003");
-        reader = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [] {
-            return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+        reader = std::make_unique<ReaderScreen>(row, type == DocType::Pdf ? "book.pdf" : "book.epub", type, [box] {
+            return std::make_unique<RenderWorker>([box](DocType) {
+                auto e = std::make_unique<FakeEngine>();
+                e->box = box;
+                return std::unique_ptr<DocumentEngine>(std::move(e));
+            });
         }, 6);
         nav.visible = reader.get();
         reader->onShow(nav);
@@ -449,42 +453,6 @@ TEST_CASE("area: the app gives a screen that asks for it drags at once") {
 
 // ---- The pen's side button (Scribe) --------------------------------------------------------
 
-TEST_CASE("area: holding the pen's side button while dragging draws a rectangle, not ink") {
-    Rig rig;
-    rig.nav.hasSystemInk = true;
-    rig.reader->onTick(rig.nav);
-    CHECK(rig.reader->onPen(pen(PenEvent::Type::Near, kBlank, true), rig.nav) == false);
-    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, kBlank, true), rig.nav));
-    CHECK_FALSE(rig.nav.systemInkOn);  // no wet ink while the button is held
-    rig.reader->onPen(pen(PenEvent::Type::Move, {500, 950}, true), rig.nav);
-    REQUIRE(rig.reader->drawnArea());
-    CHECK(*rig.reader->drawnArea() == Rect{300, 800, 200, 150});
-    rig.reader->onPen(pen(PenEvent::Type::Move, kBlankFar, true), rig.nav);
-    rig.reader->onPen(pen(PenEvent::Type::Up, kBlankFar, true), rig.nav);
-    CHECK(rig.reader->pendingInkStrokes() == 0);
-    REQUIRE(rig.waitFor([&] { return rig.editor() != nullptr; }));
-    REQUIRE(rig.areas().size() == 1);
-    CHECK(json::parse(rig.areas()[0].position)["rect"] == json::array({300, 800, 400, 300}));
-    for (const auto& a : rig.lib.annotationsFor(rig.row.attachmentKey)) CHECK(a.type != "ink");
-}
-
-TEST_CASE("area: a side-button touch that hardly moves is still a tap; a held one still selects text") {
-    Rig rig;
-    rig.nav.now = 5000;
-    rig.reader->onPen(pen(PenEvent::Type::Down, {618, 700}, true), rig.nav);
-    rig.nav.now += 80;
-    rig.reader->onPen(pen(PenEvent::Type::Up, {620, 702}, true), rig.nav);
-    CHECK(rig.reader->menusOpen());  // the middle: a tap
-    rig.tap({618, 900});             // closes them
-    REQUIRE_FALSE(rig.reader->menusOpen());
-    rig.reader->onPen(pen(PenEvent::Type::Down, kOnText, true), rig.nav);
-    rig.nav.now += 800;
-    rig.reader->onPen(pen(PenEvent::Type::Up, kOnText, true), rig.nav);
-    REQUIRE(rig.waitFor([&] { return rig.reader->annotationBar() != nullptr; }));
-    CHECK(rig.reader->selection());
-    CHECK(rig.areas().empty());
-}
-
 TEST_CASE("area: with Mark an area on, the pen draws the area without the button") {
     Rig rig;
     rig.tap({618, 700});
@@ -714,3 +682,159 @@ TEST_CASE("area: Mark an area's banner and button fit on the KT4 and the Scribe"
     }
 }
 
+
+// ---- Review fixes --------------------------------------------------------------------------
+
+TEST_CASE("area: Mark an area and a half-drawn area end on hide, background, a jump or a turn") {
+    Rig rig;
+    auto arm = [&] {
+        rig.tap({618, 700});
+        rig.tap(ReaderMenus::markAreaRect().center());
+        REQUIRE(rig.reader->areaArmed());
+    };
+    arm();
+    rig.reader->onHide(rig.nav);
+    CHECK_FALSE(rig.reader->areaArmed());
+    CHECK_FALSE(rig.reader->dragsAtOnce());
+    arm();
+    rig.reader->onBackground(rig.nav);
+    CHECK_FALSE(rig.reader->areaArmed());
+    arm();
+    rig.reader->turnTo(5);
+    CHECK_FALSE(rig.reader->areaArmed());
+    REQUIRE(rig.waitFor([&] { return rig.reader->page() == 5; }));
+    // Half drawn with a finger, then the app goes to the background: the rest of the drag saves nothing.
+    rig.longPressDrag(kBlank, {500, 950}, false);
+    REQUIRE(rig.waitFor([&] { return rig.reader->drawnArea().has_value(); }));
+    rig.reader->onBackground(rig.nav);
+    CHECK_FALSE(rig.reader->drawnArea());
+    rig.gesture(GestureType::DragMove, kBlankFar, kBlank);
+    rig.gesture(GestureType::DragEnd, kBlankFar, kBlank);
+    // A long press still waiting to learn if it was on text, then hidden: no area later either.
+    rig.gesture(GestureType::LongPress, kBlank, kBlank);
+    rig.reader->onHide(rig.nav);
+    rig.gesture(GestureType::DragEnd, kBlankFar, kBlank);
+    // Half drawn with the pen (Mark an area), then a jump: lifting the pen saves nothing, draws no ink.
+    arm();
+    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, kBlank), rig.nav));
+    rig.reader->onPen(pen(PenEvent::Type::Move, kBlankFar), rig.nav);
+    rig.reader->jumpTo(DocPosition{"pos:0"});
+    rig.reader->onPen(pen(PenEvent::Type::Up, kBlankFar), rig.nav);
+    rig.settle(200);
+    CHECK(rig.areas().empty());
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+    CHECK_FALSE(rig.editor());
+}
+
+TEST_CASE("area: an area is kept to the page as drawn, not the margins around it") {
+    Rig rig(DocType::Pdf, 0, {100, 100, 1000, 1200});
+    rig.longPressDrag(kBlank, {1200, 1450});
+    REQUIRE(rig.waitFor([&] { return rig.areas().size() == 1; }));
+    CHECK(json::parse(rig.areas()[0].position)["rect"] == json::array({300, 800, 800, 500}));
+    // A real PDF page: its box sits inside the page area, and an area past its edge is cut to the page.
+    auto pdf = samplePdf();
+    const Rect box = pdf->pageBox(1);
+    CHECK(box.w > 900);
+    CHECK(box.w < 1236);  // a letter page fitted by its height: white beside it
+    CHECK(box.h >= 1480);
+    auto placed = pdf->areaPosition(1, {box.x - 100, 400, box.w + 200, 300});
+    REQUIRE(placed);
+    const auto r = json::parse(placed->position)["rects"][0];
+    CHECK(r[0].get<double>() >= 0);
+    CHECK(r[2].get<double>() <= 612.01);
+}
+
+namespace {
+
+// The whole app, with the reader on a fake PDF: the pen goes through App::handlePen.
+struct AppRig {
+    FakeDisplay display;
+    FakeSync sync;
+    NoKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    std::unique_ptr<App> app;
+    ReaderScreen* reader = nullptr;
+    AppRig() {
+        addFontDir("assets/fonts-device");
+        fillFixtureLibrary(lib, 10);
+        for (auto& a : lib.annotationsFor("EP000003")) lib.removeObject("annotation", a.key);
+        app = std::make_unique<App>(display, lib, sync, keyboard, [this] { return now; });
+        auto r = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), "book.pdf", DocType::Pdf, [] {
+            return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
+        }, 6);
+        reader = r.get();
+        app->setRoot(0, std::move(r));
+        app->start();
+        REQUIRE(run([&] { return reader->ready(); }));
+    }
+    bool run(const std::function<bool()>& done, int steps = 200) {
+        for (int i = 0; i < steps; ++i) {
+            app->step(0);
+            if (done && done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            now += 10;
+        }
+        return done ? done() : true;
+    }
+    // A side-button stroke held still for `holdMs`, then dragged to `to` and lifted.
+    void buttonStroke(Point from, Point to, int holdMs) {
+        display.pen(PenEvent::Type::Near, from, now, false, true);
+        display.pen(PenEvent::Type::Down, from, now, false, true);
+        run(nullptr, 2);
+        now += holdMs;
+        run(nullptr, 2);
+        display.pen(PenEvent::Type::Move, {(from.x + to.x) / 2, (from.y + to.y) / 2}, now, false, true);
+        display.pen(PenEvent::Type::Move, to, now + 10, false, true);
+        display.pen(PenEvent::Type::Up, to, now + 20, false, true);
+        display.pen(PenEvent::Type::Leave, to, now + 30, false, true);
+        run(nullptr, 3);
+    }
+    std::vector<AnnotationRecord> all() { return lib.annotationsFor("EP000003"); }
+};
+
+}  // namespace
+
+TEST_CASE("area: the pen's side button is a finger: a long press and drag on text selects, on blank draws an area") {
+    AppRig rig;
+    rig.buttonStroke(kOnText, {650, 330}, 700);
+    REQUIRE(rig.run([&] { return rig.reader->annotationBar() != nullptr; }));
+    CHECK(rig.reader->selection());
+    CHECK(rig.all().empty());
+    rig.reader->onGesture(tapAt({618, 1400}), *rig.app);  // closes the selection
+    REQUIRE_FALSE(rig.reader->selection());
+    rig.buttonStroke(kBlank, kBlankFar, 700);
+    REQUIRE(rig.run([&] { return rig.all().size() == 1; }));
+    CHECK(rig.all()[0].type == "image");
+    CHECK(json::parse(rig.all()[0].position)["rect"] == json::array({300, 800, 400, 300}));
+    // A quick side-button drag (no long press) is a swipe, as with a finger: no area, no ink.
+    rig.reader->onGesture(tapAt({618, 1400}), *rig.app);
+    rig.buttonStroke({300, 1200}, {700, 1210}, 0);
+    rig.run(nullptr, 20);
+    CHECK(rig.all().size() == 1);
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+}
+
+TEST_CASE("area: while an area is dragged only its thin edges are refreshed") {
+    AppRig rig;
+    rig.display.touch(TouchEvent::Type::Down, kBlank, rig.now);
+    rig.run(nullptr, 2);
+    rig.now += 700;
+    rig.run(nullptr, 2);
+    rig.display.touch(TouchEvent::Type::Move, {500, 950}, rig.now);
+    REQUIRE(rig.run([&] { return rig.reader->drawnArea().has_value(); }));
+    rig.run(nullptr, 3);
+    rig.display.presents.clear();
+    rig.display.touch(TouchEvent::Type::Move, kBlankFar, rig.now);
+    rig.run(nullptr, 3);
+    int fast = 0;
+    for (const auto& p : rig.display.presents)
+        if (p.waveform == Waveform::Fast) {
+            ++fast;
+            CHECK((p.rect.w < 40 || p.rect.h < 40));
+        }
+    CHECK(fast >= 4);
+    rig.display.touch(TouchEvent::Type::Up, kBlankFar, rig.now);
+    REQUIRE(rig.run([&] { return rig.all().size() == 1; }));
+}

@@ -28,6 +28,7 @@ public:
     bool throwOnRender = false;
     bool throwOnSelect = false;
     bool selectRoundTrips = true;
+    Rect box;  // pageBox(): where the page is drawn (empty: all of it)
     std::atomic<int64_t> wordPagesCounted{0};  // pages whose words were counted
     std::atomic<int> renders{0};
 
@@ -180,6 +181,8 @@ public:
         return InkPlacement{nlohmann::json{{"fake", page}, {"width", widthPx}, {"paths", jp}}.dump(), sort,
                             std::to_string(page)};
     }
+
+    Rect pageBox(int) override { return box; }
 
     // Areas: the device rect as drawn, {"fake": page, "rect": [x, y, w, h]}.
     std::optional<InkPlacement> areaPosition(int page, Rect r) override {
