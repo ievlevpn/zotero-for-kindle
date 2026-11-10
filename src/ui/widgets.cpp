@@ -233,8 +233,9 @@ int drawInkPreview(cairo_t* cr, Rect box, const std::string& position) {
 }  // namespace
 
 std::string noteRowLabel(const AnnotationRecord& a) {
-    if (a.type != "image") return "";
-    return a.pageLabel.empty() ? "Area" : "Area · p. " + a.pageLabel;
+    const char* kind = a.type == "image" ? "Area" : a.type == "note" ? "Note" : nullptr;
+    if (!kind) return "";
+    return a.pageLabel.empty() ? std::string(kind) : std::string(kind) + " · p. " + a.pageLabel;
 }
 
 void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons) {
@@ -254,7 +255,7 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
             y += used + 8;
         else
             y += drawText(cr, "Handwriting", {kSans, 8, 400, true, kSecondary}, {tx, y, tw, 50}, 1).height + 8;
-    } else if (a.type == "image") {
+    } else if (a.type == "image" || a.type == "note") {
         y += drawText(cr, noteRowLabel(a), {kSans, 8, 400, true, kSecondary}, {tx, y, tw, 50}, 1).height + 8;
     }
     if (!a.comment.empty() && bottom - y >= 36)

@@ -42,6 +42,7 @@ public:
     std::optional<Selection> select(int page, Point from, Point to) override;
     std::optional<InkPlacement> inkPosition(int page, const std::vector<std::vector<Point>>& paths, int widthPx) override;
     std::optional<InkPlacement> areaPosition(int page, Rect r) override;
+    std::optional<InkPlacement> notePosition(int page, Point at) override;
     Rect pageBox(int page) override;
     int pageOfAnnotation(const AnnotationRecord&) override;
     std::string zoteroPosition(int page) override;
@@ -53,6 +54,7 @@ public:
     bool fullText(std::string& out, UserError*) override;
 
 private:
+    std::optional<InkPlacement> placeBox(int page, Rect r, std::optional<Point> note);  // an area, or a note at `note`
     // Column view (design 2026-11-08): the engine's pages are views of the PDF's pages.
     // The document's: its text area (sample pages' median width; their highest top and lowest
     // bottom) and columns.

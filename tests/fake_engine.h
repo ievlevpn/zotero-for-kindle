@@ -96,6 +96,12 @@ public:
                 HighlightBox b{a.key, {r[0].get<int>(), r[1].get<int>(), r[2].get<int>(), r[3].get<int>()}, shadeOf(a.color), false};
                 b.kind = HighlightBox::Kind::Image;
                 out.push_back(b);
+            } else if (a.pageLabel == std::to_string(page) && a.type == "note" &&
+                       a.position.find("\"note\"") != std::string::npos) {  // position: the tap as drawn
+                const nlohmann::json n = nlohmann::json::parse(a.position)["note"];
+                HighlightBox b{a.key, {n[0].get<int>(), n[1].get<int>(), 40, 40}, shadeOf(a.color), false};
+                b.kind = HighlightBox::Kind::Note;
+                out.push_back(b);
             } else if (a.pageLabel == std::to_string(page)) {
                 HighlightBox b{a.key, {100, 200, 600, 50}, shadeOf(a.color), a.type == "underline"};
                 if (a.type == "text") {
@@ -189,6 +195,13 @@ public:
         char sort[32];
         std::snprintf(sort, sizeof sort, "%05d|%08d", page, r.y);
         return InkPlacement{nlohmann::json{{"fake", page}, {"rect", {r.x, r.y, r.w, r.h}}}.dump(), sort, std::to_string(page)};
+    }
+
+    // Notes: the tap as drawn, {"fake": page, "note": [x, y]}.
+    std::optional<InkPlacement> notePosition(int page, Point at) override {
+        char sort[32];
+        std::snprintf(sort, sizeof sort, "%05d|%08d", page, at.y);
+        return InkPlacement{nlohmann::json{{"fake", page}, {"note", {at.x, at.y}}}.dump(), sort, std::to_string(page)};
     }
 
     std::optional<Selection> select(int page, Point from, Point to) override {

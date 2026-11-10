@@ -26,7 +26,7 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
-const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync", "Mark area"};
+const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync", "Mark area", "Add note"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
 constexpr int kDisplayH = 580;
 const char* kMarginNames[] = {"Narrow", "Normal", "Wide", "Extra wide"};
@@ -40,7 +40,8 @@ Rect ReaderMenus::panelRect() { return {0, H() - kPanelH, W(), kPanelH}; }
 Rect ReaderMenus::backRect() { return {0, 0, 320, kTopH}; }
 Rect ReaderMenus::searchRect() { return {W() - kMargin - 190, 30, 80, 80}; }
 Rect ReaderMenus::contentsIconRect() { return {W() - kMargin - 90, 30, 90, 80}; }
-Rect ReaderMenus::markAreaRect() { return buttonRect(5, 6); }
+Rect ReaderMenus::markAreaRect() { return buttonRect(5, 7); }
+Rect ReaderMenus::addNoteRect() { return buttonRect(6, 7); }
 Rect ReaderMenus::sliderRect() { return {kMargin, H() - kPanelH + 100, W() - 2 * kMargin, 70}; }
 Rect ReaderMenus::sliderHitRect() {
     const Rect s = sliderRect();
@@ -48,12 +49,14 @@ Rect ReaderMenus::sliderHitRect() {
 }
 Rect ReaderMenus::pageLabelRect() { return {W() - kMargin - 380, H() - kPanelH + 30, 380, 50}; }
 Rect ReaderMenus::buttonRect(int i, int count) {
-    // One row of icon-over-label cells, as many as there are (six on a PDF).
+    // One row of icon-over-label cells, as many as there are; seven (a PDF) reach further out, so
+    // that their labels still fit on the KT4.
     constexpr int gap = 12;
-    const int w = (W() - 2 * kMargin + gap) / count;
-    return {kMargin + i * w, H() - kPanelH + 200, w - gap, 140};
+    const int inset = count > 6 ? kMargin / 2 : kMargin;
+    const int w = (W() - 2 * inset + gap) / count;
+    return {inset + i * w, H() - kPanelH + 200, w - gap, 140};
 }
-int ReaderMenus::buttonCount() const { return reader_.type() == DocType::Pdf ? 6 : 5; }
+int ReaderMenus::buttonCount() const { return reader_.type() == DocType::Pdf ? 7 : 5; }
 Rect ReaderMenus::lightPanelRect() { return {0, H() - kPanelH - kLightH, W(), kLightH}; }
 Rect ReaderMenus::lightSliderRect() { return {kMargin + 120, H() - kPanelH - kLightH + 50, W() - 2 * kMargin - 240, 70}; }
 
@@ -472,7 +475,8 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     }
     const int n = buttonCount();
     if (contentsIconRect().contains(g.pos) || buttonRect(0, n).contains(g.pos)) return openContents(nav);
-    if (n == 6 && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
+    if (n == 7 && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
+    if (n == 7 && addNoteRect().contains(g.pos)) return reader_.addNote(nav);    // closes us
     if (buttonRect(1, n).contains(g.pos)) return openNotes(nav);
     if (buttonRect(2, n).contains(g.pos)) {
         displayOpen_ = !displayOpen_;
@@ -561,7 +565,7 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_arc(cr, s.x + f * s.w, s.y + s.h / 2.0, 18, 0, 2 * M_PI);
     cairo_fill(cr);
     using Icon = void (*)(cairo_t*, double, double, uint8_t);
-    const Icon icons[] = {contentsIcon, notesIcon, displayIcon, lightIcon, syncIcon, areaIcon};
+    const Icon icons[] = {contentsIcon, notesIcon, displayIcon, lightIcon, syncIcon, areaIcon, stickyNoteIcon};
     const int n = buttonCount();
     for (int i = 0; i < n; ++i) {
         std::string label = kButtons[i];
@@ -575,11 +579,16 @@ void ReaderMenus::draw(Canvas& canvas) {
             cairo_stroke(cr);
         }
         icons[i](cr, r.x + r.w / 2.0, r.y + 48, kInk);
-        TextStyle st{kSans, 6.5, 500};  // a long label (Notes (128) on the KT4) a little smaller
-        if (measureText(label, st, 10000, 1).width > r.w - 8) st.size_pt = 6;
-        centredText(cr, label, st, {r.x + 4, r.y + 84, r.w - 8, 40});
+        centredText(cr, label, labelStyle(label, r.w - 8), {r.x + 4, r.y + 84, r.w - 8, 40});
     }
     if (picker_) drawPicker(cr);
+}
+
+TextStyle ReaderMenus::labelStyle(const std::string& label, int room) {
+    // A long label (Notes (128) on the KT4, seven cells to a row) a little smaller, as needed.
+    TextStyle st{kSans, 6.5, 500};
+    while (st.size_pt > 5.5 && measureText(label, st, 10000, 1).width > room) st.size_pt -= 0.5;
+    return st;
 }
 
 }  // namespace zk

@@ -11,6 +11,7 @@
 #include "app/settings_store.h"
 #include "core/log.h"
 #include "screens/annotation_bar.h"
+#include "screens/note_popup.h"
 #include "plugins/events.h"
 #include "plugins/identifiers.h"
 #include "screens/reader_menus.h"
@@ -87,6 +88,12 @@ void blit(Canvas& c, const PageImage& img, int y0) {
 // the colours stay apart (yellow 121, red 94, purple 88).
 uint8_t areaFrameShade(uint8_t shade) { return static_cast<uint8_t>(shade * 55 / 100); }
 
+// A sticky note's icon as drawn: a square at its box's top-left, the size of Zotero's icon.
+Rect noteIcon(const Rect& r) {
+    const int s = std::clamp(std::min(r.w, r.h), 36, 60);
+    return {r.x, r.y, s, s};
+}
+
 // The four edges of a frame drawn `w` px wide around `r`, padded: what a moving frame repaints.
 std::vector<Rect> frameEdges(Rect r, int w) {
     if (r.empty()) return {};
@@ -156,20 +163,29 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
                 drawText(cr, b.text, {kSans, std::max(4.0, b.fontPx * 72.0 / 300.0), 400, false, kInk},
                          {b.rect.x, b.rect.y, std::max(b.rect.w, 40), std::max(b.rect.h, b.fontPx + 8)}, 20);
                 break;
-            case HighlightBox::Kind::Note: {  // a small note, the size of Zotero's icon
-                const int s = std::clamp(std::min(b.rect.w, b.rect.h), 36, 60);
-                roundedRect(cr, b.rect.x + 1.5, b.rect.y + 1.5, s - 3, s - 3, 6);
+            case HighlightBox::Kind::Note: {  // the panel's Add note icon, the size of Zotero's: its colour, an ink outline
+                const int s = noteIcon(b.rect).w;
+                const double l = b.rect.x + 1.5, t = b.rect.y + 1.5, r = b.rect.x + s - 1.5, btm = b.rect.y + s - 1.5;
+                const double fold = s * 0.37;
+                cairo_save(cr);
+                cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+                cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+                cairo_move_to(cr, l, t);
+                cairo_line_to(cr, r, t);
+                cairo_line_to(cr, r, btm - fold);
+                cairo_line_to(cr, r - fold, btm);
+                cairo_line_to(cr, l, btm);
+                cairo_close_path(cr);
                 gray(cr, b.shade);
                 cairo_fill_preserve(cr);
                 gray(cr, kInk);
                 cairo_set_line_width(cr, 3);
                 cairo_stroke(cr);
-                for (int i = 1; i <= 3; ++i) {
-                    cairo_move_to(cr, b.rect.x + s * 0.22, b.rect.y + s * (0.22 + i * 0.16));
-                    cairo_line_to(cr, b.rect.x + s * 0.78, b.rect.y + s * (0.22 + i * 0.16));
-                }
-                cairo_set_line_width(cr, 2.5);
+                cairo_move_to(cr, r, btm - fold);  // the folded corner
+                cairo_line_to(cr, r - fold, btm - fold);
+                cairo_line_to(cr, r - fold, btm);
                 cairo_stroke(cr);
+                cairo_restore(cr);
                 break;
             }
             case HighlightBox::Kind::Image:  // the area: a 3 px frame, its colour as a darker shade
@@ -366,6 +382,7 @@ void ReaderScreen::dropSelection() {
     selection_.reset();
     bar_.reset();
     note_.reset();
+    notePlace_.reset();
 }
 
 void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
@@ -437,7 +454,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
-                if (e.page != page_ && (selecting_ || selection_ || editor_ || areaDrawing_)) {  // the page changed under them
+                if (e.page != page_ && (selecting_ || selection_ || editor_ || areaDrawing_ || note_)) {  // the page changed under them
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
                     dropSelection();
@@ -656,6 +673,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         if (go) followLink(info);
         return;
     }
+    if (notePopup_) return onNotePopup(g, nav);
     if (areaDrawing_ && !areaPen_) {  // a finger drawing an area
         switch (g.type) {
             case GestureType::DragStart:
@@ -674,6 +692,12 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (areaArmed_) {  // Mark an area: the next drag draws one; Cancel ends it; nothing else meanwhile
         if (g.type == GestureType::Tap && areaCancelRect().contains(g.pos)) return cancelArea(nav);
         if (g.type == GestureType::DragStart && ready()) beginArea(g.start, g.pos, nav);
+        return;
+    }
+    if (noteArmed_) {  // Add note: the next tap places it; Cancel ends it; nothing else meanwhile
+        if (g.type != GestureType::Tap) return;
+        if (areaCancelRect().contains(g.pos)) return cancelArea(nav);
+        if (ready() && pageArea().contains(g.pos)) placeNote(g.pos, nav);
         return;
     }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
@@ -766,7 +790,10 @@ void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
     if (note_) {
         if (k.code == KeyEvent::Code::Escape) return closeSelection(nav);
         note_->apply(k);
-        if (note_->submitted()) return saveSelection("highlight", note_->text(), nav);
+        if (note_->submitted()) {
+            if (notePlace_) return saveNote(note_->text(), nav);
+            return saveSelection("highlight", note_->text(), nav);
+        }
         nav.damage(noteRect(), Waveform::Fast);
         return;
     }
@@ -777,6 +804,7 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
     // On a box first; else the nearest box within a fingertip (thin PDF lines are hard to hit).
     // An area is hit near its frame (inside or out), not in its middle, which stays the page's
     // (menus, turns, links, highlights under it); a small area anywhere inside. Nearest wins.
+    if (openNoteAt(p, nav)) return true;
     constexpr int kSlack = 30;
     std::string key;
     int best = 1 << 30;
@@ -786,6 +814,7 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
         const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
         int d = std::max(dx, dy);  // 0 inside
         int reach = kSlack;
+        if (it->kind == HighlightBox::Kind::Note) continue;  // openNoteAt's
         if (it->kind == HighlightBox::Kind::Image) {
             reach = kAreaFramePx;
             const bool small = r.w < kSmallAreaPx || r.h < kSmallAreaPx;
@@ -1074,6 +1103,7 @@ void ReaderScreen::draw(Canvas& canvas) {
     }
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {W() - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
     if (bar_) bar_->draw(cr);
+    if (notePopup_) notePopup_->draw(cr);
     if (editor_) editor_->draw(cr);
     if (note_) {
         const Rect n = noteRect();
@@ -1090,7 +1120,7 @@ void ReaderScreen::draw(Canvas& canvas) {
         drawText(cr, "Return saves", {kSans, 6, 400, false, kTertiary}, {n.x + 30, n.y + n.h - 56, n.w - 60, 40}, 1,
                  Align::Right);
     }
-    if (areaArmed_ && !areaDrawing_ && !menus_) {
+    if (((areaArmed_ && !areaDrawing_) || noteArmed_) && !menus_) {
         const Rect b = areaBannerRect();
         roundedRect(cr, b.x + 1.5, b.y + 1.5, b.w - 3, b.h - 3, 14);
         gray(cr, 255);
@@ -1099,7 +1129,7 @@ void ReaderScreen::draw(Canvas& canvas) {
         gray(cr, kInk);
         cairo_stroke(cr);
         const Rect cancel = areaCancelRect();
-        centredText(cr, "Drag across the area to mark.", {kSans, 8, 500}, {b.x + 36, b.y, cancel.x - b.x - 60, b.h}, Align::Left);
+        centredText(cr, noteArmed_ ? "Tap where the note goes." : "Drag across the area to mark.", {kSans, 8, 500}, {b.x + 36, b.y, cancel.x - b.x - 60, b.h}, Align::Left);
         drawButton(cr, cancel, "Cancel", false);
     }
     if (question_ && !menus_) {
@@ -1364,6 +1394,7 @@ void ReaderScreen::markArea(Nav& nav) {
     closeMenus(nav);
     if (type_ != DocType::Pdf || !ready()) return;
     linkId_ = 0;
+    noteArmed_ = false;
     areaArmed_ = true;
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     nav.damage(areaBannerRect(), Waveform::Ui);
@@ -1407,18 +1438,41 @@ void ReaderScreen::endArea(Point to, Nav& nav) {
 }
 
 void ReaderScreen::dropArea() {
-    areaArmed_ = areaDrawing_ = areaPen_ = false;
+    areaArmed_ = areaDrawing_ = areaPen_ = noteArmed_ = false;
+    notePopup_.reset();
     if (selecting_ && !selection_) selecting_ = false;  // a long press still waiting can't start one later
 }
 
 void ReaderScreen::cancelArea(Nav& nav) {
     if (areaDrawing_) nav.damage(pageArea(), Waveform::Quality);
-    else if (areaArmed_) nav.damage(areaBannerRect(), Waveform::Quality);
-    areaDrawing_ = areaPen_ = areaArmed_ = false;
+    else if (areaArmed_ || noteArmed_) nav.damage(areaBannerRect(), Waveform::Quality);
+    if (notePopup_) nav.damage(notePopup_->rect(), Waveform::Quality);
+    notePopup_.reset();
+    areaDrawing_ = areaPen_ = areaArmed_ = noteArmed_ = false;
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
 }
 
 void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
+    if (auto n = noteSent_.find(e.requestId); n != noteSent_.end()) {
+        const SentNote sent = n->second;
+        noteSent_.erase(n);
+        if (!e.ink) {
+            nav.toast("This note couldn't be saved.");
+            return;
+        }
+        AnnotationRecord a;
+        a.parentKey = row_.attachmentKey;
+        a.type = "note";
+        a.comment = sent.text;
+        a.color = sent.colour;
+        a.position = e.ink->position;
+        a.sortIndex = e.ink->sortIndex;
+        a.pageLabel = e.ink->pageLabel;
+        plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", nav.library().createAnnotation(a));
+        nav.sync().pushSoon();
+        refreshHighlights(nav);
+        return;
+    }
     auto it = areaSent_.find(e.requestId);
     if (it == areaSent_.end()) return;
     const SentArea sent = it->second;
@@ -1443,6 +1497,7 @@ void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
     refreshHighlights(nav);
     // Its bar, as a new highlight gets one: unless the reader moved on meanwhile.
     if (sent.page != page_ || editor_ || menus_ || selecting_ || selection_ || note_ || areaDrawing_ || areaArmed_ ||
+        noteArmed_ || notePopup_ ||
         turning_ || (result_ && result_->shown()))
         return;
     auto saved = nav.library().annotation(key);
@@ -1452,11 +1507,81 @@ void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
     nav.damage(editor_->rect(), Waveform::Ui);
 }
 
+// --- Sticky notes ----------------------------------------------------------------------------
+
+void ReaderScreen::addNote(Nav& nav) {
+    closeMenus(nav);
+    if (type_ != DocType::Pdf || !ready()) return;
+    linkId_ = 0;
+    areaArmed_ = false;
+    noteArmed_ = true;
+    if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+    nav.damage(areaBannerRect(), Waveform::Ui);
+}
+
+void ReaderScreen::placeNote(Point at, Nav& nav) {
+    noteArmed_ = false;
+    nav.damage(areaBannerRect(), Waveform::Quality);
+    if (!worker_ || page_ < 0) return;
+    linkId_ = 0;
+    notePlace_ = NotePlace{page_, at};
+    note_.emplace();
+    nav.keyboard().show();
+    noteBox_ = AnnotationEditor::commentRectAbove(nav.keyboard().bounds());
+    nav.damage(noteRect(), Waveform::Ui);
+}
+
+void ReaderScreen::saveNote(const std::string& text, Nav& nav) {
+    const std::optional<NotePlace> place = notePlace_;
+    closeSelection(nav);
+    if (!place || !worker_ || text.find_first_not_of(" \t\n") == std::string::npos) return;  // empty: no note
+    noteSent_[worker_->note(place->page, place->at)] = SentNote{text, colour_};
+    nav.library().setMetaValue(kColourKey, colour_);
+}
+
+bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
+    // The nearest note whose icon is within ~9 mm of the tap.
+    const HighlightBox* best = nullptr;
+    int bestD = kNoteReachPx + 1;
+    for (const auto& b : highlights_) {
+        if (b.kind != HighlightBox::Kind::Note) continue;
+        const Rect r = noteIcon(b.rect);
+        const int dx = std::max({r.x - p.x, 0, p.x - (r.x + r.w - 1)});
+        const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
+        if (std::max(dx, dy) < bestD) {
+            bestD = std::max(dx, dy);
+            best = &b;
+        }
+    }
+    if (!best) return false;
+    auto a = nav.library().annotation(best->annotationKey);
+    if (!a) return false;
+    linkId_ = 0;
+    notePopup_ = std::make_unique<NotePopup>(*a, noteIcon(best->rect), pageArea());
+    nav.damage(notePopup_->rect(), Waveform::Ui);
+    return true;
+}
+
+void ReaderScreen::onNotePopup(const Gesture& g, Nav& nav) {
+    const NotePopup::Action act = notePopup_->onGesture(g, nav);
+    if (act == NotePopup::Action::None) return;
+    const std::string key = notePopup_->key();
+    const Rect icon = notePopup_->icon();
+    nav.damage(notePopup_->rect(), Waveform::Quality);  // the page under it, without ghosts
+    notePopup_.reset();
+    if (act == NotePopup::Action::Close) return;
+    auto a = nav.library().annotation(key);
+    if (!a || a->deletedHere) return;
+    editor_ = std::make_unique<AnnotationEditor>(*a, icon);
+    if (act == NotePopup::Action::Edit) editor_->editComment(nav);
+    else editor_->confirmDelete(nav);
+}
+
 // --- Handwriting -----------------------------------------------------------------------------
 
 bool ReaderScreen::penAllowed() const {
     return worker_ && image_ && !error_ && !menus_ && !selecting_ && !selection_ && !editor_ && !note_ &&
-           !areaArmed_ && !areaDrawing_ &&
+           !areaArmed_ && !areaDrawing_ && !noteArmed_ && !notePopup_ &&
            !layoutPending_ && !turning_ && !linkPopup_ && !(result_ && result_->shown());
 }
 

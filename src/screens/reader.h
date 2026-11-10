@@ -20,6 +20,7 @@ class ReaderMenus;
 class Lipc;
 class AnnotationBar;
 class AnnotationEditor;
+class NotePopup;
 
 class ReaderScreen final : public Screen {
 public:
@@ -138,6 +139,16 @@ public:
     // a side anywhere inside. Elsewhere inside, the tap is the page's.
     static constexpr int kAreaFramePx = 71, kSmallAreaPx = 177;
 
+    // Sticky notes (PDF; Zotero `note` annotations): the menus' "Add note", then a tap on the page
+    // opens the note box with the keyboard; Return with text saves a note there (the tap its
+    // top-left corner) in the colour used last. A tap within ~9 mm of a note's icon opens its
+    // pop-up (Edit, Delete, Close), before any area or highlight there.
+    bool noteArmed() const { return noteArmed_; }  // "Add note": waiting for the tap
+    void addNote(Nav&);                            // the menus' "Add note" (closes them)
+    bool placingNote() const { return notePlace_.has_value(); }  // its text being typed
+    const NotePopup* notePopup() const { return notePopup_.get(); }
+    static constexpr int kNoteReachPx = 107;  // ~9 mm at 300 ppi around the icon
+
     // Handwriting (PDF, Scribe): strokes wait this long after the last one, then become one
     // Zotero ink annotation (a page turn sends them at once).
     static constexpr int64_t kInkCommitMs = 1500;
@@ -163,7 +174,7 @@ public:
     static constexpr int64_t kMaxInkSpanMs = 10000;
     void onHide(Nav&) override {
         commitInk();
-        dropArea();
+        dropArea();  // also Add note and a note's pop-up
     }
     void onBackground(Nav&) override {
         commitInk();
@@ -198,8 +209,12 @@ private:
     void moveArea(Point to, Nav&);
     void endArea(Point to, Nav&);  // saves it when big enough
     void cancelArea(Nav&);         // armed or drawn: neither any more
-    void dropArea();               // the same without repainting (the page or screen changes anyway)
+    void dropArea();               // the same without repainting (the page or screen changes anyway); Add note too
     void onArea(const RenderEvent&, Nav&);
+    void placeNote(Point, Nav&);                    // the tap after Add note: the note box opens
+    void saveNote(const std::string& text, Nav&);  // Return in it (empty: nothing)
+    bool openNoteAt(Point, Nav&);                   // a note near the tap: its pop-up
+    void onNotePopup(const Gesture&, Nav&);
 
     ItemRow row_;
     std::string path_;
@@ -296,6 +311,18 @@ private:
     };
     std::vector<SavedArea> areaSaved_;  // saved; framed until the page comes back with it
     std::string newAreaKey_;                 // just made: its colour, picked on the bar, is the next one's
+    // Sticky notes.
+    bool noteArmed_ = false;
+    struct NotePlace {
+        int page = -1;
+        Point at;
+    };
+    std::optional<NotePlace> notePlace_;  // tapped; its text is being typed in note_
+    struct SentNote {
+        std::string text, colour;
+    };
+    std::map<uint64_t, SentNote> noteSent_;  // being placed by the worker
+    std::unique_ptr<NotePopup> notePopup_;
     // Handwriting.
     bool inkDown_ = false, erasing_ = false;
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw

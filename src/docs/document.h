@@ -187,6 +187,10 @@ public:
     // A rectangle drawn on `page` (device pixels) as a Zotero image annotation: {pageIndex, rects:
     // [[x1, y1, x2, y2]]} in PDF points, as highlights; nullopt where the format has none (EPUB).
     virtual std::optional<InkPlacement> areaPosition(int /*page*/, Rect /*r*/) { return std::nullopt; }
+    // A sticky note tapped at `at` on `page` (device pixels) as a Zotero note annotation: {pageIndex,
+    // rects: [[x1, y1, x1 + 22, y1 + 22]]} in PDF points (Zotero's note size), the tap its top-left
+    // corner as seen, the box kept inside the page; nullopt where the format has none (EPUB).
+    virtual std::optional<InkPlacement> notePosition(int /*page*/, Point /*at*/) { return std::nullopt; }
     // The key of the topmost annotation drawn under `p` on `page`.
     virtual std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& anns) {
         const std::vector<HighlightBox> boxes = highlights(page, anns);

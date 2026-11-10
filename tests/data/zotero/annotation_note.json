@@ -1,0 +1,6 @@
+{"key":"ANNN2345","version":1418,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"ANNN2345","version":1418,"itemType":"annotation","parentItem":"PDFF2345","annotationType":"note",
+  "annotationComment":"Compare with the 1998 survey — the sign flips here.","annotationColor":"#ff6666",
+  "annotationPageLabel":"2","annotationSortIndex":"00001|000000|00069",
+  "annotationPosition":"{\"pageIndex\":1,\"rects\":[[520.25,700.5,542.25,722.5]]}",
+  "tags":[],"relations":{},"dateAdded":"2026-11-03T09:21:07Z","dateModified":"2026-11-03T09:21:07Z"}}

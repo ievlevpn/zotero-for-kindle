@@ -151,7 +151,18 @@ Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentB
 Rect AnnotationEditor::confirmRect(int i) const { return bar_.buttonRect(i); }
 
 std::string AnnotationEditor::question() const {
+    if (annotation_.type == "note") return "Delete this note?";
     return annotation_.type == "image" ? "Delete this area?" : "Delete this highlight?";
+}
+
+void AnnotationEditor::editComment(Nav& nav) {
+    direct_ = true;
+    enter(State::Comment, nav);
+}
+
+void AnnotationEditor::confirmDelete(Nav& nav) {
+    direct_ = true;
+    enter(State::Confirm, nav);
 }
 
 bool AnnotationEditor::takeChanged() {
@@ -188,7 +199,7 @@ void AnnotationEditor::draw(cairo_t* cr) const {
         drawButton(cr, confirmRect(1), "Cancel", false);
         return;
     }
-    drawText(cr, "Comment", {kSans, 8, 500}, {r.x + 30, r.y + 24, r.w - 60, 50}, 1);
+    drawText(cr, annotation_.type == "note" ? "Note" : "Comment", {kSans, 8, 500}, {r.x + 30, r.y + 24, r.w - 60, 50}, 1);
     const bool empty = comment_.empty();
     drawText(cr, empty ? "Type a comment…" : comment_, {kSerif, 9, 400, false, empty ? kTertiary : kInk},
              {r.x + 30, r.y + 84, r.w - 60, 110}, 2);
@@ -210,7 +221,10 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
                 changed_ = true;
                 return Result::Closed;
             }
-            if (confirmRect(1).contains(p)) enter(State::Bar, nav);
+            if (confirmRect(1).contains(p)) {
+                if (direct_) return Result::Closed;
+                enter(State::Bar, nav);
+            }
             return bar_.rect().contains(p) ? Result::Open : Result::Closed;
         case State::Bar:
             break;
