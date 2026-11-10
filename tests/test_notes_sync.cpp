@@ -131,11 +131,22 @@ TEST_CASE("notes: a version 6 database gains the table and keeps its data") {
 }
 
 namespace {
+// A mkdtemp'd folder, removed with everything in it when the test ends (also after a failed REQUIRE).
+struct TempDir {
+    std::filesystem::path path;
+    explicit TempDir(const char* prefix) {
+        std::string tmpl = std::string("/tmp/") + prefix + "-XXXXXX";
+        path = mkdtemp(tmpl.data());
+    }
+    ~TempDir() {
+        std::error_code ec;
+        std::filesystem::remove_all(path, ec);
+    }
+};
+
 // A version 6 database that already knows the server's notes' versions (an older pull skipped them).
-std::string v6WithSeenNotes(Rig& rig, const std::string& name) {
-    char tmpl[] = "/tmp/zk-notes-bf-XXXXXX";
-    std::filesystem::path dir = mkdtemp(tmpl);
-    const std::string path = (dir / name).string();
+std::string v6WithSeenNotes(Rig& rig, const TempDir& dir, const std::string& name) {
+    const std::string path = (dir.path / name).string();
     Db db = Db::open(path);
     {
         Library lib(db);
@@ -152,7 +163,8 @@ TEST_CASE("notes: a version 6 database gets its existing notes on the next pull"
     Rig rig;
     rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>a</p>"));
     rig.server.put(FakeZotero::note("NOTE0002", "BOOK0001", "<p>b</p>"));
-    const std::string path = v6WithSeenNotes(rig, "z.db");
+    TempDir dir("zk-notes-bf");
+    const std::string path = v6WithSeenNotes(rig, dir, "z.db");
     Db db = Db::open(path);
     Library lib(db);
     ZoteroApi api{rig.server, 1, "k3y"};
@@ -168,7 +180,8 @@ TEST_CASE("notes: an interrupted backfill resumes and keeps the flag until done"
     Rig rig;
     rig.server.put(FakeZotero::note("NOTE0001", "BOOK0001", "<p>a</p>"));
     rig.server.put(FakeZotero::note("NOTE0002", "BOOK0001", "<p>b</p>"));
-    const std::string path = v6WithSeenNotes(rig, "z2.db");
+    TempDir dir("zk-notes-bf");
+    const std::string path = v6WithSeenNotes(rig, dir, "z2.db");
     Db db = Db::open(path);
     Library lib(db);
     ZoteroApi api{rig.server, 1, "k3y"};
