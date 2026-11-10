@@ -447,3 +447,81 @@ TEST_CASE("catalog install: removeFiles deletes everything for that id and nothi
     CHECK_FALSE(commit(t.str(), "..", &err));
     CHECK(fs::exists(t.path / "other/main.js"));
 }
+
+TEST_CASE("catalog install: [Review Focus] a zip's data/ in disguise never reaches the user's data/") {
+    TempDir t;
+    UserError err;
+    SUBCASE("./data/x and other . or empty parts are refused") {
+        for (const std::string name : {"./data/notes.txt", "./DATA/notes.txt", "a/./b.js", "a//b.js", "./main2.js",
+                                       "a/.../b.js", "a/ /b.js"}) {
+            CAPTURE(name);
+            checkRefused(t, makeZip({{"plugin.json", manifest()}, {"main.js", "x"}, {name, "theirs"}}),
+                         "The download is damaged.");
+        }
+    }
+    SUBCASE("Data/x, data./x and \"data /x\" are left out, as FAT would fold them into data/") {
+        installOld(t);
+        REQUIRE(stageZip(t, makeZip({{"plugin.json", manifest()}, {"main.js", "// v1.2.0"}, {"Data/notes.txt", "theirs"},
+                                     {"data./notes.txt", "theirs"}, {"data. ./notes.txt", "theirs"},
+                                     {"data /evil.txt", "theirs"}, {"datas/ok.txt", "fine"}}),
+                         &err));
+        std::set<std::string> names;
+        for (const auto& e : fs::directory_iterator(t.path / ".incoming/feed-riffle"))
+            names.insert(e.path().filename().string());
+        CHECK(names == std::set<std::string>{"datas", "main.js", "plugin.json"});
+        REQUIRE(commit(t.str(), "feed-riffle", &err));
+        CHECK(readFile(t.path / "feed-riffle/data/notes.txt") == "mine");
+        CHECK(readFile(t.path / "feed-riffle/datas/ok.txt") == "fine");
+    }
+}
+
+TEST_CASE("catalog install: [Review Focus] a data/ stranded in .previous is moved back, never deleted") {
+    TempDir t;
+    installOld(t);
+    UserError err;
+    REQUIRE(stageZip(t, goodZip("1.1.0"), &err, kSeed, latest(goodZip("1.1.0"), {1, 1, 0})));
+    REQUIRE(commit(t.str(), "feed-riffle", &err));
+    const fs::path cur = t.path / "feed-riffle", prev = t.path / ".previous/feed-riffle";
+    fs::rename(cur / "data", prev / "data");  // as after a failed step 4
+    REQUIRE(stageZip(t, goodZip(), &err));
+
+    SUBCASE("commit moves it back first") {
+        REQUIRE(commit(t.str(), "feed-riffle", &err));
+        CHECK(readFile(cur / "main.js") == "// v1.2.0");
+        CHECK(readFile(cur / "data/notes.txt") == "mine");
+    }
+    SUBCASE("with a data/ in <id> too, commit and rollBack refuse and change nothing") {
+        writeFile(cur / "data/fresh.txt", "new");
+        CHECK_FALSE(commit(t.str(), "feed-riffle", &err));
+        CHECK_FALSE(rollBack(t.str(), "feed-riffle", &err));
+        CHECK(readFile(prev / "data/notes.txt") == "mine");
+        CHECK(readFile(cur / "data/fresh.txt") == "new");
+        CHECK(readFile(cur / "main.js") == "// v1.1.0");
+        CHECK(previousVersion(t.str(), "feed-riffle") == "1.0.0");
+        CHECK(fs::exists(t.path / ".incoming/feed-riffle/plugin.json"));
+    }
+    SUBCASE("repairOne moves it back and leaves .incoming alone") {
+        repairOne(t.str(), "feed-riffle");
+        CHECK(readFile(cur / "data/notes.txt") == "mine");
+        CHECK_FALSE(fs::exists(prev / "data"));
+        CHECK(fs::exists(t.path / ".incoming/feed-riffle/plugin.json"));
+    }
+}
+
+TEST_CASE("catalog install: the space check counts the unpacked tree, and entries are capped") {
+    TempDir t;
+    installOld(t);
+    const std::string zip = makeZip({{"plugin.json", manifest()}, {"main.js", "x"},
+                                     {"zeros.bin", std::string(20 << 20, '\0')}});
+    Server s(zip);
+    DownloadHooks h = roomy();
+    h.freeSpace = [&](const std::string&) { return int64_t{17} << 20; };  // enough for the zip, not the tree
+    UserError err;
+    CHECK_FALSE(stage(s.http, entry(), latest(zip), t.str(), kApp, nullptr, &err, h));
+    CHECK(err.message == "Not enough space.");
+    CHECK(incomingEmpty(t));
+
+    std::vector<std::pair<std::string, std::string>> many = {{"plugin.json", manifest()}, {"main.js", "x"}};
+    for (unsigned i = 0; i < kMaxZipEntries; ++i) many.push_back({"f/" + std::to_string(i), ""});
+    checkRefused(t, makeZip(many), "The download is damaged.");
+}

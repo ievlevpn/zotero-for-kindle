@@ -11,6 +11,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <sstream>
 
 namespace zk::catalog {
@@ -20,6 +21,7 @@ namespace fs = std::filesystem;
 namespace {
 
 const char* const kDamaged = "The download is damaged.";
+constexpr int64_t kSpareBytes = int64_t{16} << 20;  // left free after the download, and after the unpack
 
 UserError damaged(const std::string& details) { return {ErrorKind::Checksum, kDamaged, details}; }
 
@@ -58,21 +60,30 @@ bool allowedUrl(const std::string& url) {
     return host.size() > suffix.size() && host.compare(host.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
-// A relative path that stays inside the folder.
-bool safeName(const std::string& name) {
-    if (name.empty() || name.front() == '/' || name.find('\\') != std::string::npos ||
-        name.find('\0') != std::string::npos)
-        return false;
-    for (const auto& part : fs::path(name))
-        if (part == "..") return false;
-    return true;
+// A path part as FAT stores it: trailing dots and spaces dropped, case folded.
+std::string fatFolded(const std::string& part) {
+    const size_t end = part.find_last_not_of(". ");
+    return lower(end == std::string::npos ? "" : part.substr(0, end + 1));
 }
 
-// The zip's own data/ (any case: the Kindle's drive is FAT) is never unpacked.
-bool isDataEntry(const std::string& name) {
-    const size_t slash = name.find('/');
-    return lower(name.substr(0, slash)) == "data";
+// A relative path that stays inside the folder, with no "." or empty part (so "./data/x" can't pass
+// for something else), and no part FAT would fold to nothing ("..", "...", " "). A directory entry's
+// one trailing "/" is allowed.
+bool safeName(std::string name, bool isDirectory) {
+    if (isDirectory && !name.empty() && name.back() == '/') name.pop_back();
+    if (name.empty() || name.find('\\') != std::string::npos || name.find('\0') != std::string::npos) return false;
+    size_t from = 0;
+    while (true) {
+        const size_t slash = name.find('/', from);
+        const std::string part = name.substr(from, slash == std::string::npos ? std::string::npos : slash - from);
+        if (part.empty() || fatFolded(part).empty()) return false;  // also a leading "/"
+        if (slash == std::string::npos) return true;
+        from = slash + 1;
+    }
 }
+
+// The zip's own data/ is never unpacked: "data", "DATA", "data." and "data " all land in data/ on FAT.
+bool isDataEntry(const std::string& name) { return fatFolded(name.substr(0, name.find('/'))) == "data"; }
 
 bool isSymlink(const mz_zip_archive_file_stat& st) {
     const uint32_t mode = st.m_external_attr >> 16;
@@ -80,34 +91,43 @@ bool isSymlink(const mz_zip_archive_file_stat& st) {
 }
 
 // The zip into dir (which must not exist): every entry checked before anything is written.
-bool unpack(const fs::path& zipPath, const fs::path& dir, std::string* why) {
-    mz_zip_archive zip{};
-    if (!mz_zip_reader_init_file(&zip, zipPath.c_str(), 0)) {
-        *why = "not a zip";
+// The zip into dir: every entry checked before anything is written; `freeBytes` must cover the tree.
+bool unpack(const fs::path& zipPath, const fs::path& dir, const std::function<int64_t()>& freeBytes, UserError* err) {
+    std::string details;
+    const auto why = &details;
+    auto bad = [&] {
+        *err = damaged(details);
         return false;
-    }
+    };
+    mz_zip_archive zip{};
+    if (!mz_zip_reader_init_file(&zip, zipPath.c_str(), 0)) return *why = "not a zip", bad();
     struct Closer {
         mz_zip_archive* z;
         ~Closer() { mz_zip_reader_end(z); }
     } closer{&zip};
     const mz_uint n = mz_zip_reader_get_num_files(&zip);
+    if (n > kMaxZipEntries) return *why = std::to_string(n) + " entries", bad();
     std::vector<mz_uint> files;
     uint64_t declared = 0;
     for (mz_uint i = 0; i < n; ++i) {
         mz_zip_archive_file_stat st;
-        if (!mz_zip_reader_file_stat(&zip, i, &st)) return *why = "unreadable entry", false;
+        if (!mz_zip_reader_file_stat(&zip, i, &st)) return *why = "unreadable entry", bad();
         const std::string name = st.m_filename;
-        if (!safeName(name)) return *why = "unsafe entry " + name, false;
-        if (isSymlink(st)) return *why = "symlink " + name, false;
-        if (!st.m_is_supported || st.m_is_encrypted) return *why = "unsupported entry " + name, false;
+        if (!safeName(name, st.m_is_directory)) return *why = "unsafe entry " + name, bad();
+        if (isSymlink(st)) return *why = "symlink " + name, bad();
+        if (!st.m_is_supported || st.m_is_encrypted) return *why = "unsupported entry " + name, bad();
         if (isDataEntry(name) || st.m_is_directory) continue;
         declared += st.m_uncomp_size;
-        if (declared > static_cast<uint64_t>(kMaxTreeBytes)) return *why = "tree over 32 MB", false;
+        if (declared > static_cast<uint64_t>(kMaxTreeBytes)) return *why = "tree over 32 MB", bad();
         files.push_back(i);
+    }
+    if (freeBytes() < static_cast<int64_t>(declared) + kSpareBytes) {
+        *err = {ErrorKind::DiskFull, "Not enough space.", "tree of " + std::to_string(declared) + " bytes"};
+        return false;
     }
     std::error_code ec;
     fs::create_directories(dir, ec);
-    if (ec) return *why = "can't create " + dir.string(), false;
+    if (ec) return *why = "can't create " + dir.string(), bad();
     for (mz_uint i : files) {
         mz_zip_archive_file_stat st;
         mz_zip_reader_file_stat(&zip, i, &st);
@@ -115,7 +135,7 @@ bool unpack(const fs::path& zipPath, const fs::path& dir, std::string* why) {
         fs::create_directories(dest.parent_path(), ec);
         // miniz stops a file that inflates past its declared size, so the 32 MB holds.
         if (ec || !mz_zip_reader_extract_to_file(&zip, i, dest.c_str(), 0))
-            return *why = std::string("can't extract ") + st.m_filename, false;
+            return *why = std::string("can't extract ") + st.m_filename, bad();
     }
     return true;
 }
@@ -205,6 +225,16 @@ bool swapIn(const std::string& pluginsDir, const std::string& id, const fs::path
     return true;
 }
 
+// Before a swap: a data/ left in .previous/<id> goes back to <id>; if <id> has one too, nothing may
+// go ahead (the swap would delete one of them).
+bool dataSettled(const std::string& pluginsDir, const std::string& id, std::string* why) {
+    repairOne(pluginsDir, id);
+    std::error_code ec;
+    if (!fs::exists(fs::symlink_status(previousDir(pluginsDir) / id / "data", ec))) return true;
+    *why = "data/ in both " + id + " and .previous/" + id;
+    return false;
+}
+
 bool validIdOr(const std::string& id, UserError* err) {
     if (validPluginId(id)) return true;
     return fail(err, "That isn't a plugin.", "bad id " + id);
@@ -241,7 +271,7 @@ std::optional<Staged> stage(Http& http, const Entry& entry, const Latest& latest
     fs::remove_all(tree, ec);  // an earlier staging of this id, not committed
     fs::create_directories(incoming, ec);
     if (ec) return refuse({ErrorKind::Other, "Couldn't save the download.", ec.message()});
-    const int64_t needed = 3 * latest.zipSize + (int64_t{16} << 20);
+    const int64_t needed = 3 * latest.zipSize + kSpareBytes;
     if (hooks.freeSpace(incoming.string()) < needed)
         return refuse({ErrorKind::DiskFull, "Not enough space.", "needs " + std::to_string(needed) + " bytes"});
 
@@ -277,8 +307,9 @@ std::optional<Staged> stage(Http& http, const Entry& entry, const Latest& latest
     fs::rename(part, zip, ec);
     if (ec) return refuse({ErrorKind::Other, "Couldn't save the download.", ec.message()});
 
-    std::string why;
-    if (!unpack(zip, tree, &why)) return refuse(damaged(why));
+    UserError unpackErr;
+    if (!unpack(zip, tree, [&] { return hooks.freeSpace(incoming.string()); }, &unpackErr))
+        return refuse(std::move(unpackErr));
     fs::remove(zip, ec);
 
     // The manifest, checked as the scanner will check it once installed.
@@ -303,6 +334,7 @@ bool commit(const std::string& pluginsDir, const std::string& id, UserError* err
     const fs::path fresh = incomingDir(pluginsDir) / id;
     std::error_code ec;
     if (!fs::is_regular_file(fresh / "plugin.json", ec)) return fail(err, "Couldn't install the plugin.", "not staged");
+    if (std::string why; !dataSettled(pluginsDir, id, &why)) return fail(err, "Couldn't install the plugin.", why);
     trash(pluginsDir, previousDir(pluginsDir) / id, ec);  // one kept: the older one goes
     if (ec) return fail(err, "Couldn't install the plugin.", "old previous: " + ec.message());
     std::string why;
@@ -317,6 +349,7 @@ bool rollBack(const std::string& pluginsDir, const std::string& id, UserError* e
     if (!validIdOr(id, err)) return false;
     const fs::path cur = fs::path(pluginsDir) / id, prev = previousDir(pluginsDir) / id;
     std::error_code ec;
+    if (std::string why; !dataSettled(pluginsDir, id, &why)) return fail(err, "Couldn't roll back.", why);
     if (!fs::is_regular_file(prev / "plugin.json", ec) || !fs::is_directory(cur, ec))
         return fail(err, "There is no earlier version to go back to.", "nothing kept");
     // Step 1: the kept version out of the way (a kill here loses only it), then the same swap.
@@ -356,25 +389,28 @@ bool removeFiles(const std::string& pluginsDir, const std::string& id, UserError
     return true;
 }
 
+void repairOne(const std::string& pluginsDir, const std::string& id) {
+    if (!validPluginId(id)) return;
+    const fs::path cur = fs::path(pluginsDir) / id, prev = previousDir(pluginsDir) / id;
+    std::error_code e;
+    if (!fs::exists(fs::symlink_status(prev, e))) return;
+    if (!fs::exists(fs::symlink_status(cur, e))) {
+        fs::rename(prev, cur, e);
+        log(LogLevel::Warn, "catalog: %s: put the previous version back after an interrupted swap%s", id.c_str(),
+            e ? (" — failed: " + e.message()).c_str() : "");
+    } else if (fs::exists(fs::symlink_status(prev / "data", e)) && !fs::exists(fs::symlink_status(cur / "data", e))) {
+        fs::rename(prev / "data", cur / "data", e);
+        log(LogLevel::Warn, "catalog: %s: moved data/ in after an interrupted swap%s", id.c_str(),
+            e ? (" — failed: " + e.message()).c_str() : "");
+    }
+}
+
 void repairInterrupted(const std::string& pluginsDir) {
     std::error_code ec;
     std::vector<std::string> kept;
     for (fs::directory_iterator it(previousDir(pluginsDir), ec), end; !ec && it != end; it.increment(ec))
         kept.push_back(it->path().filename().string());
-    for (const auto& id : kept) {
-        if (!validPluginId(id)) continue;
-        const fs::path cur = fs::path(pluginsDir) / id, prev = previousDir(pluginsDir) / id;
-        std::error_code e;
-        if (!fs::exists(fs::symlink_status(cur, e))) {
-            fs::rename(prev, cur, e);
-            log(LogLevel::Warn, "catalog: %s: put the previous version back after an interrupted swap%s", id.c_str(),
-                e ? (" — failed: " + e.message()).c_str() : "");
-        } else if (fs::exists(fs::symlink_status(prev / "data", e)) && !fs::exists(fs::symlink_status(cur / "data", e))) {
-            fs::rename(prev / "data", cur / "data", e);
-            log(LogLevel::Warn, "catalog: %s: moved data/ in after an interrupted swap%s", id.c_str(),
-                e ? (" — failed: " + e.message()).c_str() : "");
-        }
-    }
+    for (const auto& id : kept) repairOne(pluginsDir, id);
     fs::remove_all(incomingDir(pluginsDir), ec);
 }
 

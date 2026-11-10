@@ -12,7 +12,10 @@
 //   2. <id> → .previous/<id>            killed here: <id> missing → .previous/<id> is put back
 //   3. the new code → <id>              killed here: data/ still in .previous/<id> → moved to <id>
 //   4. .previous/<id>/data → <id>/data
-// A zip's own data/ (any case) is never unpacked, so the user's data/ is never overwritten.
+// A zip's own data/ (any case, and "data." / "data " as FAT folds them) is never unpacked, and a
+// zip entry with a "." or empty path part is refused, so the user's data/ is never overwritten.
+// No data/ folder is ever deleted outside removeFiles: commit and rollBack first move a data/ left
+// in .previous/<id> back to <id>, and refuse (changing nothing) if <id> has a data/ of its own.
 
 #include "catalog/check.h"
 #include "catalog/registry.h"
@@ -33,6 +36,7 @@ namespace zk::catalog {
 
 constexpr int64_t kMaxZipBytes = 8LL << 20;    // plugin.zip, claimed and received
 constexpr int64_t kMaxTreeBytes = 32LL << 20;  // the unpacked tree
+constexpr unsigned kMaxZipEntries = 2000;
 
 struct Staged {
     PluginManifest manifest;
@@ -57,5 +61,8 @@ bool removeFiles(const std::string& pluginsDir, const std::string& id, UserError
 // At start, before the scan: <id> missing + .previous/<id> → put back; data/ left in
 // .previous/<id> → back to <id>; .incoming/ cleared.
 void repairInterrupted(const std::string& pluginsDir);
+// The same for one id, leaving .incoming/ alone (other ids' staged updates may be waiting there).
+// Call it after a failed commit or rollBack, before reloading the plugin.
+void repairOne(const std::string& pluginsDir, const std::string& id);
 
 }  // namespace zk::catalog
