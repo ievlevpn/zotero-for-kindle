@@ -53,6 +53,11 @@ public:
     virtual PluginEntries* pluginEntries() { return nullptr; }
     // The plugin catalog (Get plugins, updates); null: none (the screens show nothing of it).
     virtual CatalogService* catalog() { return nullptr; }
+    // A timer of the caller's (a pause after typing, a delayed "Working…"): the loop runs again,
+    // with an onTick, by `ms` (this clock) at the latest. The loop otherwise sleeps until input or a
+    // worker's wake (core/wake.h), so a screen whose onTick waits for time asks on every tick
+    // while it does. Results from worker threads need no timer: their wake runs the loop.
+    virtual void wakeAt(int64_t /*ms*/) {}
 };
 
 // What a list row shows instead of its byline (download progress or an error), by attachment key.
@@ -69,7 +74,9 @@ public:
     virtual bool onPen(const PenEvent&, Nav&) { return false; }
     virtual void onSyncEvent(const SyncEvent&, Nav&) {}
     virtual void onShow(Nav&) {}
-    virtual void onTick(Nav&) {}  // every loop iteration while visible (timers)
+    // Every loop iteration while visible. The loop runs on input, on a worker's wake and at the
+    // times asked with Nav::wakeAt, not on its own: a timer here must ask for its time.
+    virtual void onTick(Nav&) {}
     // The Scribe's wet ink may draw over this screen (the reader on a PDF page taking handwriting).
     virtual bool wantsSystemInk() const { return false; }
     // Another screen now shows over this one (or another tab): it stays alive, but gets no ticks.

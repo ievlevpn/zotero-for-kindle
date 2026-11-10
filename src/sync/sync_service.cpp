@@ -5,6 +5,7 @@
 #include <filesystem>
 
 #include "core/log.h"
+#include "core/wake.h"
 #include "net/write_guard.h"
 #include "store/db.h"
 #include "store/library.h"
@@ -125,8 +126,11 @@ bool SyncService::poll(SyncEvent& out) {
 }
 
 void SyncService::emit(SyncEvent e) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    events_.push_back(std::move(e));
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        events_.push_back(std::move(e));
+    }
+    wakeUi();  // the loop polls the events only when it runs
 }
 
 bool SyncService::sleepForMs(int ms) {

@@ -68,6 +68,8 @@ public:
     PluginSink& plugins() override { return pluginSink; }
     PluginEntries* pluginEntries() override { return entries; }
     CatalogService* catalog() override { return catalogService; }
+    void wakeAt(int64_t ms) override { wakeAts.push_back(ms); }
+    std::vector<int64_t> wakeAts;  // the times screens asked the loop to run by
     CatalogService* catalogService = nullptr;
     RecordingSink pluginSink;
     PluginEntries* entries = nullptr;

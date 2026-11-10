@@ -17,7 +17,8 @@ struct HomeActions {
     std::function<void()> openSettings;
     std::function<void(const ItemRow&)> openItem;
     StatusFn status;  // download progress/errors for the Recent rows
-    // "Version X is available" (UpdateNotice): the version, asked on show and every tick.
+    // "Version X is available" (UpdateNotice): the version, asked on show and every tick (so it
+    // must be cheap: UpdateNotice reads the library only when the updater has news).
     std::function<std::optional<std::string>()> updateNotice;
     std::function<void()> openUpdate;
     std::function<void()> dismissUpdate;  // ×

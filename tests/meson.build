@@ -33,6 +33,7 @@ test_sources = files(
   'test_push_triggers.cpp',
   'test_review_fixes5.cpp',
   'test_stall_watchdog.cpp',
+  'test_loop_wake.cpp',
   'test_device_requests.cpp',
   'test_metrics.cpp',
   'test_update_crypto.cpp',

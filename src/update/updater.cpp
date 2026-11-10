@@ -1,6 +1,7 @@
 #include "update/updater.h"
 
 #include "core/log.h"
+#include "core/wake.h"
 
 #include <filesystem>
 
@@ -21,9 +22,12 @@ bool Updater::busy() const {
 }
 
 void Updater::set(const std::function<void(Status&)>& change) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    change(status_);
-    ++status_.serial;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        change(status_);
+        ++status_.serial;
+    }
+    wakeUi();  // Settings, the update screen and Home's notice look at it on the next step
 }
 
 void Updater::start(Phase phase, std::function<void()> work) {

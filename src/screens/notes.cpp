@@ -93,6 +93,7 @@ void NotesScreen::onKey(const KeyEvent& k, Nav& nav) {
 
 void NotesScreen::onTick(Nav& nav) {
     if (pending_ && nav.nowMs() - lastKeyMs_ >= kPauseMs) search(nav);
+    if (pending_) nav.wakeAt(lastKeyMs_ + kPauseMs);  // the search after the pause in typing
 }
 
 std::vector<Rect> NotesScreen::lineRects() const {

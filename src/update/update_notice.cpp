@@ -53,6 +53,7 @@ bool UpdateNotice::poll(Library& lib) {
     if (s.serial == serial_ || s.phase == Phase::Checking) return false;
     serial_ = s.serial;
     const auto before = available(lib);
+    cached_.reset();  // written below
     const std::string now = std::to_string(wallMs_());
     switch (s.phase) {
         case Phase::UpToDate:
@@ -79,12 +80,16 @@ std::optional<Version> UpdateNotice::pending(Library& lib) const {
 }
 
 std::optional<Version> UpdateNotice::available(Library& lib) const {
-    const auto v = pending(lib);
-    if (!v || lib.metaValue("update:dismissed") == v->str()) return std::nullopt;
+    if (cached_ && cachedFor_ == &lib) return *cached_;
+    auto v = pending(lib);
+    if (v && lib.metaValue("update:dismissed") == v->str()) v.reset();
+    cached_ = v;
+    cachedFor_ = &lib;
     return v;
 }
 
 void UpdateNotice::dismiss(Library& lib) {
+    cached_.reset();
     if (const auto v = pending(lib)) lib.setMetaValue("update:dismissed", v->str());
 }
 

@@ -26,8 +26,15 @@ public:
 
     void setRoot(int tab, std::unique_ptr<Screen>);
     void start();               // shows tab 0 with a Full refresh
-    void step(int timeout_ms);  // one loop iteration
+    void step(int timeout_ms);  // one loop iteration; waits for input up to timeout_ms (-1: no limit)
     int run();                  // until quit or the window closes; returns the exit code
+    // How long the next step may wait for input (battery): until the earliest thing due (a long
+    // press, the toast's end, an ink frame, a timer asked with wakeAt, the storage check while in
+    // front), kBusyMs while something is polled (a waiting question, wet ink to ask again for),
+    // 0 when work is waiting, and -1 (no limit) when nothing is due. Workers wake it themselves.
+    int nextTimeoutMs() const;
+    static constexpr int64_t kBusyMs = 50;
+    void wakeAt(int64_t ms) override;
     bool quitting() const { return quit_; }
     const std::string& lastToast() const { return lastToast_; }
     Rect tabBarRect() const { return tabBar(); }
@@ -85,7 +92,8 @@ public:
 
     // Called with every sync event before the screens see it (the open flow's download states).
     void setEventHook(std::function<void(const SyncEvent&, Nav&)> hook) { hook_ = std::move(hook); }
-    // Called every loop iteration after the sync events (the plugin host's events).
+    // Called every loop iteration after the sync events (the plugin host's events). The loop runs
+    // on input, workers' wakes and deadlines only: what the hook waits for by time asks wakeAt.
     void setPollHook(std::function<void()> hook) { pollHook_ = std::move(hook); }
     // Where the screens' plugin events go (the plugin host's queue); none until set.
     PluginSink& plugins() override { return *pluginSink_; }
@@ -178,6 +186,8 @@ private:
     std::vector<int> palmFingers_;  // fingers that went down while the pen was near
     void presentInk(bool force);
     bool systemInkOn_ = false;
+    bool inkAskFailed_ = false;  // the display didn't do the last setSystemInk: asked again soon
+    int64_t wakeAt_ = -1;        // the earliest wakeAt since the last wait (-1: none)
     bool background_ = false;  // a system dialog or the screensaver is over the app
     Rect inkDirty_;
     int64_t lastInkPresentMs_ = -1'000'000;

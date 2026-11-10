@@ -11,6 +11,7 @@
 #include <tuple>
 
 #include "core/log.h"
+#include "core/wake.h"
 
 namespace zk {
 
@@ -91,8 +92,11 @@ struct RenderWorker::Impl {
     std::atomic<int64_t> wordPagesCounted{0};
 
     void emit(RenderEvent e) {
-        std::lock_guard<std::mutex> lock(mutex);
-        events.push_back(std::move(e));
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            events.push_back(std::move(e));
+        }
+        wakeUi();  // the reader polls its events only when the loop runs
     }
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);

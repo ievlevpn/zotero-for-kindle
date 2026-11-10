@@ -22,7 +22,7 @@ public:
     void setOnBackground(std::function<void()> f) { onBackgroundExtra_ = std::move(f); }
     void onBackground();
     void onForeground(int64_t nowMs);
-    bool watch();  // every few seconds: is the app's storage still there?
+    bool watch();  // every few seconds while in front, and on the way back: is the app's storage still there?
 
 private:
     SyncControl& sync_;

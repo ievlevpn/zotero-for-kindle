@@ -2,6 +2,7 @@
 
 #include <thread>
 
+#include "core/wake.h"
 #include "sync/webdav.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -94,9 +95,12 @@ void SetupScreen::connect(Nav& nav) {
     pending_ = check;
     std::thread([check, checker = checker_, c] {
         UserError r = checker(c);
-        std::lock_guard<std::mutex> lock(check->mutex);
-        check->result = std::move(r);
-        check->done = true;
+        {
+            std::lock_guard<std::mutex> lock(check->mutex);
+            check->result = std::move(r);
+            check->done = true;
+        }
+        wakeUi();  // onTick takes the verdict
     }).detach();
     nav.redrawAll(Waveform::Quality);
 }

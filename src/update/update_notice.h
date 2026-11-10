@@ -7,6 +7,8 @@
 //   update:available  the newer version the last check found ("" when up to date)
 //   update:dismissed  the version whose banner was closed with ×
 // The UI thread only: poll() notes what the Updater's worker learned.
+// Home asks for the banner on every loop step: poll() reads the library only when the Updater has
+// news, and available() is kept until poll() or dismiss() changes what it is made of.
 
 #include "store/library.h"
 #include "update/updater.h"
@@ -32,6 +34,9 @@ private:
     Updater& updater_;
     std::function<int64_t()> wallMs_;
     int serial_ = -1;  // the Updater status last noted
+    // available()'s answer and the library it is from; reset whenever the notice may have changed.
+    mutable const Library* cachedFor_ = nullptr;
+    mutable std::optional<std::optional<Version>> cached_;
     std::function<void()> alsoCheck_;
 };
 

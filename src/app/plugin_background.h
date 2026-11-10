@@ -45,6 +45,7 @@ public:
     void tick(int64_t nowMs);    // releases at the cap
     void onSleep();              // cuts running tasks short (also ones past the cap) and releases
     bool holding() const { return holding_; }
+    int64_t endsAt() const { return endsAt_; }  // the cap, while holding (tick() is due then)
 
 private:
     void release();

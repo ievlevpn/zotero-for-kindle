@@ -4,6 +4,7 @@
 #include "fake_lipc.h"
 #include "fake_zotero.h"
 #include "fn_http.h"
+#include "core/wake.h"
 #include "platform/power.h"
 #include "store/db.h"
 #include "store/library.h"
@@ -280,4 +281,35 @@ TEST_CASE("sync service: opening a book goes ahead of a queued sync") {
     release = true;
     std::vector<SyncEvent> events = rig.waitFor(Rig::is(SyncEvent::Kind::DownloadFinished), 8000);
     CHECK(count(events, SyncEvent::Kind::SyncFinished) == 1);  // only the running one finished first
+}
+
+namespace {
+std::atomic<int> gSyncWakes{0};
+void countSyncWake() { ++gSyncWakes; }
+}  // namespace
+
+TEST_CASE("sync service: every event wakes the UI loop, which doesn't poll for them") {
+    Rig rig;
+    uiWakeTaken();
+    gSyncWakes = 0;
+    setUiWaker(countSyncWake);
+    rig.start();
+    rig.service->syncNow();
+    std::vector<SyncEvent> events;
+    const auto t0 = Clock::now();
+    while (msSince(t0) < 5000) {  // as the loop: look only after a wake
+        if (!uiWakePending()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+        uiWakeTaken();
+        SyncEvent e;
+        while (rig.service->poll(e)) events.push_back(e);
+        if (!events.empty() && events.back().kind == SyncEvent::Kind::SyncFinished) break;
+    }
+    setUiWaker(nullptr);
+    uiWakeTaken();
+    REQUIRE_FALSE(events.empty());
+    CHECK(events.back().kind == SyncEvent::Kind::SyncFinished);
+    CHECK(gSyncWakes >= 1);
 }

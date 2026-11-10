@@ -23,6 +23,7 @@ public:
     void setOrientation(Orientation o) override { screen_->setOrientation(o); }
     void present(const Canvas&, Rect, Waveform) override;
     bool pollEvents(std::vector<InputEvent>&, int timeout_ms) override;
+    bool repaintsOnForeground() const override { return screen_->repaintsOnForeground(); }
     bool systemInk() const override { return screen_->systemInk(); }
     bool setSystemInk(bool on) override { return screen_->setSystemInk(on); }
 

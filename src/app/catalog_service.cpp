@@ -1,6 +1,7 @@
 #include "app/catalog_service.h"
 
 #include "core/log.h"
+#include "core/wake.h"
 #include "plugins/host.h"
 #include "plugins/state.h"
 
@@ -50,9 +51,12 @@ CatalogService::~CatalogService() {
 }
 
 void CatalogService::set(const std::function<void(State&)>& change) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    change(status_);
-    ++status_.serial;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        change(status_);
+        ++status_.serial;
+    }
+    wakeUi();  // the screens that show it look at it on the next step
 }
 
 void CatalogService::refresh(State& s) {
