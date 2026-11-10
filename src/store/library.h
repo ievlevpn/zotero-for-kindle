@@ -42,6 +42,7 @@ struct ItemRow {
     double progress = -1;  // -1: never opened
     std::string itemType;  // Zotero's: "book", "journalArticle", "preprint", … ("attachment": a lone file)
     bool read = false;     // has the read tag (or was marked read on the Kindle, not sent yet)
+    bool operator==(const ItemRow&) const = default;
 };
 
 // Everything the item details sheet and page show (long-press on an item).

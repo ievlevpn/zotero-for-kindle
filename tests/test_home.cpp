@@ -118,7 +118,7 @@ TEST_CASE("home: taps go to sync, search, settings and items") {
     CHECK(rig.opened.size() == 2);
 }
 
-TEST_CASE("home: sync progress repaints only the header; a finished sync repaints the lists") {
+TEST_CASE("home: sync progress repaints only the header; a finished sync repaints only what it changed") {
     Rig rig;
     rig.nav.damages.clear();
     SyncEvent e;
@@ -129,11 +129,53 @@ TEST_CASE("home: sync progress repaints only the header; a finished sync repaint
     CHECK(rig.nav.damages[0].waveform == Waveform::Ui);
     CHECK(rig.nav.damages[0].rect.y + rig.nav.damages[0].rect.h <= kHeaderH);
     rig.nav.damages.clear();
+    rig.home.onSyncEvent(e, rig.nav);  // the same line again: nothing to repaint
+    CHECK(rig.nav.damages.empty());
+    // A sync that brought something: the card and rows, with quality, but never the whole screen.
+    rig.lib.markOpened("IT000006", "EP000006", kNowWall);
     e.kind = SyncEvent::Kind::SyncFinished;
     rig.home.onSyncEvent(e, rig.nav);
     bool quality = false;
-    for (const auto& d : rig.nav.damages) quality |= d.waveform == Waveform::Quality;
+    for (const auto& d : rig.nav.damages) {
+        quality |= d.waveform == Waveform::Quality;
+        CHECK_FALSE(d.rect == Rect{0, 0, 1236, 1547});  // not the whole screen (every 6th of those flashes)
+    }
     CHECK(quality);
+}
+
+TEST_CASE("home: a periodic sync that changed nothing repaints only the status line") {
+    Rig rig;
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::SyncFinished;
+    rig.home.onSyncEvent(e, rig.nav);  // "Synced just now"
+    rig.nav.now += 10 * 60'000;
+    for (int i = 0; i < 3; ++i) {
+        rig.nav.damages.clear();
+        e.kind = SyncEvent::Kind::SyncStarted;
+        rig.home.onSyncEvent(e, rig.nav);
+        e.kind = SyncEvent::Kind::SyncFinished;
+        rig.home.onSyncEvent(e, rig.nav);
+        for (const auto& d : rig.nav.damages) {
+            CHECK(d.waveform == Waveform::Ui);
+            CHECK(d.rect.y + d.rect.h <= kHeaderH);
+        }
+        rig.nav.now += 10 * 60'000;
+    }
+}
+
+TEST_CASE("home: a sync that keeps failing the same way repaints the banner once") {
+    Rig rig;
+    SyncEvent e;
+    e.kind = SyncEvent::Kind::SyncFinished;
+    e.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", ""};
+    rig.nav.damages.clear();
+    rig.home.onSyncEvent(e, rig.nav);
+    bool banner = false;
+    for (const auto& d : rig.nav.damages) banner |= d.rect.y > kHeaderH && d.waveform == Waveform::Quality;
+    CHECK(banner);
+    rig.nav.damages.clear();
+    rig.home.onSyncEvent(e, rig.nav);  // offline again: what Home shows hasn't changed
+    CHECK(rig.nav.damages.empty());
 }
 
 TEST_CASE("home: showing Home asks for a sync when the last one is old") {

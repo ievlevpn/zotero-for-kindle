@@ -61,6 +61,26 @@ public:
 
 private:
     void reload(Library&);
+    // What the header and the content (card, rows, banner) show: a finished sync repaints only
+    // what it changed. Most periodic syncs change nothing, and a full-screen repaint every 10
+    // minutes (a flash every 6th) costs battery for nothing.
+    struct Header {
+        std::string line;
+        bool syncing = false, error = false;
+        bool operator==(const Header&) const = default;
+    };
+    struct Content {
+        std::optional<ItemRow> card;
+        bool opened = false;
+        int64_t openedMs = 0, total = 0;
+        size_t highlights = 0;
+        std::vector<ItemRow> recent;
+        std::string error;  // the banner's
+        bool hasError = false;
+        bool operator==(const Content&) const = default;
+    };
+    Header header() const;
+    Content content() const;
     Rect bannerRect() const;
     bool bannerShown() const {
         return status_.hasError() || safeModeBannerText().has_value() || updateBannerText().has_value();
