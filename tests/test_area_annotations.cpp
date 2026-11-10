@@ -240,7 +240,7 @@ AnnotationRecord savedArea(const std::string& key, Rect r, const std::string& pa
 
 }  // namespace
 
-TEST_CASE("area: tapping an existing area, on its frame or anywhere inside, selects it with the edit bar") {
+TEST_CASE("area: tapping near an existing area's frame, inside or out, selects it with the edit bar") {
     Rig rig;
     rig.lib.upsertAnnotation(savedArea("AREA0001", {300, 800, 400, 300}));
     SyncEvent ready;
@@ -249,7 +249,7 @@ TEST_CASE("area: tapping an existing area, on its frame or anywhere inside, sele
     rig.reader->onSyncEvent(ready, rig.nav);
     REQUIRE(rig.waitFor([&] { return !rig.reader->highlights().empty(); }));
     CHECK(rig.reader->highlights()[0].kind == HighlightBox::Kind::Image);
-    for (Point p : {Point{301, 900}, Point{500, 950}, Point{699, 1099}}) {
+    for (Point p : {Point{301, 900}, Point{360, 950}, Point{699, 1099}, Point{500, 1150}, Point{250, 950}}) {
         rig.tap(p);
         REQUIRE(rig.editor());
         CHECK(rig.editor()->key() == "AREA0001");
@@ -260,6 +260,35 @@ TEST_CASE("area: tapping an existing area, on its frame or anywhere inside, sele
     }
 }
 
+TEST_CASE("area: a tap in the middle of a large area is the page's; a small area is selectable anywhere") {
+    Rig rig;
+    rig.lib.upsertAnnotation(savedArea("AREABIG1", {250, 300, 750, 900}));
+    rig.lib.upsertAnnotation(savedArea("AREASML1", {150, 1250, 150, 150}));
+    SyncEvent ready;
+    ready.kind = SyncEvent::Kind::AnnotationsReady;
+    ready.attachmentKey = "EP000003";
+    rig.reader->onSyncEvent(ready, rig.nav);
+    REQUIRE(rig.waitFor([&] { return rig.reader->highlights().size() == 2; }));
+    rig.tap({618, 750});  // the big area's centre: the menus
+    CHECK_FALSE(rig.editor());
+    CHECK(rig.reader->menusOpen());
+    rig.tap({618, 1000});  // closes them
+    REQUIRE_FALSE(rig.reader->menusOpen());
+    rig.tap({618, 300 + ReaderScreen::kAreaFramePx - 5});  // near its top edge, inside
+    REQUIRE(rig.editor());
+    CHECK(rig.editor()->key() == "AREABIG1");
+    rig.tap({618, 1450});
+    REQUIRE_FALSE(rig.editor());
+    rig.tap({225, 1325});  // the small one's centre, 75 px from its frame
+    REQUIRE(rig.editor());
+    CHECK(rig.editor()->key() == "AREASML1");
+    rig.tap({618, 1450});
+    // Where both qualify, the nearest frame wins: just below the big one, near the small one's top.
+    rig.tap({225, 1240});  // 41 px from the big one, 10 from the small one
+    REQUIRE(rig.editor());
+    CHECK(rig.editor()->key() == "AREASML1");
+}
+
 TEST_CASE("area: Delete asks about the area, then deletes it through the usual deletion") {
     Rig rig;
     rig.lib.upsertAnnotation(savedArea("AREA0001", {300, 800, 400, 300}));
@@ -268,7 +297,7 @@ TEST_CASE("area: Delete asks about the area, then deletes it through the usual d
     ready.attachmentKey = "EP000003";
     rig.reader->onSyncEvent(ready, rig.nav);
     REQUIRE(rig.waitFor([&] { return !rig.reader->highlights().empty(); }));
-    rig.tap({500, 950});
+    rig.tap({310, 950});  // near its frame
     REQUIRE(rig.editor());
     rig.tap(rig.editor()->bar().buttonRect(1).center());  // Delete
     REQUIRE(rig.editor()->confirming());

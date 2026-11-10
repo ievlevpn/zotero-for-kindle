@@ -768,20 +768,26 @@ void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
 
 bool ReaderScreen::editAt(Point p, Nav& nav) {
     // On a box first; else the nearest box within a fingertip (thin PDF lines are hard to hit).
+    // An area is hit near its frame (inside or out), not in its middle, which stays the page's
+    // (menus, turns, links, highlights under it); a small area anywhere inside. Nearest wins.
     constexpr int kSlack = 30;
     std::string key;
-    for (auto it = highlights_.rbegin(); it != highlights_.rend() && key.empty(); ++it)
-        if (it->rect.contains(p)) key = it->annotationKey;
-    if (key.empty()) {
-        int best = kSlack + 1;
-        for (const auto& h : highlights_) {
-            const Rect& r = h.rect;
-            const int dx = std::max({r.x - p.x, 0, p.x - (r.x + r.w - 1)});
-            const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
-            if (std::max(dx, dy) < best) {
-                best = std::max(dx, dy);
-                key = h.annotationKey;
-            }
+    int best = 1 << 30;
+    for (auto it = highlights_.rbegin(); it != highlights_.rend(); ++it) {
+        const Rect& r = it->rect;
+        const int dx = std::max({r.x - p.x, 0, p.x - (r.x + r.w - 1)});
+        const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
+        int d = std::max(dx, dy);  // 0 inside
+        int reach = kSlack;
+        if (it->kind == HighlightBox::Kind::Image) {
+            reach = kAreaFramePx;
+            const bool small = r.w < kSmallAreaPx || r.h < kSmallAreaPx;
+            if (d == 0 && !small)  // inside: how far from the frame
+                d = std::min({p.x - r.x, r.x + r.w - 1 - p.x, p.y - r.y, r.y + r.h - 1 - p.y});
+        }
+        if (d <= reach && d < best) {
+            best = d;
+            key = it->annotationKey;
         }
     }
     if (key.empty()) return false;

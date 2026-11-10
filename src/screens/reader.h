@@ -132,6 +132,9 @@ public:
     static Rect areaBannerRect();  // "Drag across the area to mark" while armed, at the top of the page
     static Rect areaCancelRect();
     static constexpr int kMinAreaPx = 59;  // ~5 mm at 300 ppi: smaller on either side is a slip
+    // A tap selects an area within ~6 mm of its frame (inside or out); one smaller than ~15 mm on
+    // a side anywhere inside. Elsewhere inside, the tap is the page's.
+    static constexpr int kAreaFramePx = 71, kSmallAreaPx = 177;
 
     // Handwriting (PDF, Scribe): strokes wait this long after the last one, then become one
     // Zotero ink annotation (a page turn sends them at once).
