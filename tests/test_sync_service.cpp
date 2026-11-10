@@ -14,6 +14,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -48,6 +49,7 @@ struct Rig {
     std::unique_ptr<SyncService> service;
     std::atomic<bool> wifi{true};
     std::atomic<uint64_t> freeBytes{uint64_t{1} << 40};
+    std::atomic<int64_t> wallMs{1'762'000'000'000};
     int onlineGiveUpMs = 120'000;
 
     Rig() {
@@ -82,6 +84,7 @@ struct Rig {
         deps.keepAwake = &keepAwake;
         deps.wifiUp = [this] { return wifi.load(); };
         deps.freeBytes = [this] { return freeBytes.load(); };
+        deps.wallMs = [this] { return wallMs.load(); };
         deps.onlinePollMs = 20;
         deps.onlineGiveUpMs = onlineGiveUpMs;
         service = std::make_unique<SyncService>(std::move(deps));
@@ -348,6 +351,7 @@ struct KeptRig : Rig {
     std::mutex fileMutex;
     std::vector<std::string> fetched;  // attachment keys whose file was asked for, in order
     std::function<void(const HttpRequest&)> onFile;  // e.g. hold one back
+    std::map<std::string, long> fileStatus;          // answer /file for this key with this status
 
     KeptRig() {
         zotero.putCollection("SHELF001", "Shelf");
@@ -364,6 +368,10 @@ struct KeptRig : Rig {
                     fetched.push_back(key);
                 }
                 if (onFile) onFile(r);
+                {
+                    std::lock_guard<std::mutex> lock(fileMutex);
+                    if (auto it = fileStatus.find(key); it != fileStatus.end()) return FakeHttp::status(it->second);
+                }
                 if (r.cancel && *r.cancel) {
                     HttpResponse aborted;
                     aborted.curlCode = 42;
@@ -374,6 +382,15 @@ struct KeptRig : Rig {
             }
             if (r.url.rfind("https://files.example/", 0) == 0) {
                 HttpResponse ok = FakeHttp::ok(content(r.url.substr(22)));
+                if (r.onProgress) {  // like CurlHttp: the size is known early
+                    r.onProgress(0, static_cast<int64_t>(ok.body.size()));
+                    if (r.cancel && *r.cancel) {
+                        HttpResponse aborted;
+                        aborted.curlCode = 42;
+                        aborted.curlError = "Callback aborted";
+                        return aborted;
+                    }
+                }
                 if (!r.outFile.empty()) {
                     std::ofstream(r.outFile, std::ios::binary) << ok.body;
                     ok.body.clear();
@@ -400,6 +417,15 @@ struct KeptRig : Rig {
     }
     void startOnZotero() { start(""); }
     bool downloaded(const std::string& att) { return fs::exists(fs::path(files()) / att / "book.epub"); }
+    void answerFile(const std::string& key, long status) {
+        std::lock_guard<std::mutex> lock(fileMutex);
+        if (status) fileStatus[key] = status;
+        else fileStatus.erase(key);
+    }
+    int fetches(const std::string& key) {
+        std::lock_guard<std::mutex> lock(fileMutex);
+        return static_cast<int>(std::count(fetched.begin(), fetched.end(), key));
+    }
     std::vector<std::string> fetchedCopy() {
         std::lock_guard<std::mutex> lock(fileMutex);
         return fetched;
@@ -587,4 +613,88 @@ TEST_CASE("kept: catching up doesn't hold the Kindle awake beyond the sync") {
     rig.service->downloadKept();
     REQUIRE(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
     CHECK(rig.lipc.setsCopy().size() == sets);  // no keep-awake taken for it
+}
+
+TEST_CASE("kept: a server or network failure ends the round; the next sync tries again") {
+    KeptRig rig;
+    rig.answerFile("ATTA0001", 503);
+    rig.answerFile("ATTB0001", 503);
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.fetchedCopy().size() == 1; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK(rig.fetchedCopy().size() == 1);  // not file after file
+    CHECK_FALSE(rig.service->keptStatus("SHELF001"));
+    rig.answerFile("ATTA0001", 0);
+    rig.answerFile("ATTB0001", 0);
+    rig.syncAndWait();
+    CHECK(rig.waitUntil([&] { return rig.downloaded("ATTA0001") && rig.downloaded("ATTB0001"); }));
+}
+
+TEST_CASE("kept: a file missing on the server isn't asked for after every sync; after a week, or a change, it is") {
+    KeptRig rig;
+    rig.answerFile("ATTA0001", 404);
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.downloaded("ATTB0001"); }));  // the others carry on
+    REQUIRE(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    CHECK(rig.fetches("ATTA0001") == 1);
+    rig.syncAndWait();
+    rig.syncAndWait();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(rig.fetches("ATTA0001") == 1);
+    {  // remembered in the library, across restarts
+        rig.service.reset();
+        rig.startOnZotero();
+        rig.syncAndWait();
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK(rig.fetches("ATTA0001") == 1);
+    }
+    rig.wallMs += int64_t{8} * 24 * 3600 * 1000;  // a week on
+    rig.syncAndWait();
+    CHECK(rig.waitUntil([&] { return rig.fetches("ATTA0001") == 2; }));
+    rig.book("BOOKA001", "ATTA0001", "SHELF001");  // changed in Zotero (a new version), and there now
+    rig.answerFile("ATTA0001", 0);
+    rig.syncAndWait();
+    CHECK(rig.waitUntil([&] { return rig.downloaded("ATTA0001"); }));
+}
+
+TEST_CASE("kept: a file whose size would take the Kindle under 300 MB is cancelled, and the row pauses") {
+    KeptRig rig;
+    rig.freeBytes = kKeptMinFree + 5;  // above the floor, but not by a whole book
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.service->keptStatus("SHELF001") && rig.service->keptStatus("SHELF001")->paused; }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(rig.fetchedCopy().size() == 1);
+    CHECK_FALSE(rig.downloaded("ATTA0001"));
+    CHECK_FALSE(rig.downloaded("ATTB0001"));
+    // The cancel was for that file only: opening a book still works.
+    rig.freeBytes = uint64_t{1} << 40;
+    rig.service->openBook("BOOKC001", "ATTC0001");
+    auto events = rig.waitFor([](const SyncEvent& e) { return e.kind == SyncEvent::Kind::DownloadFinished && e.attachmentKey == "ATTC0001"; });
+    CHECK_FALSE(events.back().error);
+}
+
+TEST_CASE("kept: an opened book isn't told to wait while only kept files download") {
+    KeptRig rig;
+    std::atomic<bool> release{false};
+    rig.onFile = [&](const HttpRequest& r) {
+        if (r.url.find("ATTC0001") != std::string::npos) return;
+        while (!release && !(r.cancel && *r.cancel)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    };
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.fetchedCopy().size() == 1; }));
+    CHECK_FALSE(rig.service->busy());
+    release = true;
+    rig.service.reset();  // before `release` goes
 }

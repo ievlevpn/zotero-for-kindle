@@ -185,7 +185,9 @@ void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         auto rects = entryRects();
         for (size_t i = 0; i < entries_.size(); ++i) {
             const std::string& key = entries_[i].collection.key;
-            if (statusOf(was, key) != statusOf(kept_, key)) nav.damage(rects[i], Waveform::Ui);
+            // The note's last change (gone) rests: the quality waveform, no ghost of "Downloading…".
+            if (statusOf(was, key) != statusOf(kept_, key))
+                nav.damage(rects[i], statusOf(kept_, key) ? Waveform::Ui : Waveform::Quality);
         }
         return;
     }
@@ -321,15 +323,22 @@ void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         for (size_t i = 0; i < page_.size(); ++i) {
             if (!page_[i].isCollection) continue;
             const std::string& key = page_[i].collection.collection.key;
-            if (statusOf(was, key) != statusOf(kept_, key)) nav.damage(rects[i], Waveform::Ui);
+            // The note's last change (gone) rests: the quality waveform, no ghost of "Downloading…".
+            if (statusOf(was, key) != statusOf(kept_, key))
+                nav.damage(rects[i], statusOf(kept_, key) ? Waveform::Ui : Waveform::Quality);
         }
         return;
     }
     if (e.kind == SyncEvent::Kind::DownloadProgress || e.kind == SyncEvent::Kind::DownloadFinished) {
-        if (e.kind == SyncEvent::Kind::DownloadFinished) load(nav.library());
+        // Only the row of that file (kept collections download one after another): refreshed
+        // from the library when it finished, not the whole page.
         auto rects = lineRects();
-        for (size_t i = 0; i < page_.size(); ++i)
-            if (!page_[i].isCollection && page_[i].item.attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Ui);
+        for (size_t i = 0; i < page_.size(); ++i) {
+            if (page_[i].isCollection || page_[i].item.attachmentKey != e.attachmentKey) continue;
+            if (e.kind == SyncEvent::Kind::DownloadFinished)
+                if (auto row = nav.library().rowFor(page_[i].item.key)) page_[i].item = std::move(*row);
+            nav.damage(rects[i], Waveform::Ui);
+        }
         return;
     }
     if (e.kind != SyncEvent::Kind::SyncFinished) return;

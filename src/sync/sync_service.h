@@ -38,6 +38,7 @@ struct SyncDeps {
     std::function<bool()> pluginEventsWanted;
     // Free bytes where the files go (kept collections pause under kKeptMinFree). Default: statvfs.
     std::function<uint64_t()> freeBytes;
+    std::function<int64_t()> wallMs;  // ms since the epoch (a failed kept file's retry); default: the clock
 };
 
 // Kept collections stop downloading below this much free space (spec B).
@@ -81,7 +82,9 @@ private:
     bool sleepForMs(int ms);
     void pushChanges(Worker&);  // PushStarted/PushFinished around SyncEngine::push, if anything is unsent
     // The file into filesDir (DownloadProgress on the way) and marked Local; false with *err if not.
-    bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err);
+    // onTotal: once, when the size is known.
+    bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err,
+                  const std::function<void(int64_t total)>& onTotal = nullptr);
     bool keepStep(Worker&, bool fresh);  // true: more to download
     void setKept(std::map<std::string, KeptStatus>);  // KeptChanged if it changed
 

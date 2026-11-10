@@ -8,6 +8,7 @@
 
 #include "screens/plugins.h"
 #include "screens/screen.h"
+#include "ui/text.h"
 #include "sync/config.h"
 #include "update/updater.h"
 
@@ -43,6 +44,11 @@ public:
     bool pluginsDot() const { return pluginsDot_; }  // plugin updates are waiting (Nav::catalog)
     Rect aboutTextRect() const;  // the About row's second line (two lines at most)
     std::string updateLine() const;  // the About row's second line: version, or the last check's result
+    // The Downloaded files row's text: the size, or while Remove all waits for its second tap, what
+    // it will do (with kept collections: that it stops keeping them, so nothing comes back unasked).
+    std::string storageLine() const;
+    static TextStyle storageStyle(bool confirming);
+    Rect storageTextRect() const;
 
 private:
     void load(Library&);
@@ -62,6 +68,7 @@ private:
     std::string readTag_;
     bool confirmRemove_ = false;
     int64_t downloadedBytes_ = 0;
+    int keptCount_ = 0;  // collections kept downloaded
 };
 
 }  // namespace zk

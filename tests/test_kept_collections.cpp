@@ -7,6 +7,7 @@
 #include "fixture_library.h"
 #include "golden.h"
 #include "screens/collections.h"
+#include "screens/settings.h"
 #include "store/db.h"
 #include "ui/metrics.h"
 #include "ui/text.h"
@@ -188,4 +189,31 @@ TEST_CASE("kept: the sheet's buttons and a kept row fit on the KT4 and the Scrib
         Canvas c(m.width, m.height);
         screen.draw(c);  // draws without throwing at this size
     }
+}
+
+TEST_CASE("kept: Remove all downloads also stops keeping collections, and its confirmation says so") {
+    if (std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) addFontDir("assets/fonts-device");
+    Rig rig;
+    rig.lib.setCollectionKept("COLLCCCC", true);
+    rig.lib.setCollectionKept("COLLBBBB", true);
+    for (const Metrics& m : {kKt4, kScribe, metrics()}) {  // the confirmation fits everywhere
+        ScopedMetrics s(m);
+        SettingsScreen settings(Config{}, [](Nav&) {});
+        settings.onShow(rig.nav);
+        CHECK(settings.storageLine().rfind("Downloaded files: ", 0) == 0);
+        settings.onGesture(tapAt(settings.removeRect().center()), rig.nav);
+        CHECK(settings.storageLine() == "Removes 0 KB and stops keeping 2 collections downloaded");
+        const Rect box = settings.storageTextRect();
+        CHECK(box.x + box.w <= settings.removeRect().x);
+        CHECK_FALSE(measureText(settings.storageLine(), SettingsScreen::storageStyle(true), box.w, 2).truncated);
+    }
+    SettingsScreen settings(Config{}, [](Nav&) {});
+    settings.onShow(rig.nav);
+    settings.onGesture(tapAt(settings.removeRect().center()), rig.nav);
+    settings.onGesture(tapAt(settings.removeRect().center()), rig.nav);
+    CHECK(rig.nav.syncFake.removals == 1);
+    CHECK(rig.lib.keptCollections().empty());
+    // Without kept collections the confirmation is as before.
+    settings.onGesture(tapAt(settings.removeRect().center()), rig.nav);
+    CHECK(settings.storageLine().rfind("Downloaded files: ", 0) == 0);
 }
