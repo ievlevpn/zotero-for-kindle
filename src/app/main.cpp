@@ -514,6 +514,7 @@ int main(int argc, char** argv) {
                 plugins.reset();
                 plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
                 pluginEvents.rebind(plugins.get(), app);
+                plugins->setBackground(app.inBackground());  // a new host starts as the app is
                 if (!pluginsOff) plugins->start();
                 pluginsRunning = true;
                 pluginEvents.setRunning(!pluginsOff);
@@ -620,6 +621,7 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    plugins->setBackground(app.inBackground());
     if (!pluginsOff) plugins->start();  // after the first screen: plugins load lazily, at the first event
     switch (const Confirmed c = confirmStartup(installPaths); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;

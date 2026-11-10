@@ -1401,3 +1401,18 @@ TEST_CASE("host: in the background, timers of ended calls wait for the foregroun
     host.setBackground(false);
     CHECK(eventually([&] { return contains(fp.log("a"), "orphan fired"); }));
 }
+
+TEST_CASE("host: setBackground before start() holds from the first event (a host made while in the background)") {
+    FakePlugins fp;
+    fp.add("a", R"(zk.on("syncFinished", () => { setTimeout(() => console.log("orphan fired"), 0); });)");
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.setBackground(true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(3000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK_FALSE(contains(fp.log("a"), "orphan fired"));
+    host.setBackground(false);
+    CHECK(eventually([&] { return contains(fp.log("a"), "orphan fired"); }));
+}
