@@ -192,8 +192,8 @@ plugins_lib = static_library('zk-plugins',
 plugins_dep = declare_dependency(link_with : plugins_lib, dependencies : [core_dep, store_dep, docs_dep, quickjs_dep, plugin_events_dep],
   include_directories : include_directories('third_party', is_system : true))
 
-# Plugin catalog (part 3): the signed registry and the release check.
-catalog_lib = static_library('zk-catalog', 'src/catalog/registry.cpp', 'src/catalog/check.cpp',
+# Plugin catalog (part 3): the signed registry, the release check and the installer.
+catalog_lib = static_library('zk-catalog', 'src/catalog/registry.cpp', 'src/catalog/check.cpp', 'src/catalog/install.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
   dependencies : [update_dep, plugins_dep])
 catalog_dep = declare_dependency(link_with : catalog_lib, dependencies : [update_dep, plugins_dep])

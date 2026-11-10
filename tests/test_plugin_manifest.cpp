@@ -151,6 +151,12 @@ TEST_CASE("scan: [Review Focus] bad folders are listed with their problem and do
     fs::copy("tests/data/plugins/scan", t.p, fs::copy_options::recursive);
     write(t.p / ".state.json", "{}");
     fs::create_directories(t.p / ".cache");
+    // the catalog's folders: staging, the kept previous version, the cache
+    fs::create_directories(t.p / ".incoming");
+    fs::copy(t.p / "good", t.p / ".incoming/good", fs::copy_options::recursive);
+    fs::create_directories(t.p / ".previous");
+    fs::copy(t.p / "good", t.p / ".previous/good", fs::copy_options::recursive);
+    fs::create_directories(t.p / ".catalog");
     write(t.p / "OFF", "");
     write(t.p / "stray-file.txt", "x");
     auto v = scanPlugins(t.p.string(), Version{9, 9, 9});

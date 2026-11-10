@@ -113,6 +113,7 @@ test_sources = files(
   'test_plugin_entries.cpp',
   'test_catalog_registry.cpp',
   'test_catalog_check.cpp',
+  'test_catalog_install.cpp',
   '../src/platform/kindle/x_touch.cpp',
 )
 
