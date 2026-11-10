@@ -83,6 +83,27 @@ void blit(Canvas& c, const PageImage& img, int y0) {
     cairo_surface_mark_dirty(c.surface());
 }
 
+// An area's frame: its colour's shade made darker, so even yellow shows as a line on e-ink while
+// the colours stay apart (yellow 121, red 94, purple 88).
+uint8_t areaFrameShade(uint8_t shade) { return static_cast<uint8_t>(shade * 55 / 100); }
+
+// The four edges of a frame drawn `w` px wide around `r`, padded: what a moving frame repaints.
+std::vector<Rect> frameEdges(Rect r, int w) {
+    if (r.empty()) return {};
+    const int p = w + 4;
+    return {{r.x - p, r.y - p, r.w + 2 * p, 2 * p},
+            {r.x - p, r.y + r.h - p, r.w + 2 * p, 2 * p},
+            {r.x - p, r.y - p, 2 * p, r.h + 2 * p},
+            {r.x + r.w - p, r.y - p, 2 * p, r.h + 2 * p}};
+}
+
+void strokeFrame(cairo_t* cr, Rect r, uint8_t shade, int w) {
+    gray(cr, shade);
+    cairo_set_line_width(cr, w);
+    cairo_rectangle(cr, r.x + w / 2.0, r.y + w / 2.0, r.w - w, r.h - w);
+    cairo_stroke(cr);
+}
+
 // Zotero highlights (read-only): the page under the box is multiplied by the shade, so paper
 // darkens and ink stays black; underlines are a bar under the text.
 void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
@@ -92,6 +113,17 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
     const int stride = cairo_image_surface_get_stride(c.surface());
     for (const auto& b : boxes) {
         const Rect r = b.rect.intersected(ReaderScreen::pageArea());
+        if (!r.empty() && b.kind == HighlightBox::Kind::Image) {  // an area: a light tint (its frame below)
+            const uint32_t tint = 255 - (255 - b.shade) / 3;
+            for (int y = r.y; y < r.y + r.h; ++y) {
+                auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
+                for (int x = r.x; x < r.x + r.w; ++x) {
+                    const uint32_t v = (row[x] & 0xff) * tint / 255;
+                    row[x] = 0xff000000u | (v << 16) | (v << 8) | v;
+                }
+            }
+            continue;
+        }
         if (r.empty() || b.kind != HighlightBox::Kind::Highlight) continue;  // drawn below, with cairo
         if (b.underline) {
             for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < c.height(); ++y) {
@@ -140,10 +172,10 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes) {
                 cairo_stroke(cr);
                 break;
             }
-            case HighlightBox::Kind::Image:  // the area, outlined
-                gray(cr, kInk);
-                cairo_set_line_width(cr, 4);
-                cairo_rectangle(cr, b.rect.x + 2, b.rect.y + 2, b.rect.w - 4, b.rect.h - 4);
+            case HighlightBox::Kind::Image:  // the area: a 3 px frame, its colour as a darker shade
+                gray(cr, areaFrameShade(b.shade));
+                cairo_set_line_width(cr, 3);
+                cairo_rectangle(cr, b.rect.x + 1.5, b.rect.y + 1.5, b.rect.w - 3, b.rect.h - 3);
                 cairo_stroke(cr);
                 break;
             case HighlightBox::Kind::Ink:
@@ -398,17 +430,22 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::Ink:
                 onInk(e, nav);
                 break;
+            case RenderEvent::Kind::Area:
+                onArea(e, nav);
+                break;
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
                 const bool turned = turning_;
-                if (e.page != page_ && (selecting_ || selection_ || editor_)) {  // the page changed under them
+                if (e.page != page_ && (selecting_ || selection_ || editor_ || areaDrawing_)) {  // the page changed under them
                     if (note_ || (editor_ && editor_->wantsKeyboard())) nav.keyboard().hide();
                     editor_.reset();
                     dropSelection();
                 }
+                if (e.page != page_) dropArea();
                 image_ = e.image;
                 highlights_ = e.highlights;
+                pageBox_ = e.pageBox;
                 // Saved ink is drawn by the page once the page carries its annotation.
                 inkSaved_.erase(std::remove_if(inkSaved_.begin(), inkSaved_.end(),
                                                [&](const SavedInk& s) {
@@ -418,6 +455,14 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                                                    return false;
                                                }),
                                 inkSaved_.end());
+                areaSaved_.erase(std::remove_if(areaSaved_.begin(), areaSaved_.end(),
+                                                [&](const SavedArea& s) {
+                                                    if (s.page != e.page) return true;
+                                                    for (const auto& b : e.highlights)
+                                                        if (b.annotationKey == s.key) return true;
+                                                    return false;
+                                                }),
+                                 areaSaved_.end());
                 page_ = e.page;
                 pageCount_ = e.pageCount;
                 views_ = std::max(1, e.viewsPerPage);
@@ -461,6 +506,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
 }
 
 void ReaderScreen::turn(int delta, Nav& nav) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (!worker_ || page_ < 0 || layoutPending_) return;  // old numbering until the new pages arrive
     linkId_ = 0;
     commitInk();
@@ -490,6 +536,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
 }
 
 void ReaderScreen::turnTo(int page) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (!worker_ || layoutPending_) return;
     linkId_ = 0;
     markJumpOrigin();
@@ -499,6 +546,7 @@ void ReaderScreen::turnTo(int page) {
 }
 
 void ReaderScreen::jumpTo(const DocPosition& pos) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     menus_.reset();  // we're not visible (a pushed screen called us); the next Page repaints all
     if (!worker_) return;
     linkId_ = 0;
@@ -509,6 +557,7 @@ void ReaderScreen::jumpTo(const DocPosition& pos) {
 }
 
 void ReaderScreen::jumpToAnnotation(const AnnotationRecord& a) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     menus_.reset();
     if (!worker_) {
         openAt_ = a;  // opening from Notes: the worker starts in onShow
@@ -528,6 +577,7 @@ void ReaderScreen::onResize(Nav& nav) {
     fitLayout(layout_, type_, twoColumnsSetting_);
     bar_.reset();  // anchored to the old page
     if (editor_) closeEditor(nav);
+    cancelArea(nav);
     if (!worker_) return;
     layoutPending_ = true;
     for (auto& b : back_) b.page = -1;  // turned: pages are counted again
@@ -604,6 +654,26 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         if (go) followLink(info);
         return;
     }
+    if (areaDrawing_ && !areaPen_) {  // a finger drawing an area
+        switch (g.type) {
+            case GestureType::DragStart:
+            case GestureType::DragMove:
+                return moveArea(g.pos, nav);
+            case GestureType::DragEnd:
+                return endArea(g.pos, nav);
+            case GestureType::LongPressUp:
+                return endArea(areaTo_, nav);
+            default:
+                areaDrawing_ = false;
+                nav.damage(pageArea(), Waveform::Quality);
+                break;
+        }
+    }
+    if (areaArmed_) {  // Mark an area: the next drag draws one; Cancel ends it; nothing else meanwhile
+        if (g.type == GestureType::Tap && areaCancelRect().contains(g.pos)) return cancelArea(nav);
+        if (g.type == GestureType::DragStart && ready()) beginArea(g.start, g.pos, nav);
+        return;
+    }
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
         if (backLabel() && backRect().contains(g.pos)) return back(nav);
         if (bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos)) && !turning_ &&
@@ -621,6 +691,10 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
             if (editor_->takeChanged()) {
                 refreshHighlights(nav);
                 nav.sync().pushSoon();
+                if (editor_->key() == newAreaKey_ && editor_->bar().colour() != colour_) {  // as a new highlight's
+                    colour_ = editor_->bar().colour();
+                    nav.library().setMetaValue(kColourKey, colour_);
+                }
             }
             return;
         }
@@ -699,20 +773,26 @@ void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
 
 bool ReaderScreen::editAt(Point p, Nav& nav) {
     // On a box first; else the nearest box within a fingertip (thin PDF lines are hard to hit).
+    // An area is hit near its frame (inside or out), not in its middle, which stays the page's
+    // (menus, turns, links, highlights under it); a small area anywhere inside. Nearest wins.
     constexpr int kSlack = 30;
     std::string key;
-    for (auto it = highlights_.rbegin(); it != highlights_.rend() && key.empty(); ++it)
-        if (it->rect.contains(p)) key = it->annotationKey;
-    if (key.empty()) {
-        int best = kSlack + 1;
-        for (const auto& h : highlights_) {
-            const Rect& r = h.rect;
-            const int dx = std::max({r.x - p.x, 0, p.x - (r.x + r.w - 1)});
-            const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
-            if (std::max(dx, dy) < best) {
-                best = std::max(dx, dy);
-                key = h.annotationKey;
-            }
+    int best = 1 << 30;
+    for (auto it = highlights_.rbegin(); it != highlights_.rend(); ++it) {
+        const Rect& r = it->rect;
+        const int dx = std::max({r.x - p.x, 0, p.x - (r.x + r.w - 1)});
+        const int dy = std::max({r.y - p.y, 0, p.y - (r.y + r.h - 1)});
+        int d = std::max(dx, dy);  // 0 inside
+        int reach = kSlack;
+        if (it->kind == HighlightBox::Kind::Image) {
+            reach = kAreaFramePx;
+            const bool small = r.w < kSmallAreaPx || r.h < kSmallAreaPx;
+            if (d == 0 && !small)  // inside: how far from the frame
+                d = std::min({p.x - r.x, r.x + r.w - 1 - p.x, p.y - r.y, r.y + r.h - 1 - p.y});
+        }
+        if (d <= reach && d < best) {
+            best = d;
+            key = it->annotationKey;
         }
     }
     if (key.empty()) return false;
@@ -724,6 +804,8 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
     linkId_ = 0;
     editor_ = std::make_unique<AnnotationEditor>(*a, anchor);
     nav.damage(editor_->rect(), Waveform::Ui);
+    if (a->type == "image")  // its frame turns to ink while selected
+        for (const Rect& r : frameEdges(anchor, 3)) nav.damage(r.intersected(pageArea()), Waveform::Ui);
     return true;
 }
 
@@ -734,6 +816,7 @@ void ReaderScreen::closeEditor(Nav& nav) {
         nav.sync().pushSoon();
     }
     editor_.reset();
+    newAreaKey_.clear();
     nav.damage(pageArea(), Waveform::Quality);
 }
 
@@ -757,16 +840,26 @@ void ReaderScreen::startSelection(Point at, Nav&) {
     linkId_ = 0;
     selecting_ = true;
     selDragging_ = selReleased_ = false;
-    selAnchor_ = at;
+    selAnchor_ = selLast_ = at;
     requestSelection(at);
 }
 
 void ReaderScreen::requestSelection(Point to) {
+    selLast_ = to;
     if (worker_ && selecting_) selPending_ = worker_->select(page_, selAnchor_, to);
 }
 
 void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
     if (!selecting_ || e.requestId != selPending_ || e.page != page_) return;
+    // A PDF long press where there's no text (or on a scan) draws an area instead, from where it
+    // was pressed to where the finger is now.
+    if (type_ == DocType::Pdf && !selection_ && (!e.selection || e.selection->text.empty())) {
+        selecting_ = false;
+        const bool lifted = selReleased_;
+        beginArea(selAnchor_, selLast_, nav);
+        if (lifted) endArea(selLast_, nav);
+        return;
+    }
     if (!e.selection) {
         if (!selection_) selecting_ = false;    // the long-press wasn't on text
         else if (!selDragging_ && selReleased_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
@@ -943,6 +1036,21 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_restore(cr);
     }
     if (selection_) drawSelection(canvas, selection_->rects);
+    {  // areas: being drawn (ink), being saved, saved but not yet back with the page
+        cairo_save(cr);
+        const Rect pa = pageArea();
+        cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
+        cairo_clip(cr);
+        for (const auto& [id, s] : areaSent_)
+            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(s.colour)), 3);
+        for (const auto& s : areaSaved_)
+            if (s.page == page_) strokeFrame(cr, s.rect, areaFrameShade(shadeOf(s.colour)), 3);
+        if (auto r = drawnArea()) strokeFrame(cr, *r, kInk, 3);
+        if (editor_)  // the area its bar is for: framed in ink while selected
+            for (const auto& b : highlights_)
+                if (b.kind == HighlightBox::Kind::Image && b.annotationKey == editor_->key()) strokeFrame(cr, b.rect, kInk, 3);
+        cairo_restore(cr);
+    }
     const Rect f = footerArea();
     if (auto b = backLabel())  // after a jump: the way back, where the chapter line was
         drawText(cr, *b, {kSans, 7, 700}, {kMargin, f.y + 10, W() - 2 * kMargin - 260, 44}, 1);
@@ -979,6 +1087,18 @@ void ReaderScreen::draw(Canvas& canvas) {
                  {n.x + 30, n.y + 84, n.w - 60, 110}, 2);
         drawText(cr, "Return saves", {kSans, 6, 400, false, kTertiary}, {n.x + 30, n.y + n.h - 56, n.w - 60, 40}, 1,
                  Align::Right);
+    }
+    if (areaArmed_ && !areaDrawing_ && !menus_) {
+        const Rect b = areaBannerRect();
+        roundedRect(cr, b.x + 1.5, b.y + 1.5, b.w - 3, b.h - 3, 14);
+        gray(cr, 255);
+        cairo_fill_preserve(cr);
+        cairo_set_line_width(cr, 3);
+        gray(cr, kInk);
+        cairo_stroke(cr);
+        const Rect cancel = areaCancelRect();
+        centredText(cr, "Drag across the area to mark.", {kSans, 8, 500}, {b.x + 36, b.y, cancel.x - b.x - 60, b.h}, Align::Left);
+        drawButton(cr, cancel, "Cancel", false);
     }
     if (question_ && !menus_) {
         const Rect b = positionBannerRect();
@@ -1043,6 +1163,7 @@ std::optional<std::string> ReaderScreen::backLabel() const {
 Rect ReaderScreen::backRect() { return {0, H() - kFooterH, W() * 3 / 5, kFooterH}; }
 
 void ReaderScreen::back(Nav& nav) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (turning_ || back_.empty()) return;
     const BackEntry to = back_.back();
     back_.pop_back();
@@ -1109,6 +1230,7 @@ void ReaderScreen::goToPage(int page) {
 int ReaderScreen::shownPage(int page) const { return page / views_ + 1; }
 
 void ReaderScreen::jumpToHit(const SearchHit& h) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     // A PDF hit knows its view (column view); its position only the page.
     if (type_ != DocType::Pdf || h.page < 0 || (pageCount_ > 0 && h.page >= pageCount_)) return jumpTo(h.pos);
     menus_.reset();
@@ -1149,6 +1271,7 @@ bool ReaderScreen::tapLink(Point p, Nav&) {
 }
 
 void ReaderScreen::followLink(const LinkInfo& l) {
+    dropArea();  // a jump or a turn ends Mark an area and a half-drawn area
     if (!worker_ || (l.target.value.empty() && l.targetPage < 0)) return;
     markJumpOrigin();
     commitInk();
@@ -1211,6 +1334,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     if (!question_) return;
     nav.library().answerRemotePosition(row_.attachmentKey, go, remoteVersion_);
     if (go && worker_) {
+        dropArea();
         markJumpOrigin();
         turning_ = true;
         worker_->show(question_->page * views_);  // its first view (PDF column view)
@@ -1219,10 +1343,118 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
     nav.damage(positionBannerRect(), Waveform::Ui);
 }
 
+// --- Areas ---------------------------------------------------------------------------------
+
+std::optional<Rect> ReaderScreen::drawnArea() const {
+    if (!areaDrawing_) return std::nullopt;
+    const Rect r{std::min(areaFrom_.x, areaTo_.x), std::min(areaFrom_.y, areaTo_.y), std::abs(areaTo_.x - areaFrom_.x),
+                 std::abs(areaTo_.y - areaFrom_.y)};
+    return r.intersected(pageBox_.empty() ? pageArea() : pageBox_.intersected(pageArea()));
+}
+
+Rect ReaderScreen::areaBannerRect() { return {kMargin / 2, 30, W() - kMargin, 150}; }
+Rect ReaderScreen::areaCancelRect() {
+    const Rect b = areaBannerRect();
+    return {b.x + b.w - 30 - 220, b.y + (b.h - 96) / 2, 220, 96};
+}
+
+void ReaderScreen::markArea(Nav& nav) {
+    closeMenus(nav);
+    if (type_ != DocType::Pdf || !ready()) return;
+    linkId_ = 0;
+    areaArmed_ = true;
+    if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+    nav.damage(areaBannerRect(), Waveform::Ui);
+}
+
+void ReaderScreen::beginArea(Point from, Point to, Nav& nav) {
+    linkId_ = 0;
+    areaDrawing_ = true;
+    areaFrom_ = from;
+    areaTo_ = to;
+    if (areaArmed_) nav.damage(areaBannerRect(), Waveform::Fast);  // the banner gives way to the drawing
+    for (const Rect& r : frameEdges(*drawnArea(), 3)) nav.damage(r.intersected(pageArea()), Waveform::Fast);
+}
+
+void ReaderScreen::moveArea(Point to, Nav& nav) {
+    if (!areaDrawing_) return;
+    const Rect before = *drawnArea();
+    areaTo_ = to;
+    const Rect now = *drawnArea();
+    if (now == before) return;
+    for (const Rect& r : frameEdges(before, 3)) nav.damage(r.intersected(pageArea()), Waveform::Fast);
+    for (const Rect& r : frameEdges(now, 3)) nav.damage(r.intersected(pageArea()), Waveform::Fast);
+}
+
+void ReaderScreen::endArea(Point to, Nav& nav) {
+    if (!areaDrawing_) return;
+    moveArea(to, nav);
+    const Rect r = *drawnArea();
+    areaDrawing_ = areaPen_ = false;
+    if (r.w < kMinAreaPx || r.h < kMinAreaPx || !worker_ || page_ < 0) {  // a slip: nothing (Mark an area waits on)
+        for (const Rect& e : frameEdges(r, 3)) nav.damage(e.intersected(pageArea()), Waveform::Ui);
+        if (areaArmed_) nav.damage(areaBannerRect(), Waveform::Ui);
+        return;
+    }
+    if (areaArmed_) {
+        areaArmed_ = false;
+        nav.damage(areaBannerRect(), Waveform::Quality);
+    }
+    areaSent_[worker_->area(page_, r)] = SentArea{page_, r, colour_};  // framed meanwhile
+    if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+}
+
+void ReaderScreen::dropArea() {
+    areaArmed_ = areaDrawing_ = areaPen_ = false;
+    if (selecting_ && !selection_) selecting_ = false;  // a long press still waiting can't start one later
+}
+
+void ReaderScreen::cancelArea(Nav& nav) {
+    if (areaDrawing_) nav.damage(pageArea(), Waveform::Quality);
+    else if (areaArmed_) nav.damage(areaBannerRect(), Waveform::Quality);
+    areaDrawing_ = areaPen_ = areaArmed_ = false;
+    if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+}
+
+void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
+    auto it = areaSent_.find(e.requestId);
+    if (it == areaSent_.end()) return;
+    const SentArea sent = it->second;
+    areaSent_.erase(it);
+    if (!e.ink) {
+        nav.toast("This area couldn't be saved.");
+        nav.damage(pageArea(), Waveform::Quality);
+        return;
+    }
+    AnnotationRecord a;
+    a.parentKey = row_.attachmentKey;
+    a.type = "image";
+    a.color = sent.colour;
+    a.position = e.ink->position;
+    a.sortIndex = e.ink->sortIndex;
+    a.pageLabel = e.ink->pageLabel;
+    const std::string key = nav.library().createAnnotation(a);
+    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
+    nav.library().setMetaValue(kColourKey, sent.colour);
+    nav.sync().pushSoon();
+    areaSaved_.push_back(SavedArea{key, sent.page, sent.rect, sent.colour});
+    refreshHighlights(nav);
+    // Its bar, as a new highlight gets one: unless the reader moved on meanwhile.
+    if (sent.page != page_ || editor_ || menus_ || selecting_ || selection_ || note_ || areaDrawing_ || areaArmed_ ||
+        turning_ || (result_ && result_->shown()))
+        return;
+    auto saved = nav.library().annotation(key);
+    if (!saved) return;
+    editor_ = std::make_unique<AnnotationEditor>(*saved, sent.rect);
+    newAreaKey_ = key;
+    nav.damage(editor_->rect(), Waveform::Ui);
+}
+
 // --- Handwriting -----------------------------------------------------------------------------
 
 bool ReaderScreen::penAllowed() const {
     return worker_ && image_ && !error_ && !menus_ && !selecting_ && !selection_ && !editor_ && !note_ &&
+           !areaArmed_ && !areaDrawing_ &&
            !layoutPending_ && !turning_ && !linkPopup_ && !(result_ && result_->shown());
 }
 
@@ -1247,6 +1479,30 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     }
     const bool lift = p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave;
+    if (areaDrawing_ && areaPen_) {  // an area drawn with the pen
+        if (!lift) {
+            if (p.type == PenEvent::Type::Move) moveArea(p.pos, nav);
+            return true;
+        }
+        // A touch that hardly moved isn't an area: a tap, or held, a long press (text selection).
+        const int dx = std::abs(p.pos.x - areaFrom_.x), dy = std::abs(p.pos.y - areaFrom_.y);
+        if (dx <= 3 * kTapSlopPx && dy <= 3 * kTapSlopPx) {
+            const Point at = areaFrom_;
+            const bool held = nav.nowMs() - areaDownMs_ >= GestureConfig{}.longpress_ms;
+            areaDrawing_ = areaPen_ = false;
+            for (const Rect& r : frameEdges(Rect{std::min(at.x, p.pos.x), std::min(at.y, p.pos.y), dx + 1, dy + 1}, 3))
+                nav.damage(r.intersected(pageArea()), Waveform::Ui);
+            if (held) {
+                onGesture(Gesture{GestureType::LongPress, at, at}, nav);
+                onGesture(Gesture{GestureType::LongPressUp, at, at}, nav);
+            } else {
+                onGesture(Gesture{GestureType::Tap, at, at}, nav);
+            }
+            return false;
+        }
+        endArea(p.pos, nav);
+        return false;
+    }
     if (lift && wipeFrom_) {
         nav.damage(footerArea().contains(*wipeFrom_) ? footerArea() : Rect{0, 0, W(), H()}, Waveform::Ui);
         wipeFrom_.reset();
@@ -1288,6 +1544,17 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         return false;
     }
     if (p.type == PenEvent::Type::Near) return false;
+    if (p.type == PenEvent::Type::Down && type_ == DocType::Pdf && pageArea().contains(p.pos) &&
+        !(question_ && positionBannerRect().contains(p.pos))) {
+        // Mark an area on: the pen draws the area (its Cancel is tapped as with a finger). With the
+        // side button held the pen is a finger, which draws one the same way.
+        if (areaArmed_ && !p.button && worker_ && image_ && !menus_ && !areaCancelRect().contains(p.pos)) {
+            areaPen_ = true;
+            areaDownMs_ = nav.nowMs();
+            beginArea(p.pos, p.pos, nav);
+            return true;
+        }
+    }
     if (p.type == PenEvent::Type::Down) {
         // EPUB (Zotero has no ink there), menus, selection, the footer, the reading-position
         // question's banner, the pen set to tap or its side button held: the pen is a finger.

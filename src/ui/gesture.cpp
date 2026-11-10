@@ -22,6 +22,7 @@ std::vector<Gesture> GestureRecognizer::feed(const TouchEvent& e) {
         if (e.type == TouchEvent::Type::Down) {
             state_ = State::Pressed;
             finger_ = e.id;
+            dragging_ = dragAtOnce_;
             start_ = e.pos;
             start_ms_ = e.t_ms;
         }
@@ -33,9 +34,9 @@ std::vector<Gesture> GestureRecognizer::feed(const TouchEvent& e) {
 
     // Movement first: an Up can arrive without any Move before it.
     if (e.type != TouchEvent::Type::Down && beyond(e.pos, start_, config_.slop_px)) {
-        if (state_ == State::Pressed) {
+        if (state_ == State::Pressed && !dragging_) {
             state_ = State::Moving;
-        } else if (state_ == State::LongPressed) {
+        } else if (state_ == State::LongPressed || state_ == State::Pressed) {
             state_ = State::Dragging;
             out.push_back({GestureType::DragStart, e.pos, start_});
         }

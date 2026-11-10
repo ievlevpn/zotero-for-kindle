@@ -18,6 +18,9 @@
 
 namespace zk {
 
+// An annotation as Zotero's API takes it (what push sends).
+nlohmann::json annotationJson(const AnnotationRecord&);
+
 struct SyncProgress {
     std::string phase;  // "collections", "items", "annotations", "deletions"
     int done = 0, total = 0;

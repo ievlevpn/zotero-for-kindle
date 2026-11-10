@@ -15,7 +15,9 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
   deleted when none is left, unless it has a comment or tags (then a toast points to Notes).
 - Display panel, PDF, once the pen was used: "Pen: Write | Tap" (kept in the library). Tap makes the
   pen a finger on PDF pages too (turn pages, select text); holding the side button (Premium Pen) does
-  the same for one stroke.
+  the same for one stroke: a long press and drag selects text, or on blank space draws an area (a
+  Zotero `image` annotation), as with a finger. While the menus' "Mark an area" waits, the pen
+  draws the area without the button.
 - While the pen is near the screen (and 0.7 s after it leaves), touches are taken for the palm and
   ignored (`App::kPalmMs`). "Near" lapses after 2 s without a pen event (`kPenStaleMs`), and the
   background resets it, so a lost Leave can't block touch.

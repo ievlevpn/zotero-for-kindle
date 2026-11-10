@@ -93,6 +93,10 @@ public:
     // The window changed size (turned): lay out again. Most screens just do what showing does.
     virtual void onResize(Nav& nav) { onShow(nav); }
     virtual bool wantsKeyboard() const { return false; }
+    // A finger moving past the slop drags at once, without a long press first (Mark an area).
+    virtual bool dragsAtOnce() const { return false; }
+    // Its Fast damages are shown one by one, not merged into the box around them (a moving frame).
+    virtual bool fastPartsApart() const { return false; }
     virtual bool showsTabBar() const { return true; }
     // Closed (with what is above it) when its tab is left, instead of kept hidden (plugin screens).
     virtual bool closesWhenHidden() const { return false; }

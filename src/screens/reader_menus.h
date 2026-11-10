@@ -34,6 +34,7 @@ public:
     static Rect backRect();
     static Rect searchRect();
     static Rect contentsIconRect();
+    static Rect markAreaRect();  // PDF: "Mark an area" in the top bar, left of search
     static Rect sliderRect();
     static Rect buttonRect(int i);  // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync
     static Rect lightPanelRect();

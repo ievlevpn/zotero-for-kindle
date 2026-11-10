@@ -150,6 +150,10 @@ Rect AnnotationEditor::rect() const { return state_ == State::Comment ? commentB
 
 Rect AnnotationEditor::confirmRect(int i) const { return bar_.buttonRect(i); }
 
+std::string AnnotationEditor::question() const {
+    return annotation_.type == "image" ? "Delete this area?" : "Delete this highlight?";
+}
+
 bool AnnotationEditor::takeChanged() {
     const bool c = changed_;
     changed_ = false;
@@ -179,7 +183,7 @@ void AnnotationEditor::draw(cairo_t* cr) const {
     cairo_set_line_width(cr, 3);
     cairo_stroke(cr);
     if (state_ == State::Confirm) {
-        centredText(cr, "Delete this highlight?", {kSans, 9, 500}, {r.x + kPad, r.y + kPad, r.w - 2 * kPad, kDotRowH});
+        centredText(cr, question(), {kSans, 9, 500}, {r.x + kPad, r.y + kPad, r.w - 2 * kPad, kDotRowH});
         drawButton(cr, confirmRect(0), "Delete", true);
         drawButton(cr, confirmRect(1), "Cancel", false);
         return;

@@ -364,7 +364,10 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     if (!penAsTouch_ || p.type == PenEvent::Type::Near) return;
     TouchEvent t{TouchEvent::Type::Move, kPenFinger, p.pos, p.t_ms ? p.t_ms : clock_()};
     penTouchAt_ = p.pos;
-    if (p.type == PenEvent::Type::Down) t.type = TouchEvent::Type::Down;
+    if (p.type == PenEvent::Type::Down) {
+        t.type = TouchEvent::Type::Down;
+        gestures_.setDragAtOnce(s->dragsAtOnce());
+    }
     if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) {
         t.type = TouchEvent::Type::Up;
         penAsTouch_ = false;
@@ -487,6 +490,10 @@ void App::step(int timeout_ms) {
         switch (e.kind) {
             case InputEvent::Kind::Touch: {
                 if (palmBlocked(e.touch)) break;
+                if (e.touch.type == TouchEvent::Type::Down) {
+                    const Screen* top = visibleTop();
+                    gestures_.setDragAtOnce(top && top->dragsAtOnce());
+                }
                 auto g = gestures_.feed(e.touch);
                 gestures.insert(gestures.end(), g.begin(), g.end());
                 break;
@@ -599,10 +606,17 @@ void App::flush() {
     if (pending_.empty() || !visibleTop()) return;
     const Rect all{0, 0, canvas_.width(), canvas_.height()};
     Rect fast, ui, quality, full;
+    // Fast regions are merged, unless the screen draws a moving frame (an area being dragged):
+    // then its thin edges stay apart, while few, not refreshed as the whole box they enclose.
+    std::vector<Rect> fastParts;
     for (const auto& [r, w] : pending_) {
         Rect& u = w == Waveform::Fast || w == Waveform::Ink ? fast : w == Waveform::Ui ? ui : w == Waveform::Quality ? quality : full;
         u = u.united(r.intersected(all));
+        if (w == Waveform::Fast && !r.intersected(all).empty()) fastParts.push_back(r.intersected(all));
     }
+    constexpr size_t kFastParts = 16;
+    const bool fastApart = visibleTop()->fastPartsApart() && fastParts.size() <= kFastParts && fastParts.size() > 1 &&
+                           std::none_of(pending_.begin(), pending_.end(), [](const auto& d) { return d.second == Waveform::Ink; });
     pending_.clear();
     if (quality == all && ++fullChanges_ % kFlashEvery == 0) {
         full = all;
@@ -622,7 +636,10 @@ void App::flush() {
         if (shown.united(inkDirty_) == shown) inkDirty_ = {};  // already on screen, in full quality
     } else {
         if (!quality.empty() && quality.united(inkDirty_) == quality) inkDirty_ = {};
-        if (!fast.empty()) display_.present(canvas_, fast, Waveform::Fast);
+        if (fastApart)
+            for (const Rect& r : fastParts) display_.present(canvas_, r, Waveform::Fast);
+        else if (!fast.empty())
+            display_.present(canvas_, fast, Waveform::Fast);
         if (!ui.empty()) display_.present(canvas_, ui, Waveform::Ui);
         if (!quality.empty()) display_.present(canvas_, quality, Waveform::Quality);
     }

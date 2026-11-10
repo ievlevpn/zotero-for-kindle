@@ -1,0 +1,6 @@
+{"key":"ANNI2345","version":1412,"library":{"type":"user","id":1,"name":"test"},
+ "data":{"key":"ANNI2345","version":1412,"itemType":"annotation","parentItem":"PDFF2345","annotationType":"image",
+  "annotationComment":"the phase diagram","annotationColor":"#2ea8e5","annotationPageLabel":"2",
+  "annotationSortIndex":"00001|000000|00109",
+  "annotationPosition":"{\"pageIndex\":1,\"rects\":[[89.123,452.871,431.552,682.904]]}",
+  "tags":[],"relations":{},"dateAdded":"2026-11-02T10:14:51Z","dateModified":"2026-11-02T10:14:51Z"}}
