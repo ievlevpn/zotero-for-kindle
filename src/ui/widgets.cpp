@@ -292,20 +292,20 @@ constexpr int kRowCountW = 160;  // the count's column, right of the marks (and 
 constexpr int kRowMarkW = 60;    // a mark's slot
 }  // namespace
 
+// Fixed columns, so marks line up down a list: the pin's slot just left of the count, the
+// kept arrow's slot left of that (the pin's then stays empty on an unpinned row).
 std::vector<Rect> collectionRowMarks(Rect r, bool pinned, bool kept) {
     std::vector<Rect> out;
-    int x = r.x + r.w - kRowCountW - 40 - kRowMarkW * ((pinned ? 1 : 0) + (kept ? 1 : 0));
-    for (bool mark : {kept, pinned})
-        if (mark) {
-            out.push_back({x, r.y + r.h / 2 - 30, kRowMarkW, 60});
-            x += kRowMarkW;
-        }
+    const int pinX = r.x + r.w - kRowCountW - 40 - kRowMarkW;
+    if (kept) out.push_back({pinX - kRowMarkW, r.y + r.h / 2 - 30, kRowMarkW, 60});
+    if (pinned) out.push_back({pinX, r.y + r.h / 2 - 30, kRowMarkW, 60});
     return out;
 }
 
 Rect collectionRowNameRect(Rect r, bool pinned, bool kept) {
     const int tx = r.x + 112;
-    return {tx, r.y, r.w - (tx - r.x) - kRowCountW - 40 - kRowMarkW * ((pinned ? 1 : 0) + (kept ? 1 : 0)), r.h};
+    const int slots = kept ? 2 : pinned ? 1 : 0;
+    return {tx, r.y, r.w - (tx - r.x) - kRowCountW - 40 - kRowMarkW * slots, r.h};
 }
 
 void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t items, bool hasChildren, bool pinned,
