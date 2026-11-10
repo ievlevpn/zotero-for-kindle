@@ -155,10 +155,12 @@ TEST_CASE("home: a periodic sync that changed nothing repaints only the status l
         rig.home.onSyncEvent(e, rig.nav);
         e.kind = SyncEvent::Kind::SyncFinished;
         rig.home.onSyncEvent(e, rig.nav);
+        bool rests = false;  // "Syncing…" quickly, then the line it rests on cleanly
         for (const auto& d : rig.nav.damages) {
-            CHECK(d.waveform == Waveform::Ui);
             CHECK(d.rect.y + d.rect.h <= kHeaderH);
+            rests = d.waveform == Waveform::Quality;
         }
+        CHECK(rests);
         rig.nav.now += 10 * 60'000;
     }
 }

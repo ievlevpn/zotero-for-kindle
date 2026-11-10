@@ -369,8 +369,10 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
             break;
         case SyncEvent::Kind::SyncFinished:
             // Only what changed: the status line, and the card, rows and banner if the sync
-            // brought something (or failed differently). Never the whole screen.
-            if (headerChanged) nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
+            // brought something (or failed differently). Never the whole screen. The status line
+            // rests here, so it gets the quality waveform: the quick one left ghosts of
+            // "Syncing…" behind the final text.
+            if (headerChanged) nav.damage({0, 0, W(), kHeaderH}, Waveform::Quality);
             reload(nav.library());
             if (content() != shownContent) nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
             break;
