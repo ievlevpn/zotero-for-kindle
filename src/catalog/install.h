@@ -63,6 +63,12 @@ bool removeFiles(const std::string& pluginsDir, const std::string& id, UserError
 void repairInterrupted(const std::string& pluginsDir);
 // The same for one id, leaving .incoming/ alone (other ids' staged updates may be waiting there).
 // Call it after a failed commit or rollBack, before reloading the plugin.
+// A swap writes .incoming/.swap-<id> before it starts and removes it when it ends: only with it does
+// repair put .previous/<id> back. Without it, a missing <id> was deleted by hand (USB): its kept
+// version and its state go, so it stays deleted.
 void repairOne(const std::string& pluginsDir, const std::string& id);
+std::string swapMarker(const std::string& pluginsDir, const std::string& id);
+// What the kept version asks for that the installed one doesn't (a roll back's new permissions).
+std::vector<Permission> rollBackAdds(const std::string& pluginsDir, const std::string& id);
 
 }  // namespace zk::catalog

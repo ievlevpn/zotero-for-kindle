@@ -13,6 +13,7 @@
 
 namespace zk::catalog {
 
+const char* const kNoPlugins = "No plugins in the catalog yet.";
 const char* const kRegistryFeed = "https://api.github.com/repos/ievlevpn/zotero-for-kindle-plugins/releases/latest";
 
 namespace {
@@ -176,6 +177,7 @@ CheckResult runCheck(Http& http, const CheckOptions& opt, const std::string& plu
     // The registry: its release, then registry.json and its signature.
     const HttpResponse rel = http.send(get(opt.feed, cancel, kMaxRegistryBytes));
     if (cancelled(cancel)) return stopped;
+    if (rel.curlCode == 0 && rel.status == 404) return {CheckStatus::NoCatalog, kNoPlugins};
     if (rel.curlCode != 0 || rel.status != 200) return failure(rel);
     const auto release = releaseAssets(rel.body);
     if (!release || !release->second.count("registry.json") || !release->second.count("registry.json.sig"))

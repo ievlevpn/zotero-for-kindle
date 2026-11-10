@@ -17,6 +17,8 @@ import { crc32, deflateRawSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 
 const MAX_ZIP = 8 << 20;
+const MAX_TREE = 32 << 20;   // the unpacked tree, as the app limits it
+const MAX_ENTRIES = 2000;
 const KEY_FILE = "zk-plugin-key.json";
 const here = fileURLToPath(new URL(".", import.meta.url));
 
@@ -117,15 +119,40 @@ function pack(dir, build) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (build) {
     if (!existsSync(join(dir, "build.mjs"))) refuse("no build.mjs here; build yourself and pass --no-build.");
+    if (typeof manifest.id === "string" && /^[a-z0-9]+(-[a-z0-9]+)*$/.test(manifest.id))
+      rmSync(join(dir, "dist", manifest.id), { recursive: true, force: true });  // nothing stale is shipped
     execFileSync(process.execPath, ["build.mjs"], { cwd: dir, stdio: "inherit" });
   }
   const root = join(dir, "dist", manifest.id);
   if (!existsSync(join(root, "plugin.json"))) refuse(`${root}/plugin.json not found: the build should produce dist/${manifest.id}/.`);
-  const zip = makeZip(collect(root));
+  checkManifest(join(root, "plugin.json"), manifest.id);
+  const files = collect(root);
+  if (files.length > MAX_ENTRIES) refuse(`${files.length} files; the app takes at most ${MAX_ENTRIES}.`);
+  const tree = files.reduce((n, [, data]) => n + data.length, 0);
+  if (tree > MAX_TREE) refuse(`the plugin is ${tree} bytes unpacked; the app takes at most ${MAX_TREE}.`);
+  const zip = makeZip(files);
   if (zip.length > MAX_ZIP) refuse(`plugin.zip is ${zip.length} bytes; the catalog takes at most ${MAX_ZIP}.`);
   const out = join(dir, "dist", "plugin.zip");
   writeFileSync(out, zip);
   return { out, size: zip.length };
+}
+
+// What the app checks of the shipped plugin.json: the schema (validate-manifest.mjs, when the SDK's
+// npm packages are installed), and always its id and an X.Y.Z version (the release tag must equal it).
+function checkManifest(path, id) {
+  const m = JSON.parse(readFileSync(path, "utf8"));
+  if (m.id !== id) refuse(`${path}: id "${m.id}" isn't "${id}".`);
+  if (typeof m.version !== "string" || !/^\d+\.\d+\.\d+$/.test(m.version))
+    refuse(`${path}: version "${m.version}" must be X.Y.Z (the catalog takes no pre-releases).`);
+  if (existsSync(join(here, "node_modules", "ajv"))) {
+    try {
+      execFileSync(process.execPath, [join(here, "validate-manifest.mjs"), path], { stdio: "inherit" });
+    } catch {
+      refuse(`${path} doesn't match the manifest schema (see above).`);
+    }
+  } else {
+    console.error(`note: plugin.json not checked against the schema (run npm install in ${here} for that).`);
+  }
 }
 
 // ---- sign -------------------------------------------------------------------------------------
@@ -167,7 +194,8 @@ function selfTest() {
     const root = join(plugin, "dist", "demo");
     mkdirSync(root, { recursive: true });
     writeFileSync(join(plugin, "plugin.json"), '{"id":"demo"}');
-    writeFileSync(join(root, "plugin.json"), '{"id":"demo","version":"1.0.0"}');
+    const demo = { id: "demo", name: "Demo", version: "1.0.0", api: 0, main: "main.js", permissions: [] };
+    writeFileSync(join(root, "plugin.json"), JSON.stringify(demo));
     writeFileSync(join(root, "main.js"), "export {};\n".repeat(50));
     pack(plugin, false);
     signZip(plugin, keyFile);
@@ -179,6 +207,11 @@ function selfTest() {
     const unzipped = execFileSync("unzip", ["-Z1", join(plugin, "dist", "plugin.zip")]).toString().trim().split("\n");
     ok(unzipped.join(",") === "main.js,plugin.json", "pack: files at the root of the zip");
 
+    writeFileSync(join(root, "plugin.json"), JSON.stringify({ ...demo, version: "1.0.0-beta.1" }));
+    throws(() => pack(plugin, false), "pack: refuses a version that isn't X.Y.Z");
+    writeFileSync(join(root, "plugin.json"), JSON.stringify({ ...demo, id: "other" }));
+    throws(() => pack(plugin, false), "pack: refuses a plugin.json whose id isn't the folder's");
+    writeFileSync(join(root, "plugin.json"), JSON.stringify(demo));
     mkdirSync(join(root, "data"));
     throws(() => pack(plugin, false), "pack: refuses a data/ folder");
     rmSync(join(root, "data"), { recursive: true });

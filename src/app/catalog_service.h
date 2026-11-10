@@ -58,6 +58,7 @@ public:
         std::string error;     // the last operation's failure, in a plain sentence ("" when it worked)
         std::optional<catalog::Staged> awaitingYes;  // an update that adds permissions, staged
         bool checking = false;
+        bool noCatalog = false;  // the last check found no catalog published (yet)
         Op busy = Op::None;
         // The last operation that ended: what, on which id, whether it worked.
         Op doneOp = Op::None;
@@ -66,6 +67,11 @@ public:
         std::map<std::string, std::string> kept;  // id → the version kept in .previous/
         // Removes asked for and how each ended: waiting (queued or running), done, or failed (why).
         std::set<std::string> removing, removed;
+        std::set<std::string> installed;                  // installs that worked (by id)
+        std::map<std::string, std::string> installFailed;  // and those that didn't: why
+        std::map<std::string, std::string> queued;    // id → its busy text, while it waits its turn
+        std::map<std::string, std::string> needsYes;  // id → the update version that asks for more
+        std::string notice;  // the last operation's note when it worked ("It is off: …")
         std::map<std::string, std::string> removeFailed;
         int serial = 0;  // changes with every change (screens compare it)
     };
@@ -93,6 +99,7 @@ public:
     const State& state() const { return shown_; }
     bool poll();  // true when changed
     int updatesWaiting() const { return waiting_; }
+    int updatesForAll() const { return forAll_; }  // those Update all applies (none asks for more)
     // The newer version for an installed plugin (its version as installed), if any.
     std::optional<catalog::Latest> updateFor(const std::string& id, const std::string& installedVersion) const;
     bool busy() const { return shown_.busy != Op::None; }
@@ -106,8 +113,13 @@ private:
     std::vector<std::string> installedIds(PluginHost*) const;
     void recount();
     void startRemove(const std::string& id);
+    void startInstall(const std::string& id);
+    void startUpdate(const std::string& id);
+    void startRollBack(const std::string& id);
+    void enqueue(Op, const std::string& id, const std::string& text);
+    std::vector<std::pair<Op, std::string>> queue_;
+    int forAll_ = 0;
     void forgetState(PluginHost*, const std::string& id);  // worker
-    std::vector<std::string> queuedRemoves_;
 
     CatalogConfig config_;
     mutable std::mutex mutex_;

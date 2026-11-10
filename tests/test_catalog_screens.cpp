@@ -445,7 +445,10 @@ TEST_CASE("catalog screens: Update all applies those that add nothing and leaves
     list.onTick(r.nav);
     CHECK(r.version("md") == "1.4.0");
     CHECK(r.version("feed") == "1.2.0");
-    CHECK(list.updateAllLabel() == "Update all (1)");
+    REQUIRE_FALSE(r.nav.toasts.empty());
+    CHECK(r.nav.toasts.back() == "Feed Riffle asks for more: open it to update.");
+    CHECK(r.svc->updatesWaiting() == 1);  // still offered on its row and page
+    CHECK(list.updateAllRect().empty());  // but Update all has nothing left it can do
     CHECK_FALSE(r.dir.exists(".incoming"));
 }
 
@@ -741,4 +744,84 @@ TEST_CASE("catalog screens: a plugin once on, its folder deleted by hand, comes 
     REQUIRE(r.status("md"));
     CHECK_FALSE(r.status("md")->enabled);
     CHECK_FALSE(r.status("md")->everEnabled);
+}
+
+TEST_CASE("catalog screens: with no catalog published yet, Get plugins says so calmly; a cache stays") {
+    Rig r;
+    r.startHost();
+    { std::lock_guard<std::mutex> lock(r.world->mu); r.world->files.erase(kFeed); }  // GitHub: 404
+    r.startCatalog();
+    CatalogListScreen list(r.fn());
+    list.onShow(r.nav);
+    r.settle();
+    list.onTick(r.nav);
+    CHECK(list.headline() == "No plugins in the catalog yet.");
+    CHECK(r.svc->state().error.empty());
+
+    r.world->registry();
+    r.checkNow();
+    { std::lock_guard<std::mutex> lock(r.world->mu); r.world->files.erase(kFeed); }
+    r.checkNow();
+    list.onTick(r.nav);
+    CHECK(list.headline() == asOf(kNow));
+    CHECK(list.rows().size() == 2);
+}
+
+TEST_CASE("catalog screens: Install, Update and Roll back tapped while a check runs wait for it, showing so at once") {
+    Rig r;
+    r.installFeed();
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
+    r.startHost();
+    r.host->setEnabled("feed", true);
+    r.startCatalog();
+    r.checkNow();
+    CatalogPageScreen cpage("md", r.fn());
+    cpage.onShow(r.nav);
+    r.settle();
+    PluginPageScreen page("feed", r.fn());
+    page.onShow(r.nav);
+
+    r.world->gated = true;  // a slow check
+    r.svc->check(true);
+    cpage.onGesture(tapAt(cpage.installRect().center()), r.nav);
+    CHECK(cpage.installLabel() == "Downloading…");
+    page.onGesture(tapAt(page.updateRect().center()), r.nav);
+    CHECK(page.updateLabel() == "Downloading…");
+    r.world->open();
+    r.settle();
+    cpage.onTick(r.nav);
+    CHECK(r.nav.pops == 1);  // installed: part 1's page
+    CHECK(r.status("md"));
+    page.onTick(r.nav);
+    CHECK(r.version("feed") == "1.3.0");
+
+    r.world->gated = true;
+    r.svc->check(true);
+    page.onGesture(tapAt(page.rollBackRect().center()), r.nav);
+    CHECK(page.rollBackLabel() == "Rolling back…");
+    r.world->open();
+    r.settle();
+    CHECK(r.version("feed") == "1.2.0");
+}
+
+TEST_CASE("catalog screens: a roll back to a version that can do more leaves it off, its page showing why") {
+    Rig r;
+    r.installFeed("\"library:read\",\"net:x.example.com\"");
+    r.world->release("feed", "Feed Riffle", "ann/zk-feed", "1.3.0", json::array({"library:read"}));
+    r.startHost();
+    r.startCatalog();
+    r.checkNow();
+    r.svc->update("feed");  // adds nothing: applied
+    r.settle();
+    r.host->setEnabled("feed", true);  // on, having seen only library:read
+    PluginPageScreen page("feed", r.fn());
+    page.onShow(r.nav);
+    page.onGesture(tapAt(page.rollBackRect().center()), r.nav);
+    r.settle();
+    page.onTick(r.nav);
+    CHECK(r.version("feed") == "1.2.0");
+    CHECK_FALSE(r.status("feed")->enabled);
+    CHECK(page.turnLabel() == "Turn on");
+    REQUIRE_FALSE(r.nav.toasts.empty());
+    CHECK(r.nav.toasts.back() == "It is off: this version can do more. Turn it on to allow it.");
 }

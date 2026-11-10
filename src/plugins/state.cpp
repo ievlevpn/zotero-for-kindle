@@ -105,6 +105,13 @@ bool PluginState::stopped(const std::string& id) {
     auto it = entries_.find(id);
     return it != entries_.end() && it->second.stopped;
 }
+std::vector<std::string> PluginState::ids() {
+    std::lock_guard<std::mutex> lock(mu_);
+    std::vector<std::string> out;
+    for (const auto& [id, e] : entries_) out.push_back(id);
+    return out;
+}
+
 void PluginState::forget(const std::string& id) {
     std::lock_guard<std::mutex> lock(mu_);
     if (entries_.erase(id)) save();

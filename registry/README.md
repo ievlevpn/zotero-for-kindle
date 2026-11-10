@@ -1,12 +1,16 @@
 # The plugin registry
 
-`registry.json` lists the plugins in the Zotero for Kindle catalog. It is published as the latest
-release of `ievlevpn/zotero-for-kindle-plugins`, with `registry.json.sig`: the maintainer signs it
-with the app's release key, and the app ignores one that doesn't verify.
+`registry.json` lists the plugins in the Zotero for Kindle catalog. Its home is the registry repo,
+[`ievlevpn/zotero-for-kindle-plugins`](https://github.com/ievlevpn/zotero-for-kindle-plugins): the
+file lives there, pull requests go there, and its latest release carries `registry.json` with
+`registry.json.sig`. The maintainer signs it with the app's release key (from this repo's tools),
+and the app ignores one that doesn't verify. This folder holds the checker and a copy of the file
+that the maintainer signs from.
 
 ## Submitting a plugin
 
-Open a pull request that adds one entry to `plugins`:
+Open a pull request on `ievlevpn/zotero-for-kindle-plugins` (not on this repo) that adds one entry
+to `plugins` in its `registry.json`:
 
 ```json
 { "id": "feed-riffle", "name": "Feed Riffle", "author": "Pavel Ievlev",
@@ -19,13 +23,17 @@ The plugin's repo needs a latest GitHub release with `plugin.zip` and `plugin.zi
 [Publishing a plugin](../docs/plugins/publishing.md). Check your entry:
 
 ```sh
-node registry/check.mjs registry/registry.json            # the format (what the app enforces)
-node registry/check.mjs registry/registry.json --online   # and that each latest release verifies
+# in a zotero-for-kindle checkout (check.mjs needs its sdk/), on the registry repo's file:
+node registry/check.mjs path/to/zotero-for-kindle-plugins/registry.json            # the format
+node registry/check.mjs path/to/zotero-for-kindle-plugins/registry.json --online   # and each release verifies
 ```
 
 `revoked` holds `{ "id", "reason" }` for withdrawn plugins; the app turns them off.
 
 ## Publishing the registry (maintainer)
+
+Once a pull request is merged in the registry repo, copy its `registry.json` over
+`registry/registry.json` here, then:
 
 ```sh
 tools/registry.sh sign      # checks, stamps "updated", signs into registry/out/

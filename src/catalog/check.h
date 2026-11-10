@@ -55,7 +55,9 @@ struct CheckOptions {
     std::array<uint8_t, 32> registryKey;
     std::function<int64_t()> wallMs;
 };
-enum class CheckStatus { Ok, Offline, Failed };
+// NoCatalog: the feed answered 404 (no registry repo or release yet): not an error; the cache stays.
+enum class CheckStatus { Ok, Offline, Failed, NoCatalog };
+extern const char* const kNoPlugins;  // "No plugins in the catalog yet."
 struct CheckResult {
     CheckStatus status;
     std::string message;

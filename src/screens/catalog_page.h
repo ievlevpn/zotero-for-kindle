@@ -36,6 +36,7 @@ private:
     CatalogService* catalog_ = nullptr;
     int serial_ = -1;
     bool asked_ = false;  // Install was tapped here
+    bool lookedUp_ = false;  // its latest release was asked for
 };
 
 }  // namespace zk

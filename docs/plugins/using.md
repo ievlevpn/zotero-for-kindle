@@ -50,7 +50,9 @@ folder, data and storage are deleted. Changes it asked for that haven't synced a
 ### From the catalog, or installed by hand
 
 A plugin's page says which it is: **From the catalog** (installed with Get plugins, so it can
-update and roll back) or **Installed by hand** (copied over USB; the catalog never changes it).
+update and roll back) or **Installed by hand** (copied over USB). If a hand-installed plugin's id is
+in the catalog, it is offered the catalog's updates too, signed by the catalog's author; an update
+that asks for more permissions asks you first.
 
 ### Withdrawn plugins
 
@@ -186,7 +188,9 @@ Nothing a plugin does needs a reinstall of the app to undo.
 - **A plugin's data is in a bad state.** On its page: **Reset its data**.
 - **Its queued changes are wrong.** On its page: **Discard unsent changes**.
 - **Remove it.** On its page: **Remove**. Or, over USB, delete its folder in `zotero/plugins/`;
-  that removes every trace of it except the changes already in Zotero.
+  at the next start the app also drops its kept previous version and what it remembered of it (a
+  copy put back is new, and off). That removes every trace of it except the changes already in
+  Zotero.
 - **After an app update** a plugin made for an older plugin API is listed as *Incompatible* and
   isn't run, instead of failing. App updates and rollbacks never touch `zotero/plugins/`.
 

@@ -1,6 +1,7 @@
 #include "catalog/install.h"
 
 #include "core/log.h"
+#include "plugins/state.h"
 #include "update/signature.h"
 
 #include <miniz.h>
@@ -220,6 +221,13 @@ bool swapIn(const std::string& pluginsDir, const std::string& id, const fs::path
     const fs::path cur = fs::path(pluginsDir) / id, prev = previousDir(pluginsDir) / id;
     std::error_code ec;
     const bool hadCurrent = fs::exists(fs::symlink_status(cur, ec));
+    {  // the marker says a swap is under way: only then may repair put .previous/<id> back
+        fs::create_directories(incomingDir(pluginsDir), ec);
+        std::ofstream marker(swapMarker(pluginsDir, id), std::ios::trunc);
+        marker << id;
+        marker.flush();
+        if (!marker) return *why = "swap marker", false;
+    }
     if (hadCurrent) {
         fs::create_directories(prev.parent_path(), ec);
         if (!ec) fs::rename(cur, prev, ec);
@@ -238,6 +246,7 @@ bool swapIn(const std::string& pluginsDir, const std::string& id, const fs::path
                 fs::rename(prev / item, cur / item, ec);
                 if (ec) return *why = std::string(item) + ": " + ec.message(), false;  // repairInterrupted moves it at the next start
             }
+    fs::remove(swapMarker(pluginsDir, id), ec);
     return true;
 }
 
@@ -413,11 +422,36 @@ bool removeFiles(const std::string& pluginsDir, const std::string& id, UserError
     return true;
 }
 
+std::string swapMarker(const std::string& pluginsDir, const std::string& id) {
+    return (incomingDir(pluginsDir) / (".swap-" + id)).string();
+}
+
+std::vector<Permission> rollBackAdds(const std::string& pluginsDir, const std::string& id) {
+    if (!validPluginId(id)) return {};
+    auto kept = manifestIn(previousDir(pluginsDir) / id);
+    if (!kept) return {};
+    return addedPermissions(*kept, manifestIn(fs::path(pluginsDir) / id));
+}
+
 void repairOne(const std::string& pluginsDir, const std::string& id) {
     if (!validPluginId(id)) return;
     const fs::path cur = fs::path(pluginsDir) / id, prev = previousDir(pluginsDir) / id;
     std::error_code e;
+    const bool swapping = present(swapMarker(pluginsDir, id));
+    fs::remove(swapMarker(pluginsDir, id), e);
     if (!fs::exists(fs::symlink_status(prev, e))) return;
+    if (!swapping && !present(cur)) {
+        // No swap was under way: the user deleted the plugin (over USB). It stays deleted: its kept
+        // version goes (code only; one holding what the plugin saved is left alone), and so does
+        // what the app remembered of it, so nothing turns it on again.
+        bool saved = false;
+        for (const char* item : kUserItems) saved = saved || present(prev / item);
+        if (!saved) trash(pluginsDir, prev, e);
+        PluginState(pluginsDir + "/.state.json").forget(id);
+        setProvenance(pluginsDir, id, false);
+        log(LogLevel::Info, "catalog: %s was deleted by hand: its kept version and state are gone too", id.c_str());
+        return;
+    }
     if (!fs::exists(fs::symlink_status(cur, e))) {
         fs::rename(prev, cur, e);
         log(LogLevel::Warn, "catalog: %s: put the previous version back after an interrupted swap%s", id.c_str(),
@@ -439,6 +473,11 @@ void repairInterrupted(const std::string& pluginsDir) {
         kept.push_back(it->path().filename().string());
     for (const auto& id : kept) repairOne(pluginsDir, id);
     fs::remove_all(incomingDir(pluginsDir), ec);
+    // A folder deleted by hand takes what the app remembered of it too: a copy put back is new
+    // (off, its permissions shown first), as after Remove.
+    PluginState state(pluginsDir + "/.state.json");
+    for (const auto& id : state.ids())
+        if (validPluginId(id) && !present(fs::path(pluginsDir) / id)) state.forget(id);
 }
 
 }  // namespace zk::catalog

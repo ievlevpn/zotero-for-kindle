@@ -72,6 +72,7 @@ void CatalogService::run(Op op, std::string id, std::string text, std::function<
         s.busyId = id;
         s.busyText = text;
         s.error.clear();
+        s.notice.clear();
         s.checking = op == Op::Check;
     });
     {  // the screens see it at once (and a second call before the next poll is ignored)
@@ -94,6 +95,8 @@ void CatalogService::run(Op op, std::string id, std::string text, std::function<
             s.doneOp = op;
             s.doneId = id;
             s.doneOk = ok;
+            if (op == Op::Install && ok) s.installed.insert(id);
+            if (op == Op::Install && !ok) s.installFailed[id] = error;
         });
     });
 }
@@ -138,8 +141,10 @@ void CatalogService::check(bool force) {
         const catalog::CheckResult r = runCheck(*http, {config_.feed, config_.registryKey, config_.wallMs}, config_.pluginsDir, ids,
                                        force, cancel_);
         log(LogLevel::Info, "catalog: checked: %s", r.status == catalog::CheckStatus::Ok ? "ok" : r.message.c_str());
+        const bool none = r.status == catalog::CheckStatus::NoCatalog;  // calm: not an error
+        set([&](State& s) { s.noCatalog = none; });
         error = r.status == catalog::CheckStatus::Offline ? "No Wi-Fi." : r.message;
-        return r.status == catalog::CheckStatus::Ok;
+        return r.status == catalog::CheckStatus::Ok || none;
     });
 }
 
@@ -164,7 +169,7 @@ void CatalogService::lookUp(std::string id) {
     });
 }
 
-void CatalogService::install(std::string id) {
+void CatalogService::startInstall(const std::string& id) {
     const Entry* e = find(shown_.cache, id);
     PluginHost* host = config_.host ? config_.host() : nullptr;
     if (!e || revoked(shown_.cache, id) || installedVersion(host, id)) return;
@@ -196,7 +201,7 @@ void CatalogService::install(std::string id) {
     });
 }
 
-void CatalogService::update(std::string id) {
+void CatalogService::startUpdate(const std::string& id) {
     PluginHost* host = config_.host ? config_.host() : nullptr;
     const Entry* e = find(shown_.cache, id);
     const auto version = installedVersion(host, id);
@@ -212,7 +217,10 @@ void CatalogService::update(std::string id) {
             return false;
         }
         if (!staged->added.empty()) {  // never applied without the yes
-            set([&](State& s) { s.awaitingYes = std::move(*staged); });
+            set([&](State& s) {
+                s.needsYes[entry.id] = latest.version.str();
+                s.awaitingYes = std::move(*staged);
+            });
             return true;
         }
         return swap(entry.id, host, [&](UserError* e) { return commit(config_.pluginsDir, entry.id, e); }, error);
@@ -228,7 +236,8 @@ void CatalogService::updateAll() {
         if (!s.folder.manifest || revoked(shown_.cache, s.folder.dir) || s.folder.dir == asking) continue;
         const Entry* e = find(shown_.cache, s.folder.dir);
         auto l = catalog::updateFor(shown_.cache, s.folder.dir, s.folder.manifest->version);
-        if (e && l) todo.emplace_back(*e, *l);
+        const auto yes = shown_.needsYes.find(s.folder.dir);
+        if (e && l && !(yes != shown_.needsYes.end() && yes->second == l->version.str())) todo.emplace_back(*e, *l);
     }
     if (todo.empty()) return;
     run(Op::Update, "", "Downloading…", [this, todo, host](std::string& error) {
@@ -244,6 +253,10 @@ void CatalogService::updateAll() {
             } else if (!staged->added.empty()) {  // it asks for more: its own page asks first
                 std::error_code ec;
                 fs::remove_all(fs::path(config_.pluginsDir) / ".incoming" / entry.id, ec);
+                fs::remove(fs::path(config_.pluginsDir) / ".incoming" / (entry.id + ".zip"), ec);
+                set([&](State& s) { s.needsYes[entry.id] = latest.version.str(); });
+                if (all) error = entry.name + " asks for more: open it to update.";
+                all = false;
                 continue;
             } else if (swap(entry.id, host, [&](UserError* e) { return commit(config_.pluginsDir, entry.id, e); }, why)) {
                 continue;
@@ -279,12 +292,45 @@ void CatalogService::discardStaged(std::string id) {
     });
 }
 
-void CatalogService::rollBack(std::string id) {
+void CatalogService::startRollBack(const std::string& id) {
     if (!shown_.kept.count(id)) return;
     PluginHost* host = config_.host ? config_.host() : nullptr;
     run(Op::RollBack, id, "Rolling back…", [this, id, host](std::string& error) {
-        return swap(id, host, [&](UserError* e) { return catalog::rollBack(config_.pluginsDir, id, e); }, error);
+        // The kept version may ask for what the user hasn't seen: then it is left off, and its page
+        // shows what it can do before it is turned on again.
+        const auto adds = rollBackAdds(config_.pluginsDir, id);
+        if (!swap(id, host, [&](UserError* e) { return catalog::rollBack(config_.pluginsDir, id, e); }, error)) return false;
+        if (!adds.empty()) {
+            if (host) host->setEnabled(id, false);
+            else PluginState(config_.pluginsDir + "/.state.json").setEnabled(id, false);
+            set([](State& s) { s.notice = "It is off: this version can do more. Turn it on to allow it."; });
+        }
+        return true;
     });
+}
+
+void CatalogService::install(std::string id) { enqueue(Op::Install, id, "Downloading…"); }
+void CatalogService::update(std::string id) { enqueue(Op::Update, id, "Downloading…"); }
+void CatalogService::rollBack(std::string id) { enqueue(Op::RollBack, id, "Rolling back…"); }
+
+// Install, Update, Roll back and Remove are never dropped: one asked while another operation runs
+// waits for it (in order), its busy text showing at once.
+void CatalogService::enqueue(Op op, const std::string& id, const std::string& text) {
+    for (const auto& q : queue_)
+        if (q.first == op && q.second == id) return;
+    queue_.emplace_back(op, id);
+    set([&](State& s) {
+        s.queued[id] = text;
+        if (op == Op::Install) {
+            s.installed.erase(id);
+            s.installFailed.erase(id);
+        }
+    });
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        shown_.queued = status_.queued;
+    }
+    poll();  // starts it now when nothing else runs
 }
 
 void CatalogService::forgetState(PluginHost* host, const std::string& id) {
@@ -306,8 +352,7 @@ void CatalogService::remove(std::string id) {
         shown_.removed = status_.removed;
         shown_.removeFailed = status_.removeFailed;
     }
-    if (std::find(queuedRemoves_.begin(), queuedRemoves_.end(), id) == queuedRemoves_.end()) queuedRemoves_.push_back(id);
-    poll();  // starts it now when nothing else runs
+    enqueue(Op::Remove, id, "Removing…");
 }
 
 void CatalogService::startRemove(const std::string& id) {
@@ -345,11 +390,16 @@ std::optional<Latest> CatalogService::updateFor(const std::string& id, const std
 
 void CatalogService::recount() {
     PluginHost* host = config_.host ? config_.host() : nullptr;
-    int n = 0;
+    int n = 0, all = 0;
     std::map<std::string, std::string> withdrawn;
     if (host) {
         for (const auto& s : host->status()) {
-            if (s.folder.manifest && updateFor(s.folder.dir, s.folder.manifest->version)) ++n;
+            if (!s.folder.manifest) continue;
+            if (auto l = updateFor(s.folder.dir, s.folder.manifest->version)) {
+                ++n;
+                const auto yes = shown_.needsYes.find(s.folder.dir);
+                if (!(yes != shown_.needsYes.end() && yes->second == l->version.str())) ++all;
+            }
             if (shown_.cache.registry)
                 for (const auto& r : shown_.cache.registry->revoked)
                     if (r.id == s.folder.dir) withdrawn[r.id] = r.reason;
@@ -357,17 +407,24 @@ void CatalogService::recount() {
         host->setWithdrawn(std::move(withdrawn));  // a no-op when unchanged
     }
     waiting_ = n;
+    forAll_ = all;
 }
 
 bool CatalogService::poll() {
-    if (!queuedRemoves_.empty()) {  // a confirmed Remove waits for the operation before it
-        std::lock_guard<std::mutex> lock(mutex_);
-        shown_.busy = status_.busy;
-    }
-    if (!queuedRemoves_.empty() && !busy()) {
-        const std::string id = queuedRemoves_.front();
-        queuedRemoves_.erase(queuedRemoves_.begin());
-        startRemove(id);
+    while (!queue_.empty()) {  // what was asked while another operation ran
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            shown_.busy = status_.busy;
+            if (status_.serial != shown_.serial) shown_ = status_;  // starts from what is known now
+        }
+        if (busy()) break;
+        const auto [op, id] = queue_.front();
+        queue_.erase(queue_.begin());
+        set([&, id = id](State& s) { s.queued.erase(id); });
+        if (op == Op::Install) startInstall(id);
+        else if (op == Op::Update) startUpdate(id);
+        else if (op == Op::RollBack) startRollBack(id);
+        else startRemove(id);
     }
     bool changed = false;
     {

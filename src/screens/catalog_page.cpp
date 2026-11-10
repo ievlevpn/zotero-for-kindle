@@ -42,17 +42,21 @@ void CatalogPageScreen::onShow(Nav& nav) {
     if (!catalog_) return;
     catalog_->poll();
     catalog_->lookUp(id_);  // its version, unless known from the last 6 h
+    lookedUp_ = !catalog_->busy() || catalog_->state().busy == CatalogService::Op::LookUp;
     serial_ = catalog_->state().serial;
 }
 
 void CatalogPageScreen::onTick(Nav& nav) {
     if (!catalog_) return;
     catalog_->poll();
+    if (!lookedUp_ && !catalog_->busy()) {  // the catalog was busy when the page opened
+        lookedUp_ = true;
+        catalog_->lookUp(id_);
+    }
     const auto& st = catalog_->state();
     if (st.serial == serial_) return;
     serial_ = st.serial;
-    if (asked_ && st.busy == CatalogService::Op::None && st.doneOp == CatalogService::Op::Install && st.doneId == id_ &&
-        st.doneOk) {  // installed: part 1's page shows what it can do and how to turn it on
+    if (asked_ && st.installed.count(id_)) {  // installed: part 1's page shows what it can do and how to turn it on
         PluginHostFn host = host_;
         const std::string id = id_;
         nav.pop();
@@ -73,7 +77,8 @@ std::string CatalogPageScreen::byline() const {
 }
 
 std::string CatalogPageScreen::installLabel() const {
-    if (catalog_ && catalog_->state().busy == CatalogService::Op::Install && catalog_->state().busyId == id_)
+    if (catalog_ && ((catalog_->state().busy == CatalogService::Op::Install && catalog_->state().busyId == id_) ||
+                     catalog_->state().queued.count(id_)))
         return "Downloading…";
     return "Install";
 }
@@ -81,9 +86,9 @@ std::string CatalogPageScreen::installLabel() const {
 std::string CatalogPageScreen::failure() const {
     if (!catalog_) return "";
     const auto& st = catalog_->state();
-    if (st.busy != CatalogService::Op::None || st.doneOp != CatalogService::Op::Install || st.doneId != id_ || st.doneOk)
-        return "";
-    return st.error;
+    if (st.queued.count(id_) || (st.busy == CatalogService::Op::Install && st.busyId == id_)) return "";
+    auto f = st.installFailed.find(id_);
+    return f == st.installFailed.end() ? "" : f->second;
 }
 
 CatalogPageScreen::Layout CatalogPageScreen::place(cairo_t* cr) const {
@@ -123,7 +128,7 @@ void CatalogPageScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     const Rect r = installRect();
-    if (!catalog_ || r.empty() || !r.contains(g.pos) || catalog_->busy()) return;
+    if (!catalog_ || r.empty() || !r.contains(g.pos) || installLabel() != "Install") return;
     asked_ = true;
     catalog_->install(id_);
     catalog_->poll();

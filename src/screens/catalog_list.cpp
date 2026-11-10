@@ -105,6 +105,7 @@ std::string CatalogListScreen::headline() const {
     if (!catalog_) return "";
     const auto& st = catalog_->state();
     if (st.checking) return "Checking…";
+    if (!st.cache.registry && st.noCatalog) return catalog::kNoPlugins;
     if (!st.cache.registry)
         return st.error.empty() || st.error == "No Wi-Fi." ? "Connect to Wi-Fi to see the plugins in the catalog." : st.error;
     std::string out = asOf(st.cache.registryMs);
@@ -140,6 +141,10 @@ void CatalogListScreen::draw(Canvas& canvas) {
     drawText(cr, headline(), quiet, {kMargin, kTop + 14, w, none ? 120 : kLineH - 20}, none ? 2 : 1);
     if (none) return;
     hRule(cr, kTop + kLineH - 4, kMargin, W() - kMargin);
+    if (all_.empty()) {  // a catalog with nothing in it yet
+        drawText(cr, catalog::kNoPlugins, quiet, {kMargin, kTop + kLineH + 20, w, 60}, 1);
+        return;
+    }
     const auto shown = rows();
     const auto rects = rowRects();
     for (size_t i = 0; i < shown.size(); ++i) {

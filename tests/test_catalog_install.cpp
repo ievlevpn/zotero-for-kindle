@@ -417,11 +417,13 @@ TEST_CASE("catalog install: [Review Focus] repairInterrupted after a kill mid-sw
     fs::create_directories(t.path / ".previous");
 
     SUBCASE("killed after <id> was moved aside") {
+        writeFile(swapMarker(t.str(), "feed-riffle"), "feed-riffle");  // as swapIn writes it
         fs::rename(id, prev);
         repairInterrupted(t.str());
         CHECK(readFile(id / "main.js") == "// v1.0.0");
     }
     SUBCASE("killed after the new code was moved in, before data/ followed") {
+        writeFile(swapMarker(t.str(), "feed-riffle"), "feed-riffle");  // as swapIn writes it
         fs::rename(id, prev);
         fs::rename(t.path / ".incoming/feed-riffle", id);
         repairInterrupted(t.str());
@@ -438,6 +440,27 @@ TEST_CASE("catalog install: [Review Focus] repairInterrupted after a kill mid-sw
     const auto scan = scanPlugins(t.str(), kApp);
     REQUIRE(scan.size() == 1);
     CHECK(scan[0].problem.empty());
+}
+
+TEST_CASE("catalog install: a plugin deleted by hand stays deleted, its kept version and state gone") {
+    TempDir t;
+    installOld(t);
+    UserError err;
+    REQUIRE(stageZip(t, goodZip(), &err));
+    REQUIRE(commit(t.str(), "feed-riffle", &err));  // 1.0.0 kept in .previous
+    CHECK_FALSE(fs::exists(swapMarker(t.str(), "feed-riffle")));
+    writeFile(t.path / ".state.json", R"({"plugins":{"feed-riffle":{"enabled":true,"everEnabled":true}}})");
+    fs::remove_all(t.path / "feed-riffle");  // over USB
+    repairInterrupted(t.str());
+    CHECK_FALSE(fs::exists(t.path / "feed-riffle"));
+    CHECK_FALSE(fs::exists(t.path / ".previous/feed-riffle"));
+    CHECK(readFile(t.path / ".state.json").find("feed-riffle") == std::string::npos);
+    CHECK(scanPlugins(t.str(), kApp).empty());
+
+    // With no kept version either: its state goes all the same.
+    writeFile(t.path / ".state.json", R"({"plugins":{"other":{"enabled":true,"everEnabled":true}}})");
+    repairInterrupted(t.str());
+    CHECK(readFile(t.path / ".state.json").find("other") == std::string::npos);
 }
 
 TEST_CASE("catalog install: removeFiles deletes everything for that id and nothing else") {

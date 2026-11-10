@@ -91,6 +91,7 @@ void PluginPageScreen::onTick(Nav& nav) {
         using Op = CatalogService::Op;
         const bool ours = st.doneId == id_ && (st.doneOp == Op::Update || st.doneOp == Op::Apply || st.doneOp == Op::RollBack);
         if (st.busy == Op::None && ours && !st.doneOk && !st.error.empty()) nav.toast(st.error);
+        if (st.busy == Op::None && ours && st.doneOk && !st.notice.empty()) nav.toast(st.notice);
     }
     load(nav);
     nav.damage({0, 0, W(), H()}, Waveform::Ui);
@@ -106,6 +107,7 @@ std::string PluginPageScreen::updateLabel() const {
     const auto& st = catalog_->state();
     using Op = CatalogService::Op;
     if (st.busyId == id_ && (st.busy == Op::Update || st.busy == Op::Apply)) return st.busyText;
+    if (auto q = st.queued.find(id_); q != st.queued.end() && q->second == "Downloading…") return q->second;
     if (reasking()) return "";
     auto l = catalog_->updateFor(id_, status_->folder.manifest->version);
     return l ? "Update to " + l->version.str() : "";
@@ -118,6 +120,7 @@ std::string PluginPageScreen::rollBackLabel() const {
     if (it == kept.end()) return "";
     const auto& st = catalog_->state();
     if (st.busyId == id_ && st.busy == CatalogService::Op::RollBack) return st.busyText;
+    if (auto q = st.queued.find(id_); q != st.queued.end() && q->second == "Rolling back…") return q->second;
     return "Roll back to " + oneLine(it->second);
 }
 
@@ -405,13 +408,13 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (!l.update.empty() && l.update.contains(g.pos)) {
-        if (!catalog_->busy()) catalog_->update(id_);
+        catalog_->update(id_);  // waits its turn behind a check
         catalog_->poll();
         nav.damage(whole, Waveform::Ui);
         return;
     }
     if (!l.rollBack.empty() && l.rollBack.contains(g.pos)) {
-        if (!catalog_->busy()) catalog_->rollBack(id_);
+        catalog_->rollBack(id_);
         catalog_->poll();
         nav.damage(whole, Waveform::Ui);
         return;

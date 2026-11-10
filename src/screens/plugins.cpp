@@ -87,7 +87,7 @@ std::string pluginsSummary(PluginHost* host) {
 
 PluginsScreen::PluginsScreen(PluginHostFn host, PluginsOff off) : host_(std::move(host)), off_(std::move(off)) {}
 
-int PluginsScreen::waiting() const { return catalog_ ? catalog_->updatesWaiting() : 0; }
+int PluginsScreen::waiting() const { return catalog_ ? catalog_->updatesForAll() : 0; }
 
 int PluginsScreen::top() const { return kTop + (off_.reason.empty() ? 0 : kOffLineH) + (waiting() > 0 ? kUpdateAllH : 0); }
 
@@ -137,6 +137,12 @@ void PluginsScreen::onTick(Nav& nav) {
     if (catalog_) catalog_->poll();
     const bool changed = (catalog_ && catalog_->state().serial != catalogSerial_) || (h && h->entriesVersion() != hostVersion_);
     if (!changed) return;
+    if (catalog_ && catalog_->state().serial != catalogSerial_) {  // what Update all couldn't do, said
+        const auto& st = catalog_->state();
+        if (st.busy == CatalogService::Op::None && st.doneOp == CatalogService::Op::Update && st.doneId.empty() &&
+            !st.error.empty())
+            nav.toast(st.error);
+    }
     load();
     nav.damage({0, 0, W(), H()}, Waveform::Ui);
 }

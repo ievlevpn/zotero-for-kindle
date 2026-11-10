@@ -39,10 +39,13 @@ node path/to/sdk/zk-plugin.mjs pack     # builds, then dist/plugin.zip
 node path/to/sdk/zk-plugin.mjs sign     # dist/plugin.zip.sig, with zk-plugin-key.json
 ```
 
-`pack` runs your `build.mjs`, then zips `dist/<id>/` so that `plugin.json` is at the root of the
-zip. Use `pack --no-build` if you build another way. It refuses a `data/` folder (that is the
-user's, and an update never touches it) and any file whose name starts with a dot. The zip is at
-most 8 MB, and 32 MB unpacked.
+`pack` empties `dist/<id>/`, runs your `build.mjs`, then zips `dist/<id>/` so that `plugin.json` is
+at the root of the zip. Use `pack --no-build` if you build another way (then `dist/<id>/` is left as
+you made it). It checks the built `plugin.json` as the app will: its `id`, a `version` of the form
+X.Y.Z (no pre-releases: the catalog can't offer them), and the manifest schema when the SDK's npm
+packages are installed. It refuses a `data/` folder (that is the user's, and an update never
+touches it) and any file whose name starts with a dot. The zip is at most 8 MB, and 32 MB and 2000
+files unpacked.
 
 ## 3. Tag and release on GitHub
 
@@ -69,8 +72,10 @@ list in `registry.json`:
 
 - `id` is the id in your `plugin.json`: lowercase letters, digits and dashes.
 - `repo` is `owner/name` of your plugin's repo.
-- Check the file first: `node registry/check.mjs registry/registry.json --online` (from this
-  repo's checkout) also confirms that your latest release's signature verifies with the key.
+- Check the file first: `node path/to/registry/check.mjs registry.json --online`, run in your
+  checkout of `zotero-for-kindle-plugins` with the checker from a zotero-for-kindle checkout (it
+  needs that checkout's `sdk/` beside it). It also confirms that your latest release's signature
+  verifies with the key.
 
 The maintainer reads the plugin before listing it, and signs the new registry. Listing is a
 review of the first version only. Later versions are not reviewed, which is why the key pin matters

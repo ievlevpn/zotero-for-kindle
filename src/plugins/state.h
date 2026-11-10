@@ -25,6 +25,7 @@ public:
     void stop(const std::string& id);
     bool stopped(const std::string& id);
     void forget(const std::string& id);  // everything about it (a removed plugin)
+    std::vector<std::string> ids();       // every plugin it remembers
     int failures(const std::string& id);  // in a row
     void recordFailure(const std::string& id, std::string message);
     void clearFailures(const std::string& id);
