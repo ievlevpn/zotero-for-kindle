@@ -22,6 +22,7 @@ void PluginEvents::rebind(PluginHost* host, App& app) {
         ev.instance = instance;
         mail_[instance].push_back(std::move(ev));
     }
+    screens_.clear();  // nothing of them goes to the next host (take() still hands over the error)
     host_ = host;
 }
 
@@ -31,13 +32,22 @@ void PluginEvents::pushScreen(App& app, uint64_t instance, const std::string& pl
 }
 
 uint64_t PluginEvents::openScreen(App& app, const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
-    if (!host_) return 0;
     std::string name = pluginId, title;
-    for (const auto& st : host_->status()) {
-        if (st.folder.dir != pluginId) continue;
-        if (st.folder.manifest) name = st.folder.manifest->name;
-        for (const auto& e : st.entries)
-            if (e.kind == "screen" && e.id == screenId) title = e.title;
+    if (host_)
+        for (const auto& st : host_->status()) {
+            if (st.folder.dir != pluginId) continue;
+            if (st.folder.manifest) name = st.folder.manifest->name;
+            for (const auto& e : st.entries)
+                if (e.kind == "screen" && e.id == screenId) title = e.title;
+        }
+    if (!host_ || !running_) {  // nothing would ever answer: the error state at once
+        static uint64_t offline = 0;
+        const uint64_t instance = (uint64_t{1} << 63) + ++offline;  // never a host's
+        PluginHostEvent ev{PluginHostEvent::Kind::ScreenError, pluginId, name, name + " can't show this screen right now", {}, 0, ""};
+        ev.instance = instance;
+        mail_[instance].push_back(std::move(ev));
+        app.push(std::make_unique<PluginScreen>(*this, instance, name, title));
+        return instance;
     }
     const uint64_t instance = host_->openScreen(pluginId, screenId, std::move(params));
     pushScreen(app, instance, name, title);

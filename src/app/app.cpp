@@ -256,6 +256,19 @@ void App::switchTab(int index) {
         }
         return;
     }
+    // Screens that close when left (plugin screens) go, with everything above them.
+    auto& stack = stacks_[tab_];
+    size_t keep = stack.size();
+    for (size_t i = 1; i < stack.size(); ++i)
+        if (stack[i]->closesWhenHidden()) {
+            keep = i;
+            break;
+        }
+    while (stack.size() > keep) {
+        auto s = std::move(stack.back());
+        stack.pop_back();
+        retire(std::move(s));
+    }
     tab_ = index;
     showTop();
 }

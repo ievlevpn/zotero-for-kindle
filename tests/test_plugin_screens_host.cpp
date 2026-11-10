@@ -6,10 +6,13 @@
 
 #include <chrono>
 #include <deque>
+#include <functional>
+#include <set>
 #include <thread>
 
 #include "fake_plugins.h"
 #include "plugins/host.h"
+#include "plugins/plugin_ctx.h"
 
 using namespace zk;
 using namespace zk::test;
@@ -23,11 +26,13 @@ struct Host {
     std::unique_ptr<PluginHost> host;
     std::deque<PluginHostEvent> got;
 
-    explicit Host(const std::string& js, const std::vector<std::string>& perms = {}, int renderMs = 300, int actionMs = 600) {
+    explicit Host(const std::string& js, const std::vector<std::string>& perms = {}, int renderMs = 300, int actionMs = 600,
+                  const std::function<void(PluginHostDeps&)>& tweak = {}) {
         fp.add("p", js, perms);
         PluginHostDeps d = fp.deps();
         d.renderBudgetMs = renderMs;
         d.actionBudgetMs = actionMs;
+        if (tweak) tweak(d);
         host = std::make_unique<PluginHost>(d);
         host->setEnabled("p", true);
         host->start();
@@ -178,6 +183,73 @@ zk.screen("s", { title: "S", render: () => zk.ui.text(`n=${n}`), onEvent(e) { if
     REQUIRE(t);
     CHECK(Host::firstText(*t) == "n=1");
     CHECK(t->requestId == 1);
+}
+
+namespace {
+JSValue jsUserCaused(JSContext* c, JSValueConst, int, JSValueConst*) {
+    return JS_NewBool(c, plugins::currentCall(plugins::ctxOf(c)).userCaused);
+}
+}  // namespace
+
+TEST_CASE("screens host: the back event is not user-caused (the screen is gone: nothing is asked)") {
+    Host h(R"JS(
+const seen = [];
+zk.screen("a", { title: "A", render: () => zk.ui.text(seen.join(",") || "-"), onEvent(e) { if (e.kind === "result") seen.push(`result ${e.from}`); if (e.kind === "tap") zk.ui.open("b"); } });
+zk.screen("b", { title: "B", render: () => zk.ui.text("b"), onEvent(e) { seen.push(`${e.kind} ${zk.userCaused()}`); } });
+)JS", {}, 300, 600, [](PluginHostDeps& d) {
+        d.extraBindings.push_back([](plugins::PluginCtx& p) {
+            plugins::defineFunction<jsUserCaused>(p.cx.raw(), p.zk.raw(), "userCaused", 0);
+        });
+    });
+    const uint64_t a = h.host->openScreen("p", "a");
+    REQUIRE(h.next(Kind::ScreenTree, a));
+    h.host->screenEvent(a, {{"kind", "tap"}, {"id", "x"}});
+    auto o = h.next(Kind::ScreenOpen, 0);
+    REQUIRE(o);
+    REQUIRE(h.next(Kind::ScreenTree, o->instance));
+    h.host->screenEvent(o->instance, {{"kind", "tap"}, {"id", "y"}});
+    REQUIRE(h.next(Kind::ScreenTree, o->instance));
+    h.host->closeScreen(o->instance);
+    std::optional<PluginHostEvent> t;
+    REQUIRE(eventually([&] { t = h.next(Kind::ScreenTree, a, 50); return t && Host::firstText(*t).find("result") != std::string::npos; }));
+    CHECK(Host::firstText(*t) == "open true,tap true,back false,result b");
+}
+
+TEST_CASE("screens host: zk.ui.refresh inside render does nothing; refresh-driven renders count as quiet run time") {
+    SUBCASE("inside render") {
+        Host h(R"JS(let n = 0; zk.screen("s", { title: "S", render: async () => { n++; await null; zk.ui.refresh(); return zk.ui.text(`n=${n}`); } });)JS");
+        const uint64_t s = h.host->openScreen("p", "s");
+        auto t = h.next(Kind::ScreenTree, s);
+        REQUIRE(t);
+        CHECK(Host::firstText(*t) == "n=1");
+        CHECK_FALSE(h.next(Kind::ScreenTree, s, 300));
+    }
+    SUBCASE("a timer calling refresh is throttled") {
+        Host h(R"JS(
+let n = 0;
+const tick = () => { zk.ui.refresh(); setTimeout(tick, 0); };
+zk.screen("s", {
+  title: "S",
+  render: () => { n++; const t = Date.now(); while (Date.now() - t < 10) {} return zk.ui.text(`n=${n}`); },
+  onEvent(e) { if (e.kind === "open") setTimeout(tick, 50); },
+});
+)JS", {}, 300, 600, [](PluginHostDeps& d) { d.quietRunMs = 100; });
+        const uint64_t s = h.host->openScreen("p", "s");
+        int trees = 0;
+        while (trees < 50 && h.next(Kind::ScreenTree, s, 700)) ++trees;  // until none comes for 0.7 s
+        CHECK(trees > 1);
+        CHECK(trees < 20);
+    }
+}
+
+TEST_CASE("screens host: instance numbers are unique across hosts (a host made again after an install)") {
+    std::set<uint64_t> seen;
+    for (int i = 0; i < 2; ++i) {
+        Host h(R"JS(zk.screen("s", { title: "S", render: () => zk.ui.text("x") });)JS");
+        const uint64_t s = h.host->openScreen("p", "s");
+        CHECK(seen.insert(s).second);
+        REQUIRE(h.next(Kind::ScreenTree, s));
+    }
 }
 
 namespace {

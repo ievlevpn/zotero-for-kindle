@@ -116,6 +116,7 @@ struct Call {
     int64_t ranWhilePausedMs = 0;  // only waiting is free: its entries' run time during a pause still counts
     int questions = 0;             // asked so far (at most kMaxQuestions)
     bool userCaused = false;
+    bool quietFree = false;  // not counted as quiet run time though not user-caused (a render answering the user)
     bool resets = true;     // success clears the failure count (not a restart's reload)
     std::string stopLimit, stopText;  // a cleanup: why its call was stopped
     bool returned = false;  // its function has returned; `promise` holds what it returned, if a promise
@@ -212,6 +213,10 @@ using namespace plugins;
 namespace {
 
 int64_t steadyMs() { return js::Runtime::nowMs(); }
+
+// Screen instances, unique in the process (a host made again after an update's install never
+// reuses one the app still holds); openScreen takes one on the screen thread.
+std::atomic<uint64_t> gNextInstance{0};
 
 [[maybe_unused]] constexpr int kPluginNice = 10;
 
@@ -313,7 +318,6 @@ struct PluginHost::Impl {
     std::map<std::string, std::vector<PluginEntry>> entryList;  // loaded plugins' entry points (under mu)
     std::set<std::string> withTask;    // loaded plugins that registered a background task (under mu)
     uint64_t nextSerial = 0, nextCall = 0, nextWork = 0, nextTimer = 0, nextRequest = 0;
-    std::atomic<uint64_t> nextInstance{0};  // screen instances (openScreen runs on the screen thread)
     std::string markerId;  // what the crash marker says now ("" = no marker)
     // zk.fetch's workers: made on the plugin thread at the first fetch; shut down by stop().
     std::unique_ptr<plugins::PluginNet> net;
@@ -683,7 +687,7 @@ struct PluginHost::Impl {
         const uint64_t outer = p.run->current;
         p.run->current = callId;
         const int64_t began = steadyMs();
-        const bool quietRun = c->kind != CallKind::Background && c->kind != CallKind::Render && !c->userCaused;
+        const bool quietRun = c->kind != CallKind::Background && !c->userCaused && !c->quietFree;
         p.rt.setDeadline(c->deadline(began));
         bool timeUp = false, oom = false, poolHit = false;
         auto observe = [&] {
@@ -1133,7 +1137,7 @@ struct PluginHost::Impl {
     // zk.ui.open calls of a call that ended well: each screen opens over `parent` (0: none).
     void applyOpens(PluginCtx& p, uint64_t parent, Opens opens) {
         for (auto& [screenId, params] : opens) {
-            const uint64_t instance = ++nextInstance;
+            const uint64_t instance = ++gNextInstance;
             PluginHostEvent ev{PluginHostEvent::Kind::ScreenOpen, p.manifest.id, p.manifest.name,
                                screenEntry(p, screenId)->info.title, {}, 0, ""};
             ev.instance = instance;
@@ -1150,8 +1154,10 @@ struct PluginHost::Impl {
         const js::Value fn = screenEntry(p, sc.screenId)->onEvent;
         const std::optional<nlohmann::json> params = sc.params;
         const uint64_t serial = p.run->serial;
+        // `back` comes after the screen is gone: not an answer to the user (no removals asked).
+        const bool back = event.value("kind", "") == "back";
         startCall(p, CallKind::Event, "the " + sc.screenId + " screen's onEvent (" + event.value("kind", "") + ")",
-                  deps.actionBudgetMs, true,
+                  back ? deps.handlerBudgetMs : deps.actionBudgetMs, !back,
                   [&] { return p.cx.call(fn, {js::Value::fromJson(p.cx, event), paramsValue(p, params)}); }, true,
                   [&](Call& c) {
                       c.screen = instance;
@@ -1200,13 +1206,16 @@ struct PluginHost::Impl {
         applyTurnOffs();
     }
 
-    void renderScreen(PluginCtx& p, uint64_t instance) {
+    // `answer`: the render follows what the user did (an event, the opening), so its time is free;
+    // one asked for by zk.ui.refresh counts as quiet run time (a timer can't drive endless renders).
+    void renderScreen(PluginCtx& p, uint64_t instance, bool answer = true) {
         PluginRun::OpenScreen& sc = *screenOf(p, instance);
         const js::Value fn = screenEntry(p, sc.screenId)->fn;
         const std::optional<nlohmann::json> params = sc.params;
         const uint64_t serial = p.run->serial;
         startCall(p, CallKind::Render, "the " + sc.screenId + " screen's render", deps.renderBudgetMs, false,
                   [&] { return p.cx.call(p.uiRender, {fn, paramsValue(p, params)}); }, true, [&](Call& c) {
+                      c.quietFree = answer;
                       c.done = [this, serial, instance](Call&, bool ok, const std::string& text) {
                           post([serial, instance, ok, text](Impl& h) { h.renderDone(serial, instance, ok, text); });
                       };
@@ -1278,7 +1287,7 @@ struct PluginHost::Impl {
             else if (sc->refreshDue) {
                 sc->refreshDue = false;
                 sc->busy = true;
-                renderScreen(p, instance);
+                renderScreen(p, instance, false);
             }
             return;
         }
@@ -1653,6 +1662,7 @@ std::string uiClose(PluginCtx& p, std::optional<nlohmann::json> result) {
 }
 
 void uiRefresh(PluginCtx& p) {
+    if (Call* c = p.host.findCall(p, p.run->current); c && c->kind == CallKind::Render) return;  // render asking for render
     p.host.post([serial = p.run->serial](PluginHost::Impl& h) { h.refreshScreen(serial); });
 }
 
@@ -1770,7 +1780,7 @@ void PluginHost::cancelBackground() {
 }
 
 uint64_t PluginHost::openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params) {
-    const uint64_t instance = ++impl_->nextInstance;
+    const uint64_t instance = ++gNextInstance;
     std::optional<nlohmann::json> p;
     if (!params.is_null()) p = std::move(params);
     impl_->post([instance, pluginId, screenId, p = std::move(p)](Impl& h) mutable { h.openScreen(instance, pluginId, screenId, std::move(p)); });

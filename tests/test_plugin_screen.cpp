@@ -474,3 +474,43 @@ TEST_CASE("plugin screen, end to end: [Review Focus] the plugin turned off while
     r.events->rebind(nullptr, r.app);
     REQUIRE(r.until([&] { return r.top() && r.top()->state() == PluginScreen::State::Failed; }));
 }
+
+TEST_CASE("plugin screen, end to end: plugins not running (safe mode, an install) or no host → the error state at once, Back works") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(kRiffle);
+    r.events->setRunning(false);
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.top() && r.top()->state() == PluginScreen::State::Failed; }));
+    CHECK(r.top()->errorText() == "Feed Riffle can't show this screen right now");
+    r.display.tap({headerBackRect().x + 20, headerBackRect().y + 20}, r.now);
+    REQUIRE(r.until([&] { return r.top() == nullptr; }));
+
+    r.events->setRunning(true);
+    r.events->rebind(nullptr, r.app);
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.top() && r.top()->state() == PluginScreen::State::Failed; }));
+    CHECK(r.top()->errorText() == "riffle can't show this screen right now");
+    r.display.tap({headerBackRect().x + 20, headerBackRect().y + 20}, r.now);
+    REQUIRE(r.until([&] { return r.top() == nullptr; }));
+}
+
+TEST_CASE("plugin screen, end to end: leaving the tab closes its plugin screens (the plugin hears back)") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let backs = 0;
+zk.screen("deck", { title: "Riffle", main: true,
+  render: () => zk.ui.column([zk.ui.text(`backs=${backs}`), zk.ui.button({ id: "more", title: "More" })]),
+  onEvent(e) { if (e.kind === "back") backs++; } });
+)JS");
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("backs=0"); }));
+    r.app.switchTab(1);
+    r.step();
+    r.app.switchTab(0);
+    r.step();
+    CHECK(r.top() == nullptr);  // the tab's root again
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("backs=1"); }));
+}

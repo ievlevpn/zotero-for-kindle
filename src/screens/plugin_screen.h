@@ -56,6 +56,7 @@ public:
     void onClose(Nav&) override;
     bool wantsKeyboard() const override { return !focus_.focused.empty(); }
     bool showsTabBar() const override { return false; }
+    bool closesWhenHidden() const override { return true; }
 
     uint64_t instance() const { return instance_; }
     State state() const { return state_; }

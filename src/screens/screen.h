@@ -81,6 +81,8 @@ public:
     virtual void onResize(Nav& nav) { onShow(nav); }
     virtual bool wantsKeyboard() const { return false; }
     virtual bool showsTabBar() const { return true; }
+    // Closed (with what is above it) when its tab is left, instead of kept hidden (plugin screens).
+    virtual bool closesWhenHidden() const { return false; }
 };
 
 }  // namespace zk

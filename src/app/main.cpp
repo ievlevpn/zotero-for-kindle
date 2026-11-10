@@ -369,6 +369,7 @@ int main(int argc, char** argv) {
         if (pluginsOff) std::fprintf(stderr, "plugins are off: %s\n", safeMode.automatic ? "the app stopped twice in a row" : "the OFF file or ZK_NO_PLUGINS");
     }
     PluginEvents pluginEvents(plugins.get());
+    pluginEvents.setRunning(!pluginsOff);  // safe mode: plugin screens show their error at once
     // Events from the screens, and what a sync brought in, go to the host's queue (never waiting
     // for JavaScript). Not while the host is stopped for an update's install.
     bool pluginsRunning = true;
@@ -473,6 +474,7 @@ int main(int argc, char** argv) {
                 if (service) service->stop();
                 app.setSync(nullSync);
                 pluginsRunning = false;
+                pluginEvents.setRunning(false);
                 backgroundRound.abandon();
                 if (plugins) plugins->stop();
                 pluginEvents.rebind(nullptr, app);  // its questions go, unanswered
@@ -485,6 +487,7 @@ int main(int argc, char** argv) {
                 pluginEvents.rebind(plugins.get(), app);
                 if (!pluginsOff) plugins->start();
                 pluginsRunning = true;
+                pluginEvents.setRunning(!pluginsOff);
             }));
     };
     auto pendingUpdate = [&]() -> std::optional<std::string> {

@@ -50,8 +50,10 @@ public:
 
     int waiting() const { return static_cast<int>(open_.size()); }
 
-    // Opens a plugin's screen over what shows (the launcher, an entry point): returns its instance
-    // (0 if there is no host).
+    // Whether plugins run (not in safe mode, not stopped for an update's install); set by main.
+    void setRunning(bool on) { running_ = on; }
+    // Opens a plugin's screen over what shows (the launcher, an entry point): returns its instance.
+    // Plugins not running (or no host): the screen shows "<Plugin> can't show this screen right now".
     uint64_t openScreen(App&, const std::string& pluginId, const std::string& screenId, nlohmann::json params = nullptr);
     // ScreenLink (PluginScreen).
     void send(uint64_t instance, nlohmann::json event) override;
@@ -66,6 +68,7 @@ private:
     std::deque<std::string> turnedOff_;  // toasts not shown yet
     int64_t lastToastMs_ = -kToastGapMs;
     std::function<void(uint64_t)> backgroundDone_;
+    bool running_ = true;
     std::map<uint64_t, std::string> screens_;                // open plugin screens: instance → plugin name
     std::map<uint64_t, std::deque<PluginHostEvent>> mail_;   // what waits for them
     void pushScreen(App&, uint64_t instance, const std::string& pluginName, const std::string& title);
