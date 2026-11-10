@@ -1,12 +1,9 @@
 #!/bin/sh
-# Cuts a release: version, Kindle build, signed package, the public repository, the GitHub release.
+# Cuts a release: version, Kindle build, signed package, the tag, the GitHub release.
 #   tools/release.sh [--dry-run] VERSION NOTES.md
-#   CO_AUTHORS="Name <email>;Other <email>" tools/release.sh …   credits contributors on the public
-#                                                               commit (Co-authored-by trailers)
 # 1. master must be clean and VERSION newer than meson.build's; the version is set and committed.
 # 2. tools/build-kindle.sh, tools/package.sh, tools/sign-release.sh dist VERSION.
-# 3. The public branch gets master's tree without research/, spikes/ and docs/superpowers/ (they
-#    hold private notes) as one commit, pushed to origin's master and tagged vVERSION.
+# 3. "release VERSION" is tagged vVERSION; master and the tag are pushed to origin.
 # 4. gh release create vVERSION with zotero-for-kindle.zip, update.json, update.json.sig.
 # --dry-run stops after step 2 and puts meson.build back.
 set -eu
@@ -41,30 +38,8 @@ if [ "$DRY" = 1 ]; then
 fi
 
 git commit -qm "release $VERSION" meson.build
-# The public tree: master without the private folders.
-PUB=$(mktemp -d)
-git worktree add -q "$PUB" public
-(
-    cd "$PUB"
-    git rm -rq --ignore-unmatch . >/dev/null
-    git checkout master -- .
-    git rm -rq --cached --ignore-unmatch research spikes docs/superpowers >/dev/null
-    rm -rf research spikes docs/superpowers
-    MSG="Zotero for Kindle $VERSION"
-    if [ -n "${CO_AUTHORS:-}" ]; then
-        MSG="$MSG
-"
-        OLDIFS=$IFS
-        IFS=';'
-        for who in $CO_AUTHORS; do MSG="$MSG
-Co-authored-by: $who"; done
-        IFS=$OLDIFS
-    fi
-    git commit -qm "$MSG"
-    git tag "v$VERSION"
-    git push -q origin public:master "v$VERSION"
-)
-git worktree remove --force "$PUB"
+git tag "v$VERSION"
+git push -q origin master "v$VERSION"
 gh release create "v$VERSION" --repo ievlevpn/zotero-for-kindle --verify-tag --title "Zotero for Kindle $VERSION" \
     --notes-file "$NOTES" dist/zotero-for-kindle.zip dist/update.json dist/update.json.sig
 echo "released $VERSION"

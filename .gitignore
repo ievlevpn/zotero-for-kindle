@@ -7,9 +7,10 @@ build-deps/
 subprojects/*/
 subprojects/.wraplock
 subprojects/packagecache/
-spikes/s1-cfi/harness/reader/
-spikes/s1-cfi/harness/node_modules/
-spikes/s1-cfi/harness/out/
+# Private notes, kept in the zotero-for-kindle-notes repository (linked in here when present)
+research
+spikes
+docs/superpowers
 local/
 dist/
 
