@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <cairo.h>
 
@@ -16,6 +17,7 @@ struct TextStyle {
     int weight = 400;  // 400 regular, 500 medium, 700 bold
     bool italic = false;
     uint8_t gray = 0;  // 0 = black ink, 255 = white
+    bool markup = false;  // the text is Pango markup (<b>, <i>; escape the rest with markupEscape)
 };
 
 enum class Align { Left, Center, Right, Justify };
@@ -37,6 +39,15 @@ TextResult drawText(cairo_t* cr, std::string_view utf8, const TextStyle& style, 
                     Align align = Align::Left);
 
 TextResult measureText(std::string_view utf8, const TextStyle& style, int width, int max_lines);
+
+// Long text page by page: the top of every line of `utf8` laid out `width` wide, and the bottom of
+// the last as the final entry ({0} for no text).
+std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int width);
+// Draws lines [first, first + count) of `utf8` laid out box.w wide, line `first` at box.y.
+void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int first, int count,
+                   Align align = Align::Left);
+// `s` with &, <, >, " and ' escaped for Pango markup.
+std::string markupEscape(std::string_view s);
 
 // Family name of the font actually used for the first glyph run of `utf8` (for tests).
 std::string resolvedFamily(std::string_view utf8, const TextStyle& style);

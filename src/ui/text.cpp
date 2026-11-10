@@ -67,7 +67,8 @@ void configure(Layout& l, cairo_t* cr, std::string_view utf8, const TextStyle& s
             pango_layout_set_justify(l.layout, TRUE);
             break;
     }
-    pango_layout_set_text(l.layout, utf8.data(), static_cast<int>(utf8.size()));
+    if (style.markup) pango_layout_set_markup(l.layout, utf8.data(), static_cast<int>(utf8.size()));
+    else pango_layout_set_text(l.layout, utf8.data(), static_cast<int>(utf8.size()));
 }
 
 Layout makeLayout(cairo_t* cr, std::string_view utf8, const TextStyle& style, int width, int max_lines,
@@ -125,6 +126,64 @@ TextResult measureText(std::string_view utf8, const TextStyle& style, int width,
     if (utf8.empty()) return {};
     Layout l = makeLayout(nullptr, utf8, style, width, max_lines, Align::Left);
     return resultOf(l.layout, utf8);
+}
+
+std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int width) {
+    std::vector<int> tops;
+    if (utf8.empty()) return {0};
+    Layout l = makeLayout(nullptr, utf8, style, width, 0, Align::Left);
+    PangoLayoutIter* it = pango_layout_get_iter(l.layout);
+    int bottom = 0;
+    do {
+        PangoRectangle logical;
+        pango_layout_iter_get_line_extents(it, nullptr, &logical);
+        tops.push_back(PANGO_PIXELS(logical.y));
+        bottom = PANGO_PIXELS(logical.y + logical.height);
+    } while (pango_layout_iter_next_line(it));
+    pango_layout_iter_free(it);
+    tops.push_back(bottom);
+    return tops;
+}
+
+void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int first, int count,
+                   Align align) {
+    if (utf8.empty() || count <= 0) return;
+    Layout l = makeLayout(cr, utf8, style, box.w, 0, align);
+    PangoLayoutIter* it = pango_layout_get_iter(l.layout);
+    double g = style.gray / 255.0;
+    cairo_save(cr);
+    cairo_set_source_rgb(cr, g, g, g);
+    int top = 0;
+    for (int i = 0; i < first + count; ++i) {
+        PangoRectangle logical;
+        pango_layout_iter_get_line_extents(it, nullptr, &logical);
+        if (i == first) top = logical.y;
+        if (i >= first) {
+            const int baseline = pango_layout_iter_get_baseline(it);
+            cairo_move_to(cr, box.x + logical.x / double(PANGO_SCALE), box.y + (baseline - top) / double(PANGO_SCALE));
+            pango_cairo_show_layout_line(cr, pango_layout_iter_get_line_readonly(it));
+        }
+        if (!pango_layout_iter_next_line(it)) break;
+    }
+    pango_layout_iter_free(it);
+    cairo_restore(cr);
+    cairo_new_path(cr);
+}
+
+std::string markupEscape(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (char c : s) {
+        switch (c) {
+            case '&': out += "&amp;"; break;
+            case '<': out += "&lt;"; break;
+            case '>': out += "&gt;"; break;
+            case '"': out += "&quot;"; break;
+            case '\'': out += "&apos;"; break;
+            default: out += c;
+        }
+    }
+    return out;
 }
 
 std::string resolvedFamily(std::string_view utf8, const TextStyle& style) {
