@@ -34,12 +34,14 @@ void puzzleIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void puzzleBadge(cairo_t* cr, double cx, double cy);
 void closeIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 // The reader panel's: a bulleted list (Contents), a page with a folded corner and two lines
-// (Notes), "Aa" (Display), a sun (Light), and a frame's four corners (Mark area).
+// (Notes), "Aa" (Display), a sun (Light), a frame's four corners (Mark area), and a square sticky
+// note with its bottom-right corner folded (Add note).
 void contentsIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void notesIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void displayIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void lightIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void areaIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+void stickyNoteIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 // Typographic cover for items without one: title in Bookerly, authors in Ember.
 void generatedCover(cairo_t* cr, Rect r, const std::string& title, const std::string& authors, bool dark);
 void typeBadge(cairo_t* cr, Rect r, const std::string& type);

@@ -79,6 +79,9 @@ public:
     std::optional<InkPlacement> areaPosition(int page, Rect r) override {
         return guard([&] { return e_->areaPosition(page, r); }, std::optional<InkPlacement>{});
     }
+    std::optional<InkPlacement> notePosition(int page, Point at) override {
+        return guard([&] { return e_->notePosition(page, at); }, std::optional<InkPlacement>{});
+    }
     std::optional<std::string> annotationAt(int page, Point p, const std::vector<AnnotationRecord>& a) override {
         return guard([&] { return e_->annotationAt(page, p, a); }, std::optional<std::string>{});
     }

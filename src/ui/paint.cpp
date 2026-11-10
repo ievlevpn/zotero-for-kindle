@@ -248,4 +248,21 @@ void areaIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_restore(cr);
 }
 
+void stickyNoteIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    const double h = 17.5, l = cx - h, r = cx + h, t = cy - h, b = cy + h, fold = 13;
+    cairo_move_to(cr, l, t);
+    cairo_line_to(cr, r, t);
+    cairo_line_to(cr, r, b - fold);
+    cairo_line_to(cr, r - fold, b);
+    cairo_line_to(cr, l, b);
+    cairo_close_path(cr);
+    cairo_move_to(cr, r, b - fold);
+    cairo_line_to(cr, r - fold, b - fold);
+    cairo_line_to(cr, r - fold, b);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
 }  // namespace zk

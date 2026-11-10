@@ -76,6 +76,8 @@ public:
     uint64_t ink(int page, std::vector<std::vector<Point>> paths, int widthPx);
     // A rectangle on `page` placed for Zotero (an Area event); answered in order with ink.
     uint64_t area(int page, Rect r);
+    // A sticky note tapped at `at` on `page` placed for Zotero (also an Area event, in order).
+    uint64_t note(int page, Point at);
     // Empties the engine's resource cache (the app went to the background); pages drawn stay.
     void trimCaches();
     bool poll(RenderEvent&);  // UI thread, non-blocking

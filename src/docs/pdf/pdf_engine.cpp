@@ -1078,9 +1078,15 @@ Rect PdfEngine::pageBox(int page) {
 // A rectangle in device pixels -> PDF user space, as a Zotero image annotation. The sort index is
 // a highlight's: the page, the first character inside the area (else how many come above it),
 // and the area's top from the top of the page.
-std::optional<InkPlacement> PdfEngine::areaPosition(int page, Rect r) {
+std::optional<InkPlacement> PdfEngine::areaPosition(int page, Rect r) { return placeBox(page, r, std::nullopt); }
+
+// A note is a 22 pt square with the tap as its top-left corner on the page as shown (rotation
+// included), moved back inside the page where it would stick out; sorted as an area there.
+std::optional<InkPlacement> PdfEngine::notePosition(int page, Point at) { return placeBox(page, {}, at); }
+
+std::optional<InkPlacement> PdfEngine::placeBox(int page, Rect r, std::optional<Point> note) {
     double scale, dx, dy;
-    if (!doc_ || r.empty() || !fit(page, scale, dx, dy)) return std::nullopt;
+    if (!doc_ || (r.empty() && !note) || !fit(page, scale, dx, dy)) return std::nullopt;
     fz_page* p = nullptr;
     fz_stext_page* st = nullptr;
     fz_var(p);
@@ -1101,6 +1107,15 @@ std::optional<InkPlacement> PdfEngine::areaPosition(int page, Rect r) {
     fz_catch(ctx_) { ok = false; }
     fz_rect area = fz_make_rect(static_cast<float>((r.x - dx) / scale), static_cast<float>((r.y - dy) / scale),
                                 static_cast<float>((r.x + r.w - dx) / scale), static_cast<float>((r.y + r.h - dy) / scale));
+    if (note) {
+        constexpr float kNote = 22;  // Zotero's note size, in points
+        float x = static_cast<float>((note->x - dx) / scale), y = static_cast<float>((note->y - dy) / scale);
+        if (ok) {
+            x = std::clamp(x, bound.x0, std::max(bound.x0, bound.x1 - kNote));
+            y = std::clamp(y, bound.y0, std::max(bound.y0, bound.y1 - kNote));
+        }
+        area = fz_make_rect(x, y, x + kNote, y + kNote);
+    }
     if (ok) area = fz_intersect_rect(area, bound);  // nothing off the page
     if (fz_is_empty_rect(area)) ok = false;
     int offset = -1, above = 0, index = 0;

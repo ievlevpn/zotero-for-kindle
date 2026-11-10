@@ -9,6 +9,7 @@
 
 #include "docs/document.h"
 #include "screens/screen.h"
+#include "ui/text.h"
 
 namespace zk {
 
@@ -35,6 +36,7 @@ public:
     static Rect searchRect();
     static Rect contentsIconRect();
     static Rect markAreaRect();  // PDF: "Mark area", the sixth cell
+    static Rect addNoteRect();   // PDF: "Add note", the seventh
     static Rect sliderRect();
     // Where the slider takes a finger: its track, a little taller (a ~9 mm target) and wider.
     static Rect sliderHitRect();
@@ -42,9 +44,11 @@ public:
     // A touch going down here drags at once (the app asks): the slider follows the finger.
     bool dragsFrom(Point at) const { return !picker_ && sliderHitRect().contains(at); }
     static constexpr int kDragFrameMs = 100;  // the slider redraws at most ~10 times a second
-    // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync, 5 Mark area (PDF), of `count` in the row.
+    // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync, 5 Mark area, 6 Add note (PDF), of `count`.
     static Rect buttonRect(int i, int count = 5);
-    int buttonCount() const;  // 6 on a PDF (Mark area), else 5
+    int buttonCount() const;  // 7 on a PDF (Mark area, Add note), else 5
+    // A cell's label: 6.5 pt, or down to 5.5 pt by halves until it fits `room` px.
+    static TextStyle labelStyle(const std::string& label, int room);
     static Rect lightPanelRect();
     static Rect lightSliderRect();
     static Rect displayPanelRect();

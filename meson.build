@@ -203,6 +203,7 @@ catalog_dep = declare_dependency(link_with : catalog_lib, dependencies : [update
 screens_lib = static_library('zk-screens',
   'src/screens/home.cpp',
   'src/screens/annotation_bar.cpp',
+  'src/screens/note_popup.cpp',
   'src/screens/collection_search.cpp',
   'src/screens/read_tag.cpp',
   'src/screens/sync_status.cpp',

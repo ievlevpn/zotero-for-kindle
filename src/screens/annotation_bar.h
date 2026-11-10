@@ -86,7 +86,11 @@ public:
     bool confirming() const { return state_ == State::Confirm; }
     bool commenting() const { return state_ == State::Comment; }
     bool wantsKeyboard() const { return commenting(); }
-    std::string question() const;  // the confirmation's: "Delete this highlight?" (an area: "Delete this area?")
+    // Straight to the comment, or to the confirmation (a sticky note's pop-up): there, Cancel closes.
+    void editComment(Nav&);
+    void confirmDelete(Nav&);
+    // The confirmation's: "Delete this highlight?" (an area: "Delete this area?", a note: "Delete this note?")
+    std::string question() const;
     Rect rect() const;              // what is drawn now: the bar, the question or the comment box
     Rect confirmRect(int i) const;  // 0 Delete, 1 Cancel
     static Rect commentRect();                // above the device's keyboard (when lipc says nothing)
@@ -109,6 +113,7 @@ private:
     std::string comment_;
     Rect commentBox_;  // placed when the comment opens, above the keyboard as it is then
     bool changed_ = false;
+    bool direct_ = false;  // opened at the comment or the confirmation: no bar to go back to
 };
 
 }  // namespace zk

@@ -72,7 +72,8 @@ struct RenderWorker::Impl {
         int page = 0;
         std::vector<std::vector<Point>> paths;
         int widthPx = 0;
-        std::optional<Rect> area;  // an area instead of strokes
+        std::optional<Rect> area;   // an area instead of strokes
+        std::optional<Point> note;  // a sticky note instead
     };
     std::deque<InkRequest> inkRequests;
     bool trimRequest = false;
@@ -289,10 +290,12 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     // Ink first: its device points belong to the layout they were drawn on.
     for (auto& k : inks) {
         RenderEvent ev;
-        ev.kind = k.area ? RenderEvent::Kind::Area : RenderEvent::Kind::Ink;
+        ev.kind = k.area || k.note ? RenderEvent::Kind::Area : RenderEvent::Kind::Ink;
         ev.requestId = k.id;
         ev.page = k.page;
-        ev.ink = k.area ? engine->areaPosition(k.page, *k.area) : engine->inkPosition(k.page, k.paths, k.widthPx);
+        ev.ink = k.note   ? engine->notePosition(k.page, *k.note)
+                 : k.area ? engine->areaPosition(k.page, *k.area)
+                          : engine->inkPosition(k.page, k.paths, k.widthPx);
         emit(std::move(ev));
     }
     if (a) {
@@ -532,6 +535,15 @@ uint64_t RenderWorker::area(int page, Rect r) {
     request(*impl_, [&] {
         id = impl_->nextPointId++;
         impl_->inkRequests.push_back(Impl::InkRequest{id, page, {}, 0, r});
+    });
+    return id;
+}
+
+uint64_t RenderWorker::note(int page, Point at) {
+    uint64_t id = 0;
+    request(*impl_, [&] {
+        id = impl_->nextPointId++;
+        impl_->inkRequests.push_back(Impl::InkRequest{id, page, {}, 0, std::nullopt, at});
     });
     return id;
 }

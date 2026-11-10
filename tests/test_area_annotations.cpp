@@ -673,24 +673,8 @@ TEST_CASE("area: Mark an area's banner and the panel's cells fit on the KT4 and 
         CHECK(window.intersected(banner) == banner);
         CHECK(banner.intersected(cancel) == cancel);
         CHECK(cancel.h >= 80);
-        // The panel's cells (six on a PDF): inside it, ~9 mm or more, the icon clear of the label, and
-        // every label fitting its cell.
-        const Rect panel = ReaderMenus::panelRect();
-        CHECK(ReaderMenus::markAreaRect() == ReaderMenus::buttonRect(5, 6));
-        for (int i = 0; i < 6; ++i) {
-            const Rect c = ReaderMenus::buttonRect(i, 6);
-            CHECK(panel.intersected(c) == c);
-            CHECK(c.w >= 106);
-            CHECK(c.h >= 106);
-            if (i) CHECK(c.x > ReaderMenus::buttonRect(i - 1, 6).x + ReaderMenus::buttonRect(i - 1, 6).w);
-        }
-        CHECK(48 + kIconSize / 2 <= 84);  // the icon's bottom (centre 48) above the label's top (84)
-        const double room = ReaderMenus::buttonRect(0, 6).w - 8;
-        for (const char* l : {"Contents", "Notes (12)", "Display", "Light", "Syncing…", "Mark area"}) {
-            INFO(l);
-            CHECK(measureText(l, {theme::kSans, 6.5, 500}, 10000, 1).width <= room);
-        }
-        CHECK(measureText("Notes (128)", {theme::kSans, 6, 500}, 10000, 1).width <= room);  // drawn at 6 pt
+        // The panel's cells (seven on a PDF, with Add note): test_sticky_notes checks they fit.
+        CHECK(ReaderMenus::markAreaRect() == ReaderMenus::buttonRect(5, 7));
     }
 }
 
