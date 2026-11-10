@@ -191,10 +191,18 @@ void log(PluginCtx&, LogLevel, const std::string& text);
 // setTimeout/clearTimeout: a timer belongs to the running call (dropped if that call is stopped;
 // run in its budget while it is running, else as a call of its own with the event budget). A
 // timer set by a stopped call's cleanup code belongs to no call: it runs as a call of its own.
+// Timers and handlers live on the C++ heap, outside the plugin's memory limit, so they are capped
+// (a plugin looping setTimeout would otherwise take hundreds of MB), and a delay has a floor (each
+// wake costs battery). While the app is in the background, timers whose call has ended wait
+// for the foreground (PluginHost::setBackground).
+constexpr size_t kMaxTimers = 1000;           // pending, per plugin
+constexpr size_t kMaxHandlersPerEvent = 100;  // zk.on, per plugin and event
+// A shorter delay than PluginHostDeps::minTimerMs (100 ms) is raised to it.
+// 0: the plugin already has kMaxTimers pending (nothing is added).
 uint64_t addTimer(PluginCtx&, js::Value callback, int64_t delayMs);
 void clearTimer(PluginCtx&, uint64_t id);
-// zk.on / zk.background registrations.
-void addHandler(PluginCtx&, const std::string& event, js::Value handler);
+// zk.on / zk.background registrations. addHandler: false if the event has kMaxHandlersPerEvent.
+bool addHandler(PluginCtx&, const std::string& event, js::Value handler);
 void setBackgroundTask(PluginCtx&, js::Value task);
 // Entry points (bindings_entry.cpp). The host keeps the function referenced for part 2 and lists
 // (kind, id, title) in PluginStatus::entries. kind: "selectionAction", "itemAction", "screen".

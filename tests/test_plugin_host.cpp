@@ -1296,3 +1296,108 @@ TEST_CASE("host: anyEnabled says whether some installed plugin is on") {
     host.setEnabled("b", false);
     CHECK(eventually([&] { return !host.anyEnabled(); }));
 }
+
+// ---- Memory and battery limits on timers and handlers (audits 2026-11-10) ----------------------
+
+TEST_CASE("host: a plugin may have at most 1000 timers pending; one more throws a LimitError") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        zk.on("syncFinished", () => {
+          const ids = [];
+          for (let i = 0; i < 1000; i++) ids.push(setTimeout(() => {}, 1e9));
+          try {
+            setTimeout(() => {}, 1e9);
+            console.log("no limit");
+          } catch (e) {
+            console.log("caught", e instanceof zk.LimitError, e.limit, e.message);
+          }
+          clearTimeout(ids[0]);
+          setTimeout(() => {}, 1e9);  // room again
+          console.log("set after clear");
+        });
+    )");
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(3000));
+    const std::string log = fp.log("a");
+    CHECK(contains(log, "caught true timers setTimeout: this plugin already has 1000 timers pending"));
+    CHECK_FALSE(contains(log, "no limit"));
+    CHECK(contains(log, "set after clear"));
+    CHECK(plugins::kMaxTimers == 1000);
+}
+
+TEST_CASE("host: a plugin may register at most 100 handlers per event; one more throws a LimitError") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        let calls = 0;
+        for (let i = 0; i < 99; i++) zk.on("syncFinished", () => { calls++; });
+        zk.on("syncFinished", () => { if (calls === 99) console.log("ran", calls + 1); });
+        try {
+          zk.on("syncFinished", () => {});
+          console.log("no limit");
+        } catch (e) {
+          console.log("caught", e instanceof zk.LimitError, e.limit, e.message);
+        }
+        zk.on("bookOpened", () => {});  // another event has its own 100
+        console.log("other event ok");
+    )", {"library:read"});
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(3000));
+    const std::string log = fp.log("a");
+    CHECK(contains(log, "caught true handlers zk.on(\"syncFinished\"): this plugin already has 100 handlers"));
+    CHECK_FALSE(contains(log, "no limit"));
+    CHECK(contains(log, "other event ok"));
+    CHECK(contains(log, "ran 100"));  // the 100 registered ones run, not the refused ones
+}
+
+TEST_CASE("host: setTimeout has a floor of 100 ms") {
+    CHECK(PluginHostDeps{}.minTimerMs == 100);
+    FakePlugins fp;
+    fp.add("a", R"(
+        zk.on("syncFinished", async () => {
+          for (const ms of [0, undefined, -5, NaN, 30]) {
+            const t0 = Date.now();
+            await new Promise((r) => setTimeout(r, ms));
+            console.log("waited", String(ms), Date.now() - t0 >= 99);
+          }
+        });
+    )");
+    auto deps = fp.deps();
+    deps.minTimerMs = 100;
+    deps.handlerBudgetMs = 2000;
+    PluginHost host(deps);
+    host.setEnabled("a", true);
+    host.start();
+    host.dispatch(kSync);
+    REQUIRE(host.waitIdle(5000));
+    const std::string log = fp.log("a");
+    for (const char* ms : {"0", "undefined", "-5", "NaN", "30"})
+        CHECK_MESSAGE(contains(log, std::string("waited ") + ms + " true"), log);
+}
+
+TEST_CASE("host: in the background, timers of ended calls wait for the foreground; a running call's fire") {
+    FakePlugins fp;
+    fp.add("a", R"(
+        zk.on("syncFinished", async () => {
+          setTimeout(() => console.log("orphan fired"), 150);  // due after the handler has ended
+          await new Promise((r) => setTimeout(r, 20));
+          console.log("in-call timer fired");
+        });
+    )");
+    PluginHost host(fp.deps());
+    host.setEnabled("a", true);
+    host.start();
+    host.setBackground(true);
+    host.dispatch(kSync);
+    REQUIRE(eventually([&] { return contains(fp.log("a"), "in-call timer fired"); }));
+    // The handler has ended by now; its other timer was due long ago, but waits.
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    CHECK_FALSE(contains(fp.log("a"), "orphan fired"));
+    host.setBackground(false);
+    CHECK(eventually([&] { return contains(fp.log("a"), "orphan fired"); }));
+}

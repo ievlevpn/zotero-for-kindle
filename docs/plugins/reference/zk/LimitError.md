@@ -45,7 +45,7 @@ try {
 | Property | Modifier | Type | Description | Overrides | Inherited from |
 | ------ | ------ | ------ | ------ | ------ | ------ |
 | <a id="cause"></a> `cause?` | `public` | `unknown` | - | - | `Error.cause` |
-| <a id="limit"></a> `limit` | `readonly` | `"time"` \| `"memory"` \| `"stack"` \| `"responseSize"` \| `"responseTime"` \| `"fetches"` | Which limit: run time, memory, stack depth, a fetch's response size or duration, or too many fetches under way at once. | - | - |
+| <a id="limit"></a> `limit` | `readonly` | \| `"time"` \| `"memory"` \| `"stack"` \| `"responseSize"` \| `"responseTime"` \| `"fetches"` \| `"timers"` \| `"handlers"` | Which limit: run time, memory, stack depth, a fetch's response size or duration, too many fetches under way at once, too many timers pending ([setTimeout](../setTimeout.md)), or too many handlers for one event ([on](on.md)). | - | - |
 | <a id="message"></a> `message` | `public` | `string` | - | - | `Error.message` |
 | <a id="name"></a> `name` | `readonly` | `"LimitError"` | - | `Error.name` | - |
 | <a id="stack"></a> `stack?` | `public` | `string` | - | - | `Error.stack` |

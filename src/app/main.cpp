@@ -603,7 +603,13 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
-    lifecycle.setOnBackground([&] { backgroundRound.onSleep(); });  // sleeping cuts background tasks short
+    lifecycle.setOnBackground([&] {
+        backgroundRound.onSleep();  // sleeping cuts background tasks short
+        if (plugins) plugins->setBackground(true);  // and plugins' timers wait for the foreground
+    });
+    lifecycle.setOnForeground([&] {
+        if (plugins) plugins->setBackground(false);
+    });
     app.setReadingLandscape([&lib] { return loadSettings(lib).landscapeReading; });
     // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
     // Kindle home). Stays on through shutdown, which must not hang either.
