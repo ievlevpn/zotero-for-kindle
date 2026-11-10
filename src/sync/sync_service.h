@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -16,6 +17,7 @@
 
 #include "net/http.h"
 #include "platform/power.h"
+#include "store/records.h"
 #include "sync/config.h"
 #include "sync/sync_control.h"
 
@@ -34,7 +36,12 @@ struct SyncDeps {
     // Whether pulls collect events for plugins (asked on the worker; must be cheap and thread-safe):
     // false while no plugin is on. Unset: always.
     std::function<bool()> pluginEventsWanted;
+    // Free bytes where the files go (kept collections pause under kKeptMinFree). Default: statvfs.
+    std::function<uint64_t()> freeBytes;
 };
+
+// Kept collections stop downloading below this much free space (spec B).
+constexpr uint64_t kKeptMinFree = uint64_t{300} << 20;
 
 class SyncService final : public SyncControl {
 public:
@@ -55,10 +62,13 @@ public:
     void setIntervalMinutes(int) override;
     bool poll(SyncEvent& out) override;
     bool busy() const override { return busy_; }
+    void downloadKept() override;
+    std::optional<KeptStatus> keptStatus(const std::string& collectionKey) const override;
 
 private:
     struct Command {
-        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push } kind;
+        // KeepDownloads: one file of the kept collections, then itself again (flag: a fresh start).
+        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push, KeepDownloads } kind;
         std::string itemKey, attachmentKey;
         bool flag = false;
     };
@@ -70,6 +80,10 @@ private:
     bool sleepFor(int seconds);  // false when stopping
     bool sleepForMs(int ms);
     void pushChanges(Worker&);  // PushStarted/PushFinished around SyncEngine::push, if anything is unsent
+    // The file into filesDir (DownloadProgress on the way) and marked Local; false with *err if not.
+    bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err);
+    bool keepStep(Worker&, bool fresh);  // true: more to download
+    void setKept(std::map<std::string, KeptStatus>);  // KeptChanged if it changed
 
     SyncDeps deps_;
     std::thread thread_;
@@ -82,6 +96,9 @@ private:
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
     int intervalMinutes_;
     std::optional<std::chrono::steady_clock::time_point> pushDue_;  // guarded by mutex_
+    std::map<std::string, KeptStatus> kept_;  // guarded by mutex_: collections catching up
+    // Guarded by mutex_: a kept file is downloading; openBook() cancels it (yield), as it goes first.
+    bool keptRunning_ = false, keptYield_ = false;
 };
 
 }  // namespace zk

@@ -130,6 +130,8 @@ public:
     void setIntervalMinutes(int m) override { app_.sync().setIntervalMinutes(m); }
     bool poll(SyncEvent& e) override { return app_.sync().poll(e); }
     bool busy() const override { return app_.sync().busy(); }
+    void downloadKept() override { app_.sync().downloadKept(); }
+    std::optional<KeptStatus> keptStatus(const std::string& k) const override { return app_.sync().keptStatus(k); }
 
 private:
     App& app_;

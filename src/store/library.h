@@ -93,6 +93,7 @@ struct CollectionEntry {
     int64_t items = 0;
     bool hasChildren = false;
     bool pinned = false;     // collectionsTab(): pinned to the top
+    bool kept = false;       // kept downloaded (keptCollections())
     std::string parentName;  // collectionsTab(): a pinned subcollection's parent
 };
 
@@ -271,6 +272,13 @@ public:
     // Pinned collections (a long press): kept on the Kindle, in the order pinned.
     std::vector<std::string> pinnedCollections();
     void setCollectionPinned(const std::string& key, bool pinned);
+    // Kept collections (a long press, "Keep downloaded"): the files of their items, their
+    // subcollections' too, are downloaded and kept so. On this Kindle only, in the order kept.
+    std::vector<std::string> keptCollections();
+    void setCollectionKept(const std::string& key, bool kept);  // off deletes nothing
+    // What keeping a collection covers: for every item in it or in its subcollections (any depth)
+    // that has one, the row with the file Open opens (ItemRow::attachmentKey), by title.
+    std::vector<ItemRow> collectionFiles(const std::string& collectionKey);
     // The Collections tab: the pinned ones (any level, those still there), then the other top-level ones.
     std::vector<CollectionEntry> collectionsTab();
     // Items whose books were opened on the Kindle, last opened first.

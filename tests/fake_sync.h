@@ -4,6 +4,7 @@
 #include "sync/sync_control.h"
 
 #include <deque>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -27,8 +28,14 @@ public:
         return true;
     }
     bool busy() const override { return isBusy; }
+    void downloadKept() override { ++keptRuns; }
+    std::optional<KeptStatus> keptStatus(const std::string& key) const override {
+        auto it = kept.find(key);
+        return it == kept.end() ? std::nullopt : std::optional(it->second);
+    }
 
-    int syncs = 0, pushes = 0, whenOnline = 0, removals = 0, interval = -1;
+    int syncs = 0, pushes = 0, whenOnline = 0, removals = 0, interval = -1, keptRuns = 0;
+    std::map<std::string, KeptStatus> kept;  // what keptStatus() answers
     bool isBusy = false;
     std::vector<std::string> opened;
     std::vector<bool> allOffline;
