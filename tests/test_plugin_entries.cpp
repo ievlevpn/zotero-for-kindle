@@ -111,11 +111,11 @@ struct ReaderRig {
     FakeNav nav{lib};
     std::unique_ptr<ReaderScreen> reader;
 
-    explicit ReaderRig(PluginEntries* entries) {
+    explicit ReaderRig(PluginEntries* entries, DocType type = DocType::Epub) {
         addFontDir("assets/fonts-device");
         nav.entries = entries;
         fillFixtureLibrary(lib, 10);
-        reader = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
+        reader = std::make_unique<ReaderScreen>(*lib.rowFor("IT000003"), type == DocType::Pdf ? "book.pdf" : "book.epub", type, [] {
             return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); });
         }, 6);
         nav.visible = reader.get();
@@ -286,8 +286,6 @@ TEST_CASE("plugin entries: item details has a Plugins section; a row runs on the
     CHECK(e.runs[1].target["key"] == "IT000003");
     CHECK(e.runs[1].target.contains("title"));
     CHECK(e.runs[1].target.contains("tags"));
-    s.onGesture(tapAt({row.x + 20, row.y + 20}), nav);  // one run at a time
-    CHECK(e.runs.size() == 1);
     REQUIRE(s.result());
     CHECK(s.result()->running());
     SUBCASE("the answer") {
@@ -306,6 +304,57 @@ TEST_CASE("plugin entries: item details has a Plugins section; a row runs on the
         s.onClose(nav);
         CHECK(e.stops == std::vector<uint64_t>{1});
     }
+    SUBCASE("the Working… row tapped again stops the run") {
+        s.onGesture(tapAt({row.x + 20, row.y + 20}), nav);
+        CHECK(e.stops == std::vector<uint64_t>{1});
+        CHECK(e.runs.size() == 1);  // not a second run
+        CHECK_FALSE(s.result());
+    }
+}
+
+TEST_CASE("plugin entries: Working… on the bar tapped again stops the run") {
+    FakeEntries e = withActions();
+    ReaderRig r(&e);
+    r.select();
+    r.tap(r.reader->annotationBar()->buttonRect(3));
+    r.tap(r.reader->annotationBar()->actionRect(0));
+    REQUIRE(r.reader->annotationBar()->working());
+    r.tap(r.reader->annotationBar()->buttonRect(3));
+    CHECK(e.stops == std::vector<uint64_t>{1});
+    CHECK_FALSE(r.reader->pluginResult());
+    CHECK_FALSE(r.reader->annotationBar()->working());
+}
+
+TEST_CASE("plugin entries: on a PDF (Scribe), the pen writes no ink through the result pop-up") {
+    FakeEntries e = withActions();
+    ReaderRig r(&e, DocType::Pdf);
+    r.select();
+    r.tap(r.reader->annotationBar()->buttonRect(3));
+    r.tap(r.reader->annotationBar()->actionRect(0));
+    e.answer(kLong, {{"note", "Save as note"}});
+    r.reader->onTick(r.nav);
+    REQUIRE(r.reader->pluginResult());
+    REQUIRE(r.reader->pluginResult()->shown());
+    CHECK_FALSE(static_cast<const Screen&>(*r.reader).wantsSystemInk());
+    const Rect p = r.reader->pluginResult()->rect();
+    const Point a{p.x + 200, p.y + 150}, b{p.x + 400, p.y + 200};
+    auto pen = [](PenEvent::Type t, Point at) {
+        PenEvent ev;
+        ev.type = t;
+        ev.pos = at;
+        return ev;
+    };
+    r.nav.painted.clear();
+    r.reader->onPen(pen(PenEvent::Type::Near, a), r.nav);
+    r.reader->onPen(pen(PenEvent::Type::Down, a), r.nav);
+    r.reader->onPen(pen(PenEvent::Type::Move, b), r.nav);
+    r.reader->onPen(pen(PenEvent::Type::Up, b), r.nav);
+    CHECK(r.nav.painted.empty());
+    CHECK(r.reader->pendingInkStrokes() == 0);
+    r.nav.now += ReaderScreen::kInkCommitMs + 200;
+    for (int i = 0; i < 20; ++i) r.reader->onTick(r.nav);
+    for (const auto& an : r.lib.annotationsFor("EP000003")) CHECK(an.type != "ink");
+    CHECK(r.reader->pluginResult());  // still showing
 }
 
 // ---- Home and the launcher ---------------------------------------------------------------------

@@ -813,7 +813,14 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             break;
         case AnnotationBar::Action::More: {
             PluginEntries* e = nav.pluginEntries();
-            if (!e || result_) break;  // one run at a time ("Working…")
+            if (result_) {  // "Working…" tapped: the run stops
+                result_->stop();
+                result_.reset();
+                bar_->setWorking(false);
+                nav.damage(bar_->rect(), Waveform::Ui);
+                break;
+            }
+            if (!e) break;
             const Rect before = bar_->rect();
             bar_->showActions(e->actions("selectionAction"));
             nav.damage(before.united(bar_->rect()), Waveform::Ui);
@@ -1204,7 +1211,7 @@ void ReaderScreen::answerPosition(bool go, Nav& nav) {
 
 bool ReaderScreen::penAllowed() const {
     return worker_ && image_ && !error_ && !menus_ && !selecting_ && !selection_ && !editor_ && !note_ &&
-           !layoutPending_ && !turning_ && !linkPopup_;
+           !layoutPending_ && !turning_ && !linkPopup_ && !(result_ && result_->shown());
 }
 
 bool ReaderScreen::wantsSystemInk() const {

@@ -171,9 +171,18 @@ void ItemDetailsScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     for (size_t i = 0; i < actionRects_.size() && i < actions_.size(); ++i)
         if (actionRects_[i].contains(g.pos)) {
+            if (result_) {  // one run at a time; its "Working…" row tapped again stops it
+                if (static_cast<int>(i) == running_) {
+                    result_->stop();
+                    result_.reset();
+                    running_ = -1;
+                    nav.damage(actionRects_[i], Waveform::Ui);
+                }
+                return;
+            }
             PluginEntries* e = nav.pluginEntries();
             auto item = nav.library().item(row_.key);
-            if (!e || !item || result_) return;  // one run at a time
+            if (!e || !item) return;
             result_ = std::make_unique<PluginResult>(*e, actions_[i], "itemAction",
                                                      plugins::itemJson(*item, nav.library().isRead(row_.key)), Rect{0, 0, W(), H()});
             running_ = static_cast<int>(i);
