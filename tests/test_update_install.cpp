@@ -267,21 +267,27 @@ TEST_CASE("update fix: startup clears a download that was never installed") {
     CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));
 }
 
-TEST_CASE("update install: the recovery launcher is written beside Zotero.sh, and a release without it still installs") {
+TEST_CASE("update install: the old second launcher, Zotero (no plugins), is removed and not reinstalled") {
     {
-        Kindle k;
+        Kindle k;  // a zip that still carries it: ignored
         auto files = releaseFiles("0.3.0");
         files["documents/Zotero-no-plugins.sh"] = "noplugins 0.3.0";
+        writeFile(k.root / "documents/Zotero-no-plugins.sh", "noplugins 0.2.0");
+        writeFile(k.root / "documents/Zotero-no-plugins.sh.sdr/Zotero-no-plugins.sh.lua", "kindle metadata");
+        writeFile(k.root / "documents/Zotero-other.sh", "someone else's");
+        writeFile(k.root / "documents/Zotero.sh.sdr/x", "the launcher's own");
         const std::string newDir = k.unpackNew(files);
-        CHECK((fs::status(fs::path(newDir) / "Zotero-no-plugins.sh").permissions() & fs::perms::owner_exec) != fs::perms::none);
+        CHECK_FALSE(fs::exists(fs::path(newDir) / "Zotero-no-plugins.sh"));
         UserError err;
         REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, &err));
-        CHECK(readFile(k.root / "documents/Zotero-no-plugins.sh") == "noplugins 0.3.0");
+        CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh"));
+        CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh.sdr"));
         CHECK(readFile(k.root / "documents/Zotero.sh") == "launcher 0.3.0");
-        CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh.new"));
+        CHECK(readFile(k.root / "documents/Zotero-other.sh") == "someone else's");  // only those two paths
+        CHECK(fs::exists(k.root / "documents/Zotero.sh.sdr/x"));
     }
     {
-        Kindle k;  // an older release: none in the zip, none written, the install succeeds
+        Kindle k;  // none there: nothing to remove, the install succeeds
         UserError err;
         REQUIRE(installRelease(k.paths, k.unpackNew(releaseFiles("0.3.0")), {0, 2, 0}, {0, 3, 0}, nullptr, &err));
         CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh"));

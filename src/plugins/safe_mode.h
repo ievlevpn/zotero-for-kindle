@@ -4,7 +4,7 @@
 //                every plugin is turned off in PluginState; turning one back on is a deliberate act
 //                in Settings → Plugins
 //   OFF file     <pluginsDir>/OFF (any content): plugins are off while it exists (nothing persisted)
-//   launcher     ZK_NO_PLUGINS=1, set by documents/Zotero-no-plugins.sh: off for that run only
+//   environment  ZK_NO_PLUGINS=1 (the desktop build): off for that run only
 // In every case the PluginHost is not started: no plugin code runs.
 
 #include <csignal>

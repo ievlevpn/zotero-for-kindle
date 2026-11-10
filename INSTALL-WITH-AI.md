@@ -14,7 +14,8 @@ about.
 ## Rules
 
 - **Only add files.** Never delete, move or overwrite anything on the Kindle outside `zotero/` and
-  `documents/Zotero.sh` and `documents/Zotero-no-plugins.sh`. Never format or "replace" the `documents` folder: it holds the user's books.
+  `documents/Zotero.sh` (an older version's `documents/Zotero-no-plugins.sh` and `.sdr` folder may go: the app
+  no longer has it). Never format or "replace" the `documents` folder: it holds the user's books.
 - **On an update**, keep `zotero/zotero.db`, `zotero/files/`, `zotero/cache/` and `zotero/log/`. Replace only what
   the release contains.
 - **Credentials:** the user's Zotero API key and WebDAV password go only into `zotero/config.json` on the Kindle.
@@ -40,7 +41,6 @@ temporary folder and unzip it. It contains:
 
     zotero/                 the app: bin/, lib/, share/
     documents/Zotero.sh     the launcher that appears in the Kindle library
-    documents/Zotero-no-plugins.sh   the same with every plugin off (for when a plugin gets in the way)
 
 ## 3. Find the Kindle
 
@@ -59,10 +59,10 @@ temporary folder and unzip it. It contains:
 
 ## 4. Copy
 
-Copy `zotero/` to the Kindle's top level, merging into an existing `zotero/` if there is one. Copy `Zotero.sh` and `Zotero-no-plugins.sh` into the
+Copy `zotero/` to the Kindle's top level, merging into an existing `zotero/` if there is one. Copy `Zotero.sh` into the
 existing `documents/` folder. Check afterwards that these exist on the Kindle with sizes matching the zip:
 `zotero/bin/zotero`, `zotero/lib/libzk-epub.so`, `zotero/lib/libzk-pdf.so`,
-`zotero/share/crengine/hyph/` (50 files), `zotero/share/cacert.pem`, `documents/Zotero.sh` and `documents/Zotero-no-plugins.sh`.
+`zotero/share/crengine/hyph/` (50 files), `zotero/share/cacert.pem` and `documents/Zotero.sh`.
 
 ## 5. The account (if the user wants you to set it up)
 

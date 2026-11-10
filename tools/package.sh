@@ -2,7 +2,7 @@
 # The release archive: the folders to copy onto the Kindle's USB drive, as they go.
 #   tools/build-kindle.sh && tools/package.sh     -> dist/zotero-for-kindle.zip
 #     zotero/      the app (bin, lib, share)       -> the Kindle's root
-#     documents/   Zotero.sh and Zotero-no-plugins.sh, the library launchers -> the Kindle's root
+#     documents/   Zotero.sh, the library launcher   -> the Kindle's root
 set -eu
 cd "$(dirname "$0")/.."
 D=build-kindle/dist
@@ -21,9 +21,9 @@ cp -R third_party/crengine/cr3gui/data/hyph third_party/crengine/cr3gui/data/epu
     third_party/crengine/cr3gui/data/html5.css "$Z/share/crengine/"
 cp assets/launcher/icon.png "$CA" "$Z/share/"
 cp assets/fonts-fast/* "$Z/share/fonts/"  # Fast Font (MIT), with its LICENSE
-cp assets/launcher/Zotero.sh assets/launcher/Zotero-no-plugins.sh "$STAGE/documents/"
+cp assets/launcher/Zotero.sh "$STAGE/documents/"
 cp LICENSE "$Z/"
-chmod +x "$Z"/bin/* "$STAGE/documents/Zotero.sh" "$STAGE/documents/Zotero-no-plugins.sh"
+chmod +x "$Z"/bin/* "$STAGE/documents/Zotero.sh"
 mkdir -p dist
 OUT="$PWD/dist/zotero-for-kindle.zip"  # one name for every release: a stable latest/ link
 rm -f "$OUT" dist/update.json dist/update.json.sig  # a new zip: any old signature is for another one

@@ -528,7 +528,7 @@ int main(int argc, char** argv) {
     std::string pluginsOffReason;
     if (pluginsOff)
         pluginsOffReason = safeMode.automatic ? "Plugins are off: the app stopped while they were running. Turn on the ones you trust."
-                           : envFlag("ZK_NO_PLUGINS") ? "Plugins are off: started with Zotero (no plugins)"
+                           : envFlag("ZK_NO_PLUGINS") ? "Plugins are off: ZK_NO_PLUGINS is set"
                                                       : "Plugins are off: the OFF file is in the plugins folder";
     const PluginsOff pluginsOffInfo{pluginsOffReason, [&safeNotice] { safeNotice = false; }};
     auto makeSettings = [&]() -> std::unique_ptr<Screen> {

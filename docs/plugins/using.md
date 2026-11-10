@@ -12,8 +12,8 @@ There are two ways to get one: from the catalog inside the app, or by copying a 
 ## Get plugins (the catalog)
 
 **Settings → Plugins → Get plugins** (the last row) lists the plugins in the catalog, by name, with
-the author and a line about each. A plugin you have shows **Installed**; one with a newer version
-shows **Update**. At the top: *As of <date>* and **Check now**. With no Wi-Fi and no copy of the list
+the author and a line about each. A plugin you have shows **Installed**; tapping it opens its own
+page, where its updates are. At the top: *As of <date>* and **Check now**. With no Wi-Fi and no copy of the list
 yet it says *Connect to Wi-Fi to see the plugins in the catalog.*; after that the list shows offline.
 
 1. Tap a plugin, read about it, and tap **Install**. It reads *Downloading…* while it works.
@@ -27,7 +27,9 @@ plugin's author.*, *It needs app 0.5.0.* or *No Wi-Fi.*
 ### Updates
 
 Settings → Plugins marks a plugin that has a newer version with *Update to 1.3*, and shows
-**Update all (n)** at the top. Updates are always a tap, never automatic.
+**Update all (n)** at the top. Opening a plugin's page checks the catalog too, when the app hasn't
+in the last hour, so a newer version shows there without a trip to Get plugins. Updates are always
+a tap, never automatic.
 
 - Open the plugin and tap **Update to 1.3**. If the new version asks for nothing more than the old
   one did, it installs at once and an enabled plugin stays enabled.
@@ -180,9 +182,6 @@ Nothing a plugin does needs a reinstall of the app to undo.
 - **The app keeps stopping.** If it fails to start, or crashes, twice in a row while plugins are
   on, the next start turns all plugins off, and Home says *Plugins were turned off because the app
   stopped. Settings → Plugins*. Turn them back on one at a time, starting with the ones you trust.
-- **Start without plugins, once.** In the Kindle library, tap **Zotero (no plugins)** instead of
-  **Zotero**. Every plugin stays off for that run; Settings → Plugins says so. (It comes with the
-  app: `documents/Zotero-no-plugins.sh`.)
 - **Keep all plugins off.** Over USB, create a file named `OFF` (any content, even empty) in
   `zotero/plugins/`. The app starts with every plugin off until you delete the file.
 - **A plugin's data is in a bad state.** On its page: **Reset its data**.
