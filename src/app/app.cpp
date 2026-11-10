@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 
 #include "core/log.h"
 #include "ui/metrics.h"
@@ -305,7 +306,8 @@ void App::setSystemInk(bool on) {
     if (on && confirmShown()) return;  // no wet ink over the app's question
     if (on && (background_ || (caller_ && caller_ != visibleTop()))) return;
     if (on == systemInkOn_) return;
-    if (display_.setSystemInk(on)) systemInkOn_ = on;  // else asked again on the next tick
+    if (display_.setSystemInk(on)) systemInkOn_ = on;
+    else inkAskFailed_ = true;  // asked again on the next tick, which comes soon (nextTimeoutMs)
 }
 
 void App::presentInk(bool force) {
@@ -436,9 +438,35 @@ void App::beat(const char* doing) {
     if (heartbeat_) heartbeat_(doing);
 }
 
+void App::wakeAt(int64_t ms) {
+    if (wakeAt_ < 0 || ms < wakeAt_) wakeAt_ = ms;
+}
+
+int App::nextTimeoutMs() const {
+    if (!pending_.empty() || !deferred_.empty()) return 0;  // asked for outside a step (main's toasts)
+    const int64_t now = clock_();
+    int64_t due = -1;
+    auto at = [&](int64_t ms) {
+        if (ms >= 0 && (due < 0 || ms < due)) due = ms;
+    };
+    at(wakeAt_);
+    at(gestures_.nextDueMs());
+    if (!inkDirty_.empty()) at(lastInkPresentMs_ + kInkFrameMs);
+    if (toastShown_) at(toastUntil_);
+    // A question waiting for a page turn to land or the pen to lift: looked at every step.
+    if (!questions_.empty() && !questionShown_ && !background_) at(now + kBusyMs);
+    if (inkAskFailed_) at(now + kBusyMs);
+    // The storage check, while in front (asleep or behind the Kindle's home, nothing is written:
+    // Foreground checks at once).
+    if (watchdog_ && !background_) at(lastWatchdogMs_ + watchdogPeriodMs_);
+    if (due < 0) return -1;
+    return static_cast<int>(std::clamp<int64_t>(due - now, 0, INT_MAX));
+}
+
 void App::step(int timeout_ms) {
-    beat("idle");
+    beat("system ink");
     answeredThisStep_ = false;
+    inkAskFailed_ = false;  // set again by a request the display doesn't do, from here on
     // Wet ink on where no screen takes handwriting (a pause that failed, e.g. the handler was
     // busy): ask again, whichever screen is showing.
     if (systemInkOn_) {
@@ -446,12 +474,14 @@ void App::step(int timeout_ms) {
         if (background_ || !top || !top->wantsSystemInk()) setSystemInk(false);
     }
     std::vector<InputEvent> events;
-    if (!inkDirty_.empty()) timeout_ms = std::min<int>(timeout_ms, static_cast<int>(kInkFrameMs));
+    if (!inkDirty_.empty()) timeout_ms = timeout_ms < 0 ? static_cast<int>(kInkFrameMs) : std::min<int>(timeout_ms, static_cast<int>(kInkFrameMs));
+    beat("idle");  // waiting: the stall watchdog sleeps too
     if (!display_.pollEvents(events, timeout_ms)) {
         closed_ = true;
         return;
     }
     beat("input");
+    wakeAt_ = -1;  // asked again, during this step, by whatever still waits for time
     std::vector<Gesture> gestures;
     for (const InputEvent& e : events) {
         switch (e.kind) {
@@ -492,7 +522,10 @@ void App::step(int timeout_ms) {
                 log(LogLevel::Info, "foreground");
                 background_ = false;
                 penReset(gestures);
-                redrawAll(Waveform::Full);
+                // Once, with a flash: not again where the display has just done so (the Kindle's
+                // Expose after the screensaver), which would flash the whole screen twice.
+                redrawAll(display_.repaintsOnForeground() ? Waveform::Quality : Waveform::Full);
+                lastWatchdogMs_ = clock_() - watchdogPeriodMs_;  // the storage check, now (not run behind)
                 if (lifecycle_) lifecycle_(true);
                 break;
         }
@@ -597,7 +630,7 @@ void App::flush() {
 }
 
 int App::run() {
-    while (!quit_ && !closed_ && visibleTop()) step(50);
+    while (!quit_ && !closed_ && visibleTop()) step(nextTimeoutMs());
     return exitCode_;
 }
 

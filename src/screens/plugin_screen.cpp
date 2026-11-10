@@ -218,6 +218,9 @@ void PluginScreen::onTick(Nav& nav) {
         working_ = w;
         nav.damage(workingRect(), Waveform::Ui);
     }
+    // The times waited for: the change after a pause in typing, "Working…" while the plugin is slow.
+    if (!pendingChange_.empty()) nav.wakeAt(lastKeyMs_ + kPauseMs);
+    if (state_ == State::Shown && sending() && !working_) nav.wakeAt(sentAtMs_ + kWorkingMs);
 }
 
 void PluginScreen::leave(Nav& nav) {

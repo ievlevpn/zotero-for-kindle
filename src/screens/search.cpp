@@ -114,6 +114,7 @@ void SearchScreen::onKey(const KeyEvent& k, Nav& nav) {
 
 void SearchScreen::onTick(Nav& nav) {
     if (pending_ && nav.nowMs() - lastKeyMs_ >= kPauseMs) search(nav);
+    if (pending_) nav.wakeAt(lastKeyMs_ + kPauseMs);  // the search after the pause in typing
 }
 
 void SearchScreen::draw(Canvas& canvas) {

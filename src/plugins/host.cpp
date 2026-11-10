@@ -66,6 +66,7 @@
 #include <set>
 #include <sstream>
 
+#include "core/wake.h"
 #include "plugins/plugin_ctx.h"
 #include "plugins/plugin_http.h"
 #include "plugins/plugin_log.h"
@@ -364,8 +365,11 @@ struct PluginHost::Impl {
 
     void postEvent(PluginHostEvent ev) {
         if (ev.kind == PluginHostEvent::Kind::Badge) ++version;
-        std::lock_guard<std::mutex> lock(mu);
-        events.push_back(std::move(ev));
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            events.push_back(std::move(ev));
+        }
+        wakeUi();  // the loop routes the host's events only when it runs
     }
 
     // Drops the plugin's questions owned by `callId` (0: all of them) and tells the screen, which
@@ -384,13 +388,16 @@ struct PluginHost::Impl {
 
     void setLoaded(const std::string& id, bool on) {
         ++version;
-        std::lock_guard<std::mutex> lock(mu);
-        entryList.erase(id);  // a fresh load registers again
-        if (on) loadedIds.insert(id);
-        else {
-            loadedIds.erase(id);
-            withTask.erase(id);
+        {
+            std::lock_guard<std::mutex> lock(mu);
+            entryList.erase(id);  // a fresh load registers again
+            if (on) loadedIds.insert(id);
+            else {
+                loadedIds.erase(id);
+                withTask.erase(id);
+            }
         }
+        wakeUi();  // screens showing plugins look at the version
     }
 
     void setProblem(const std::string& id, std::string problem) {
@@ -1788,16 +1795,22 @@ void addEntry(PluginCtx& p, const std::string& kind, const std::string& id, cons
     PluginEntry info{kind, id, title};
     p.run->entries.push_back({info, std::move(fn), {}});
     ++p.host.version;
-    std::lock_guard<std::mutex> lock(p.host.mu);
-    p.host.entryList[p.manifest.id].push_back(std::move(info));
+    {
+        std::lock_guard<std::mutex> lock(p.host.mu);
+        p.host.entryList[p.manifest.id].push_back(std::move(info));
+    }
+    wakeUi();  // screens showing plugins' entries look at the version
 }
 
 void addScreen(PluginCtx& p, const std::string& id, const std::string& title, bool main, js::Value render, js::Value onEvent) {
     PluginEntry info{"screen", id, title, main};
     p.run->entries.push_back({info, std::move(render), std::move(onEvent)});
     ++p.host.version;
-    std::lock_guard<std::mutex> lock(p.host.mu);
-    p.host.entryList[p.manifest.id].push_back(std::move(info));
+    {
+        std::lock_guard<std::mutex> lock(p.host.mu);
+        p.host.entryList[p.manifest.id].push_back(std::move(info));
+    }
+    wakeUi();  // screens showing plugins' entries look at the version
 }
 
 std::string uiOpen(PluginCtx& p, const std::string& screenId, std::optional<nlohmann::json> params) {

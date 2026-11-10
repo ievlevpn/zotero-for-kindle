@@ -304,6 +304,7 @@ void ReaderScreen::onShow(Nav& nav) {
 void ReaderScreen::onTick(Nav& nav) {
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     if (!inkPending_.empty() && !inkDown_ && nav.nowMs() - inkLastMs_ >= kInkCommitMs) commitInk();
+    if (!inkPending_.empty() && !inkDown_) nav.wakeAt(inkLastMs_ + kInkCommitMs);  // handwriting saved after a pause
     pumpEvents(nav, true);
     tickResult(nav);
 }

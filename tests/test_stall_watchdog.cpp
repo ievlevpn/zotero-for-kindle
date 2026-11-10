@@ -41,3 +41,14 @@ TEST_CASE("stall watchdog: fires once when the loop stops, naming what it was do
     CHECK(doing == "gesture");
     CHECK(stalledMs >= 150);
 }
+
+TEST_CASE("stall watchdog: waiting for input is never a stall, however long") {
+    std::atomic<int> stalls{0};
+    StallWatchdog w(100, [&](int64_t, const std::string&) { ++stalls; });
+    w.beat("idle");  // the loop sleeps until something is due: maybe hours
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    CHECK(stalls == 0);
+    w.beat("screen tick");  // work again, and it hangs
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    CHECK(stalls == 1);
+}

@@ -143,3 +143,21 @@ TEST_CASE("update notice: a clock set back doesn't stop checks forever") {
     rig.synced();
     CHECK(*rig.requests == 2);
 }
+
+TEST_CASE("update notice: the banner is read from the library once, and again when it can have changed") {
+    Rig rig;
+    rig.synced();
+    REQUIRE(rig.notice->available(rig.lib));
+    // Home asks on every loop step: no query until the updater has news or it is dismissed.
+    rig.lib.setMetaValue("update:available", "0.9.0");  // behind its back
+    CHECK(rig.notice->available(rig.lib)->str() == "0.3.0");
+    CHECK_FALSE(rig.notice->poll(rig.lib));  // no news from the updater: still cached
+    CHECK(rig.notice->available(rig.lib)->str() == "0.3.0");
+    rig.notice->dismiss(rig.lib);  // dismisses what the library says now
+    CHECK_FALSE(rig.notice->available(rig.lib));
+    *rig.tag = "v0.4.0";
+    rig.now += 2 * kHour;
+    rig.synced();  // the updater's news is noted
+    REQUIRE(rig.notice->available(rig.lib));
+    CHECK(rig.notice->available(rig.lib)->str() == "0.4.0");
+}

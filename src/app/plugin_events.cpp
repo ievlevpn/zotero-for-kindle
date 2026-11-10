@@ -217,6 +217,7 @@ void PluginEvents::poll(App& app) {
         turnedOff_.pop_front();
         lastToastMs_ = app.nowMs();
     }
+    if (!turnedOff_.empty() && !app.inBackground()) app.wakeAt(lastToastMs_ + kToastGapMs);  // the next one's turn
 }
 
 }  // namespace zk

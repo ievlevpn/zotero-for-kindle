@@ -36,6 +36,8 @@ public:
 
     // Call periodically while a finger is down; emits LongPress when due.
     std::vector<Gesture> tick(int64_t now_ms);
+    // When tick() has something to emit (the long press of a finger held still); -1: nothing.
+    int64_t nextDueMs() const { return state_ == State::Pressed ? start_ms_ + config_.longpress_ms : -1; }
 
 private:
     enum class State { Idle, Pressed, Moving, LongPressed, Dragging };

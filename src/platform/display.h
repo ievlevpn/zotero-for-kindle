@@ -36,10 +36,14 @@ public:
     virtual void setOrientation(Orientation) {}
     // Shows region `r` of `canvas` (canvas and display share coordinates).
     virtual void present(const Canvas& canvas, Rect r, Waveform w) = 0;
-    // Waits up to timeout_ms for input; appends touches, keys and background/foreground
-    // changes to `out`. Returns false when the app should quit (window closed). Redraw after
-    // wake is handled inside the display.
+    // Waits up to timeout_ms (-1: no limit) for input or a worker's wakeUi() (core/wake.h);
+    // appends touches, keys and background/foreground changes to `out`. Returns false when the
+    // app should quit (window closed). Redraw after wake is handled inside the display.
     virtual bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) = 0;
+    // Back in front, the display has already put the window back on the screen itself, with a
+    // flash where one was needed (the Kindle: from its backing store on Expose, ExposePolicy):
+    // the app repaints without another flash.
+    virtual bool repaintsOnForeground() const { return false; }
     // The system draws the pen's line itself (Scribe wet ink): on while a screen takes handwriting.
     virtual bool systemInk() const { return false; }
     virtual bool setSystemInk(bool /*on*/) { return true; }  // false: not done, ask again

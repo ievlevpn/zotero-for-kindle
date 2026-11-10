@@ -3,7 +3,9 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <fbink.h>
+#include <fcntl.h>
 #include <poll.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <cstdio>
@@ -12,6 +14,7 @@
 #include <string>
 
 #include "core/log.h"
+#include "core/wake.h"
 #include "platform/display.h"
 #include "platform/keysym.h"
 #include "platform/kindle/evdev_pen.h"
@@ -28,6 +31,15 @@ constexpr const char* kWindowTitle = "L:A_N:application_PC:T_ID:org.zotero.kindl
 int64_t nowMs() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+// The self-pipe workers wake the loop through (core/wake.h): its read end is in pollEvents' poll.
+int gWakePipe[2] = {-1, -1};
+
+void writeWake() {
+    if (gWakePipe[1] < 0) return;
+    const char b = 1;
+    [[maybe_unused]] const ssize_t n = ::write(gWakePipe[1], &b, 1);  // full (EAGAIN): a wake is waiting anyway
 }
 
 class X11Display final : public Display {
@@ -86,6 +98,13 @@ public:
                 updatePenView();
             }
         }
+        if (gWakePipe[0] < 0 && ::pipe(gWakePipe) == 0) {
+            for (int fd : gWakePipe) {
+                ::fcntl(fd, F_SETFL, ::fcntl(fd, F_GETFL) | O_NONBLOCK);
+                ::fcntl(fd, F_SETFD, FD_CLOEXEC);
+            }
+            setUiWaker(writeWake);
+        }
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
     }
 
@@ -113,6 +132,7 @@ public:
     }
 
     ~X11Display() override {
+        setUiWaker(nullptr);
         wet_.reset();  // leaves the handler off before our window goes
         if (image_) {
             image_->data = nullptr;
@@ -144,16 +164,20 @@ public:
         putAndRefresh(r, w);
     }
 
+    bool repaintsOnForeground() const override { return true; }  // Expose: from the backing store
     bool systemInk() const override { return wet_ && wet_->connected(); }
     bool setSystemInk(bool on) override {
         return !wet_ || wet_->setMode(on ? WetInk::Mode::Pen : WetInk::Mode::Paused);
     }
 
+    // Waits for input, a worker's wake or `timeout_ms` (-1: no limit; nothing is due).
     bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
         if (!dpy_) return false;
-        if (!XPending(dpy_)) {
-            pollfd p[2] = {{ConnectionNumber(dpy_), POLLIN, 0}, {pen_ ? pen_->fd() : -1, POLLIN, 0}};
-            poll(p, p[1].fd >= 0 ? 2 : 1, timeout_ms);
+        if (uiWakePending()) timeout_ms = 0;  // e.g. one from before the pipe existed
+        if (!XPending(dpy_)) {  // (XPending also sends what is queued for the server)
+            // A negative fd is skipped by poll(): the pen may be gone.
+            pollfd p[3] = {{ConnectionNumber(dpy_), POLLIN, 0}, {pen_ ? pen_->fd() : -1, POLLIN, 0}, {gWakePipe[0], POLLIN, 0}};
+            poll(p, 3, timeout_ms);
             if (p[1].fd >= 0 && (p[1].revents & (POLLERR | POLLHUP | POLLNVAL))) {
                 log(LogLevel::Warn, "pen: the digitizer went away");
                 pen_.reset();
@@ -162,6 +186,13 @@ public:
                 e.pen.type = PenEvent::Type::Leave;
                 e.pen.t_ms = nowMs();
                 out.push_back(e);
+            }
+        }
+        // Taken before the loop reads the workers' queues: a wake after this one wakes the next wait.
+        uiWakeTaken();
+        if (gWakePipe[0] >= 0) {
+            char buf[64];
+            while (::read(gWakePipe[0], buf, sizeof buf) > 0) {
             }
         }
         // The pen first: its strokes are what must not wait (palm touches queued behind it are

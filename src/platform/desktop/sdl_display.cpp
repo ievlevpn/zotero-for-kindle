@@ -6,6 +6,7 @@
 #include <chrono>
 
 #include "core/log.h"
+#include "core/wake.h"
 #include "platform/display.h"
 #include "ui/metrics.h"
 
@@ -17,6 +18,16 @@ namespace {
 int64_t nowMs() {
     using namespace std::chrono;
     return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
+// Workers wake the loop with an SDL user event (core/wake.h); SDL_PushEvent is thread-safe.
+Uint32 gWakeEvent = static_cast<Uint32>(-1);
+
+void pushWake() {
+    if (gWakeEvent == static_cast<Uint32>(-1)) return;
+    SDL_Event e{};
+    e.type = gWakeEvent;
+    SDL_PushEvent(&e);
 }
 
 class SdlDisplay final : public Display {
@@ -34,6 +45,8 @@ public:
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "best");
         tex_ = SDL_CreateTexture(ren_, SDL_PIXELFORMAT_RGB888, SDL_TEXTUREACCESS_STREAMING, kW, kH);
         gray_.assign((size_t)kW * kH, 0xff);
+        gWakeEvent = SDL_RegisterEvents(1);
+        setUiWaker(pushWake);
     }
 
     int kW, kH;
@@ -55,6 +68,7 @@ public:
     bool resized_ = false;
 
     ~SdlDisplay() override {
+        setUiWaker(nullptr);
         SDL_DestroyTexture(tex_);
         SDL_DestroyRenderer(ren_);
         SDL_DestroyWindow(win_);
@@ -80,9 +94,14 @@ public:
             e.kind = InputEvent::Kind::Resize;
             out.push_back(e);
         }
+        // -1: no limit (nothing is due); a worker's wake comes as an SDL event.
         SDL_Event ev;
-        if (!SDL_WaitEventTimeout(&ev, timeout_ms)) return true;
+        if (uiWakePending()) timeout_ms = 0;
+        const bool got = SDL_WaitEventTimeout(&ev, timeout_ms);
+        uiWakeTaken();  // before the loop reads the workers' queues
+        if (!got) return true;
         do {
+            if (ev.type == gWakeEvent) continue;
             switch (ev.type) {
                 case SDL_QUIT: return false;
                 case SDL_MOUSEBUTTONDOWN:

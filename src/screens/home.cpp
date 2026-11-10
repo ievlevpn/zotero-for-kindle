@@ -369,21 +369,37 @@ void HomeScreen::onGesture(const Gesture& g, Nav& nav) {
         if (rects[i].contains(g.pos) && actions_.openItem) actions_.openItem(recent_[i]);
 }
 
+HomeScreen::Header HomeScreen::header() const {
+    return {status_.line(nowMs_), status_.syncing(), status_.hasError()};
+}
+
+HomeScreen::Content HomeScreen::content() const {
+    Content c{card_, cardOpened_, cardOpenedMs_, total_, cardHighlights_, recent_, "", status_.hasError()};
+    if (c.hasError) c.error = status_.error().message;
+    return c;
+}
+
 void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
+    const Header shownHeader = header();  // as drawn (with the time it was drawn at)
+    const Content shownContent = content();
     nowMs_ = nav.nowMs();
     status_.onEvent(e, nowMs_);
+    const bool headerChanged = header() != shownHeader;
     switch (e.kind) {
         case SyncEvent::Kind::SyncStarted:
         case SyncEvent::Kind::SyncProgress:
-            nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
+            if (headerChanged) nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
             if (total_ == 0) {
                 reload(nav.library());  // the first items may have arrived
                 nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, total_ ? Waveform::Quality : Waveform::Ui);
             }
             break;
         case SyncEvent::Kind::SyncFinished:
+            // Only what changed: the status line, and the card, rows and banner if the sync
+            // brought something (or failed differently). Never the whole screen.
+            if (headerChanged) nav.damage({0, 0, W(), kHeaderH}, Waveform::Ui);
             reload(nav.library());
-            nav.redrawAll(Waveform::Quality);
+            if (content() != shownContent) nav.damage({0, kCardY, W(), H() - kCardY - kTabBarH}, Waveform::Quality);
             break;
         case SyncEvent::Kind::DownloadProgress: {
             auto rects = recentRowRects();

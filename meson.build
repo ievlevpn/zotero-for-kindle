@@ -24,6 +24,7 @@ inc = include_directories('src')
 
 core_lib = static_library('zk-core',
   'src/core/log.cpp',
+  'src/core/wake.cpp',
   'src/platform/pen_decoder.cpp',
   include_directories : inc)
 

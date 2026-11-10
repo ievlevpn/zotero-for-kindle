@@ -37,7 +37,11 @@ public:
         input.push_back(e);
     }
     void present(const Canvas&, Rect r, Waveform w) override { presents.push_back({r, w}); }
-    bool pollEvents(std::vector<InputEvent>& out, int) override {
+    // As the Kindle's display: back in front, it has repainted the window itself (Expose).
+    bool repaints = false;
+    bool repaintsOnForeground() const override { return repaints; }
+    bool pollEvents(std::vector<InputEvent>& out, int timeout_ms) override {
+        timeouts.push_back(timeout_ms);
         if (closed && input.empty()) return false;
         if (!input.empty()) {
             out.push_back(input.front());
@@ -78,6 +82,7 @@ public:
 
     std::deque<InputEvent> input;
     std::vector<Present> presents;
+    std::vector<int> timeouts;  // what each pollEvents was allowed to wait (-1: no limit)
     bool closed = false;
 };
 

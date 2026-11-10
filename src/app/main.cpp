@@ -460,7 +460,13 @@ int main(int argc, char** argv) {
         pluginEvents.poll(app);
         catalogService.poll();
         backgroundRound.tick(app.nowMs());
-        if (pluginWatch && plugins && pluginsRunning && !pluginsOff) pluginWatch->poll(app.nowMs());
+        if (pluginWatch && plugins && pluginsRunning && !pluginsOff) {
+            pluginWatch->poll(app.nowMs());
+            app.wakeAt(app.nowMs() + 1000);  // the developer loop looks at main.js once a second
+        }
+        // What waits for time here (the loop otherwise sleeps until input or a worker's wake):
+        if (!startConfirmed) app.wakeAt(startedMs + kSafeModeConfirmMs);
+        if (backgroundRound.holding()) app.wakeAt(backgroundRound.endsAt());
     });
     UpdateNotice updateNotice(updater, wallMs);  // "Version X is available": a weekly check after a sync
     updateNotice.alsoCheck([&] { catalogService.check(false); });
