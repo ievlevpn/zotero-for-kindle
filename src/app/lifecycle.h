@@ -20,6 +20,7 @@ public:
 
     // Also called when the Kindle goes to the background (plugins' background tasks stop).
     void setOnBackground(std::function<void()> f) { onBackgroundExtra_ = std::move(f); }
+    void setOnForeground(std::function<void()> f) { onForegroundExtra_ = std::move(f); }
     void onBackground();
     void onForeground(int64_t nowMs);
     bool watch();  // every few seconds: is the app's storage still there?
@@ -30,6 +31,7 @@ private:
     std::function<int()> interval_;
     std::function<bool()> storage_;
     std::function<void()> onBackgroundExtra_;
+    std::function<void()> onForegroundExtra_;
 };
 
 }  // namespace zk

@@ -61,6 +61,8 @@ struct PluginHostDeps {
     // run at most quietRunMs in any quietWindowMs; a timer or continuation whose call has ended
     // waits (not failed) until the window allows it.
     int quietRunMs = 2000, quietWindowMs = 60000;
+    // setTimeout's floor: a shorter delay is raised to it (each wake costs battery).
+    int minTimerMs = 100;
     // Free bytes on the partition holding a path (statvfs; tests inject their own): plugin writes
     // (zk.files, zk.storage) are refused when it is under 50 MB.
     std::function<uint64_t(const std::string& path)> freeSpace;
@@ -165,6 +167,9 @@ public:
     bool anyEnabled() const;
     // The Kindle is going to sleep: stops background tasks still running. Not failures.
     void cancelBackground();
+    // The app went to the background (true) or came back (false). Meanwhile timers whose call has
+    // ended don't fire (the plugin thread isn't woken for them); they run, late, once back.
+    void setBackground(bool);
     // Empties the plugin's data/ folder and its storage (Settings → Plugins → Reset its data). Works
     // whether or not the plugin is loaded; if it is, its queued storage writes are dropped.
     void resetData(const std::string& id);

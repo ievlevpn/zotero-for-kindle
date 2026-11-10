@@ -526,6 +526,7 @@ int main(int argc, char** argv) {
                 plugins.reset();
                 plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
                 pluginEvents.rebind(plugins.get(), app);
+                plugins->setBackground(app.inBackground());  // a new host starts as the app is
                 if (!pluginsOff) plugins->start();
                 pluginsRunning = true;
                 pluginEvents.setRunning(!pluginsOff);
@@ -615,7 +616,13 @@ int main(int argc, char** argv) {
     Lifecycle lifecycle(current, status, [&lib] { return loadSettings(lib).syncIntervalMinutes; },
                         [&paths] { return storageAvailable(paths.filesDir); });
     lifecycle.attach(app);
-    lifecycle.setOnBackground([&] { backgroundRound.onSleep(); });  // sleeping cuts background tasks short
+    lifecycle.setOnBackground([&] {
+        backgroundRound.onSleep();  // sleeping cuts background tasks short
+        if (plugins) plugins->setBackground(true);  // and plugins' timers wait for the foreground
+    });
+    lifecycle.setOnForeground([&] {
+        if (plugins) plugins->setBackground(false);
+    });
     app.setReadingLandscape([&lib] { return loadSettings(lib).landscapeReading; });
     // The escape path: if the UI stops for 15 s, end the app (Zotero.sh then returns to the
     // Kindle home). Stays on through shutdown, which must not hang either.
@@ -626,6 +633,7 @@ int main(int argc, char** argv) {
     });
     app.setHeartbeat([&watchdog](const char* doing) { watchdog.beat(doing); });
     app.start();
+    plugins->setBackground(app.inBackground());
     if (!pluginsOff) plugins->start();  // after the first screen: plugins load lazily, at the first event
     switch (const Confirmed c = confirmStartup(installPaths); c.note) {
         case StartupNote::Updated: app.toast("Updated to " + c.to.str()); break;

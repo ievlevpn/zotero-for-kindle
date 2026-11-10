@@ -76,6 +76,7 @@ public:
         d.appVersion = Version{9, 9, 9};
         d.handlerBudgetMs = 300;
         d.backgroundBudgetMs = 600;
+        d.minTimerMs = 0;  // scaled down with the budgets (the floor's own test sets it)
         return d;
     }
 

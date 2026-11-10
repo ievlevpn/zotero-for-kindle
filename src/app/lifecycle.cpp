@@ -29,6 +29,7 @@ void Lifecycle::onBackground() {
 }
 
 void Lifecycle::onForeground(int64_t nowMs) {
+    if (onForegroundExtra_) onForegroundExtra_();
     sync_.setIntervalMinutes(interval_());
     if (status_.syncing() || (!status_.hasError() && status_.msSinceSync(nowMs) <= kResyncAfterMs)) return;
     sync_.syncWhenOnline();

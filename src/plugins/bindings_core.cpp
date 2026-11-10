@@ -1006,9 +1006,16 @@ JSValue jsSetTimeout(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1 || !JS_IsFunction(c, argv[0])) return JS_ThrowTypeError(c, "setTimeout: the callback must be a function");
     double ms = 0;
     if (argc > 1 && !JS_IsUndefined(argv[1]) && JS_ToFloat64(c, &ms, argv[1])) return JS_EXCEPTION;
-    if (!(ms >= 0)) ms = 0;  // also NaN
+    if (!(ms >= 0)) ms = 0;  // also NaN; addTimer raises it to the floor
     if (ms > 2147483647.0) ms = 2147483647.0;
-    uint64_t id = addTimer(ctxOf(c), js::Value(c, JS_DupValue(c, argv[0])), static_cast<int64_t>(ms));
+    PluginCtx& p = ctxOf(c);
+    uint64_t id = addTimer(p, js::Value(c, JS_DupValue(c, argv[0])), static_cast<int64_t>(ms));
+    if (id == 0) {
+        JSValue e = newLimitError(p, "timers",
+                                  "setTimeout: this plugin already has " + std::to_string(kMaxTimers) +
+                                      " timers pending (clear some with clearTimeout, or let them run)");
+        return JS_IsException(e) ? e : JS_Throw(c, e);
+    }
     return JS_NewInt64(c, static_cast<int64_t>(id));
 }
 
@@ -1044,7 +1051,12 @@ JSValue jsOn(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!event) return JS_ThrowTypeError(c, "zk.on: there is no event \"%s\" (events: %s)", name.c_str(), names.c_str());
     if (argc < 2 || !JS_IsFunction(c, argv[1])) return JS_ThrowTypeError(c, "zk.on(\"%s\"): the handler must be a function", name.c_str());
     if (event->permission && !requirePermission(p, *event->permission, "zk.on(\"" + name + "\")")) return JS_EXCEPTION;
-    addHandler(p, name, js::Value(c, JS_DupValue(c, argv[1])));
+    if (!addHandler(p, name, js::Value(c, JS_DupValue(c, argv[1])))) {
+        JSValue e = newLimitError(p, "handlers",
+                                  "zk.on(\"" + name + "\"): this plugin already has " + std::to_string(kMaxHandlersPerEvent) +
+                                      " handlers for this event (register each handler once, when the plugin loads)");
+        return JS_IsException(e) ? e : JS_Throw(c, e);
+    }
     return JS_UNDEFINED;
 }
 

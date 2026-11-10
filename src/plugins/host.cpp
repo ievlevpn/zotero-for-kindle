@@ -321,6 +321,7 @@ struct PluginHost::Impl {
     std::set<std::string> turnOffs;    // three failures in a row: off at the next safe point
     std::set<std::string> restarts;    // stopped mid-run: a fresh runtime at the next safe point
     bool backgroundOpen = false;       // a runBackground() whose tasks haven't all ended: BackgroundDone is due
+    bool appInBackground = false;      // setBackground(): timers of ended calls wait for the foreground
     uint64_t backgroundRound = 0;      // the round that Done reports (the latest asked for)
     std::map<std::string, int> uncounted;  // consecutive background runs not counted for a lost connection
     std::map<std::string, std::vector<PluginEntry>> entryList;  // loaded plugins' entry points (under mu)
@@ -498,12 +499,17 @@ struct PluginHost::Impl {
         return false;
     }
 
+    // A timer whose call has ended (it would run as a call of its own) while the app is in the
+    // background: it waits, not woken for, until the foreground.
+    bool timerPaused(const PluginCtx& p, const Timer& t) const { return appInBackground && !p.run->calls.count(t.owner); }
+
     int64_t nextWakeMs() const {
         int64_t at = 0;
         auto earliest = [&](int64_t t) { at = at == 0 ? t : std::min(at, t); };
         const int64_t now = steadyMs();
         for (const auto& [id, p] : loaded) {
-            for (const auto& [tid, t] : p->run->timers) earliest(t.dueMs);
+            for (const auto& [tid, t] : p->run->timers)
+                if (!timerPaused(*p, t)) earliest(t.dueMs);
             for (const auto& w : p->run->waiting) earliest(w.dueMs);
             for (const auto& [cid, c] : p->run->calls)
                 if (!c.pauses) earliest(c.deadline(now) + 1);
@@ -1013,7 +1019,7 @@ struct PluginHost::Impl {
             PluginCtx& p = *it->second;
             std::vector<std::pair<int64_t, uint64_t>> due;
             for (const auto& [tid, t] : p.run->timers)
-                if (t.dueMs <= now) due.emplace_back(t.dueMs, tid);
+                if (t.dueMs <= now && !timerPaused(p, t)) due.emplace_back(t.dueMs, tid);
             std::sort(due.begin(), due.end());
             for (const auto& [at, tid] : due) {
                 if (stopping || turnOffs.count(id)) break;
@@ -1023,6 +1029,8 @@ struct PluginHost::Impl {
                 p.run->timers.erase(t);
                 if (findCall(p, timer.owner)) {
                     runEntry(p, timer.owner, [&] { p.cx.call(timer.callback, {}); });
+                } else if (appInBackground) {
+                    p.run->timers.emplace(tid, std::move(timer));  // its call ended meanwhile: waits too
                 } else if (const int64_t at = quietAllowedAt(p, steadyMs()); at != 0) {
                     timer.dueMs = at;  // waits, under the same id (clearTimeout still works)
                     p.run->timers.emplace(tid, std::move(timer));
@@ -1741,10 +1749,11 @@ void log(PluginCtx& p, LogLevel level, const std::string& text) { p.host.log(p.m
 
 uint64_t addTimer(PluginCtx& p, js::Value callback, int64_t delayMs) {
     auto& h = p.host;
+    if (p.run->timers.size() >= kMaxTimers) return 0;
     auto owner = p.run->calls.find(p.run->current);
     const bool cleanup = owner != p.run->calls.end() && owner->second.kind == CallKind::Cleanup;
     Timer t;
-    t.dueMs = steadyMs() + delayMs;
+    t.dueMs = steadyMs() + std::max<int64_t>(delayMs, h.deps.minTimerMs);
     // A stopped call's cleanup code owns nothing: its timer runs as a call of its own.
     t.owner = cleanup ? 0 : p.run->current;
     t.ownerWhat = owner == p.run->calls.end() ? "the plugin" : owner->second.what;
@@ -1756,7 +1765,12 @@ uint64_t addTimer(PluginCtx& p, js::Value callback, int64_t delayMs) {
 
 void clearTimer(PluginCtx& p, uint64_t id) { p.run->timers.erase(id); }
 
-void addHandler(PluginCtx& p, const std::string& event, js::Value handler) { p.run->handlers[event].push_back(std::move(handler)); }
+bool addHandler(PluginCtx& p, const std::string& event, js::Value handler) {
+    auto& list = p.run->handlers[event];
+    if (list.size() >= kMaxHandlersPerEvent) return false;
+    list.push_back(std::move(handler));
+    return true;
+}
 
 void noteNetworkError(PluginCtx& p, js::Value error) {
     auto& list = p.run->networkErrors;
@@ -1920,6 +1934,10 @@ bool PluginHost::backgroundDue() const {
 
 void PluginHost::cancelBackground() {
     impl_->post([](Impl& h) { h.cancelBackground(); });
+}
+
+void PluginHost::setBackground(bool background) {
+    impl_->post([background](Impl& h) { h.appInBackground = background; });
 }
 
 uint64_t PluginHost::openScreen(const std::string& pluginId, const std::string& screenId, nlohmann::json params) {

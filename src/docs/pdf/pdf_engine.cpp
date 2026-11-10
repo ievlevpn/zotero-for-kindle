@@ -20,9 +20,22 @@ extern "C" {
 
 namespace zk {
 
-PdfEngine::PdfEngine() {
-    ctx_ = fz_new_context(nullptr, nullptr, 64 << 20);  // 64 MB resource store
+PdfEngine::PdfEngine(size_t storeBytes) { newContext(storeBytes); }
+
+void PdfEngine::newContext(size_t storeBytes) {
+    if (ctx_) fz_drop_context(ctx_);
+    ctx_ = fz_new_context(nullptr, nullptr, storeBytes);
+    storeBytes_ = storeBytes;
     if (ctx_) fz_register_document_handlers(ctx_);
+}
+
+bool PdfEngine::openForText(const std::string& path, UserError* err) {
+    if (!doc_ && storeBytes_ != kTextStoreBytes) newContext(kTextStoreBytes);  // nothing opened in it yet
+    return open(path, err);
+}
+
+void PdfEngine::trimCaches() {
+    if (ctx_) fz_empty_store(ctx_);
 }
 
 PdfEngine::~PdfEngine() {

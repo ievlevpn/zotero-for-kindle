@@ -66,6 +66,13 @@ declare var console: {
  * with 5 seconds. Pending timers are dropped when the call that set them is stopped by a limit,
  * and when the plugin is turned off. Returns an id for {@link clearTimeout}. No permission.
  *
+ * A delay under 100 ms (or none) is raised to 100 ms. A plugin may have at most 1000 timers
+ * pending; one more throws a {@link zk.LimitError} `"timers"` (nothing is set).
+ *
+ * While the app is in the background (another Kindle app or the screensaver is up), a timer whose
+ * call has ended doesn't fire: it waits and runs, late, when the app is back in front. Timers of a
+ * call still running fire as usual.
+ *
  * Quiet run time: outside calls the user caused and the background task, a plugin's code may run
  * at most 2 s in any minute (sync events, loading, and timers and continuations of calls that have
  * ended all count). Once that is used, a timer whose call has ended runs late, when the minute
@@ -828,6 +835,9 @@ declare namespace zk {
    * queued behind other plugins or waiting for the user's confirmation); going over stops it
    * (see {@link LimitError}: what it started is cancelled). An error it throws is logged with
    * its stack.
+   *
+   * A plugin may register at most 100 handlers for each event; one more throws a
+   * {@link LimitError} `"handlers"` (it isn't registered).
    *
    * Every event says where the change was made: `origin: "kindle"` (the user did it on this
    * Kindle, one event per change, as it happens) or `origin: "zotero"` (it came in with a sync:
@@ -1751,9 +1761,10 @@ declare namespace zk {
     private constructor();
     readonly name: "LimitError";
     /**
-     * Which limit: run time, memory, stack depth, a fetch's response size or duration, or too many
-     * fetches under way at once.
+     * Which limit: run time, memory, stack depth, a fetch's response size or duration, too many
+     * fetches under way at once, too many timers pending ({@link setTimeout}), or too many handlers
+     * for one event ({@link on}).
      */
-    readonly limit: "time" | "memory" | "stack" | "responseSize" | "responseTime" | "fetches";
+    readonly limit: "time" | "memory" | "stack" | "responseSize" | "responseTime" | "fetches" | "timers" | "handlers";
   }
 }

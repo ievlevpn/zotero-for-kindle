@@ -146,7 +146,10 @@ public:
     static constexpr size_t kMaxInkStrokes = 24, kMaxInkPoints = 2000;
     static constexpr int64_t kMaxInkSpanMs = 10000;
     void onHide(Nav&) override { commitInk(); }
-    void onBackground(Nav&) override { commitInk(); }
+    void onBackground(Nav&) override {
+        commitInk();
+        if (worker_) worker_->trimCaches();  // MuPDF's store is refilled when we're back
+    }
     void onClose(Nav& nav) override {
         if (result_) result_->stop();
         flushInk(nav);

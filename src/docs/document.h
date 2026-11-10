@@ -159,6 +159,11 @@ public:
     // As open(), for a caller that only wants fullText(): no layout or pagination (EPUB), so the
     // shared crengine isn't held for seconds. The engine can then only fullText().
     virtual bool openForText(const std::string& path, UserError* err) { return open(path, err); }
+    // The most the engine's own cache of decoded resources may hold (0: none it limits itself).
+    // PDF: MuPDF's store, smaller after openForText (see pdf_engine.h).
+    virtual size_t cacheLimitBytes() { return 0; }
+    // Empty that cache (the app went to the background); it refills as pages are drawn.
+    virtual void trimCaches() {}
     // The whole document's text into `out`, UTF-8, in reading order, for plugins. EPUB: paragraphs
     // separated by "\n\n". PDF: each page's text, pages separated by "\f" (a page without text
     // layer is empty: a scan gives only form feeds, still a success). Stops (leaving more than

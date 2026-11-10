@@ -73,6 +73,7 @@ struct RenderWorker::Impl {
         int widthPx = 0;
     };
     std::deque<InkRequest> inkRequests;
+    bool trimRequest = false;
     std::deque<RenderEvent> events;
     // Worker-only state.
     std::unique_ptr<DocumentEngine> engine;
@@ -97,7 +98,7 @@ struct RenderWorker::Impl {
     bool hasNewWork() {
         std::lock_guard<std::mutex> lock(mutex);
         return stop || open || layout || target.kind != Target::Kind::None || search || annotations || selectRequest ||
-               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest;
+               hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest || trimRequest;
     }
     Entry& entry(int page) {
         auto it = cache.find(page);
@@ -185,7 +186,8 @@ void RenderWorker::Impl::run() {
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
-                           selectRequest || hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest;
+                           selectRequest || hitRequest || placeRequest || !inkRequests.empty() || bookmarkRequest || linkRequest ||
+                           trimRequest;
                 });
             if (stop) break;
         }
@@ -216,6 +218,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     std::optional<std::vector<DocPosition>> marks;
     std::optional<std::tuple<uint64_t, int, int>> linkAsk;
     bool landed = false;
+    bool trim = false;
     std::deque<InkRequest> inks;
     uint64_t gen = 0;
     {
@@ -241,6 +244,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         linkAsk = linkRequest;
         linkRequest.reset();
         inks.swap(inkRequests);
+        trim = trimRequest;
+        trimRequest = false;
         gen = generation;
     }
     if (o) {
@@ -269,6 +274,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         postCurrent = true;
     }
     if (!engine) return;
+    if (trim) engine->trimCaches();
     if (marks) {
         bookmarks = std::move(*marks);
         placeBookmarks();
@@ -456,6 +462,10 @@ uint64_t RenderWorker::linkAt(int page, int index) {
         impl_->linkRequest = std::make_tuple(id, page, index);
     });
     return id;
+}
+
+void RenderWorker::trimCaches() {
+    request(*impl_, [&] { impl_->trimRequest = true; });
 }
 
 void RenderWorker::setBookmarks(std::vector<DocPosition> marks) {

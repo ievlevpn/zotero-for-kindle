@@ -12,6 +12,9 @@ queued behind other plugins or waiting for the user's confirmation); going over 
 (see [LimitError](LimitError.md): what it started is cancelled). An error it throws is logged with
 its stack.
 
+A plugin may register at most 100 handlers for each event; one more throws a
+[LimitError](LimitError.md) `"handlers"` (it isn't registered).
+
 Every event says where the change was made: `origin: "kindle"` (the user did it on this
 Kindle, one event per change, as it happens) or `origin: "zotero"` (it came in with a sync:
 one event per kind per sync, listing everything). So events that can arrive with a sync carry
