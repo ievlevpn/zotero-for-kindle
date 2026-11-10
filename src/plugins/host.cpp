@@ -2019,6 +2019,11 @@ void PluginHost::remove(const std::string& id) { forgetPlugin(id, true); }
 
 void PluginHost::forget(const std::string& id) { forgetPlugin(id, false); }
 
+void PluginHost::forgetState(const std::string& id) {
+    impl_->state.forget(id);
+    ++impl_->version;
+}
+
 void PluginHost::forgetPlugin(const std::string& id, bool deleteFolder) {
     Impl& h = *impl_;
     {

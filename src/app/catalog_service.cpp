@@ -2,7 +2,9 @@
 
 #include "core/log.h"
 #include "plugins/host.h"
+#include "plugins/state.h"
 
+#include <algorithm>
 #include <filesystem>
 
 namespace zk {
@@ -64,6 +66,7 @@ void CatalogService::run(Op op, std::string id, std::string text, std::function<
         if (status_.busy != Op::None) return;
     }
     if (worker_.joinable()) worker_.join();  // the previous operation has ended
+    cancel_ = std::make_shared<std::atomic<bool>>(false);  // this operation's own
     set([&](State& s) {
         s.busy = op;
         s.busyId = id;
@@ -180,6 +183,10 @@ void CatalogService::install(std::string id) {
             error = err.message;
             return false;
         }
+        // A fresh folder starts fresh: off, never turned on, so its page shows what it can do first
+        // (state left from a copy deleted by hand mustn't turn it on).
+        std::error_code ec;
+        if (!fs::exists(fs::path(config_.pluginsDir) / entry.id, ec)) forgetState(host, entry.id);
         if (!swap(entry.id, host, [&](UserError* e) { return commit(config_.pluginsDir, entry.id, e); }, error))
             return false;
         Cache c = loadCache(config_.pluginsDir);
@@ -216,8 +223,9 @@ void CatalogService::updateAll() {
     PluginHost* host = config_.host ? config_.host() : nullptr;
     if (!host) return;
     std::vector<std::pair<Entry, Latest>> todo;
+    const std::string asking = shown_.awaitingYes ? shown_.awaitingYes->manifest.id : "";
     for (const auto& s : host->status()) {
-        if (!s.folder.manifest || revoked(shown_.cache, s.folder.dir)) continue;
+        if (!s.folder.manifest || revoked(shown_.cache, s.folder.dir) || s.folder.dir == asking) continue;
         const Entry* e = find(shown_.cache, s.folder.dir);
         auto l = catalog::updateFor(shown_.cache, s.folder.dir, s.folder.manifest->version);
         if (e && l) todo.emplace_back(*e, *l);
@@ -279,22 +287,54 @@ void CatalogService::rollBack(std::string id) {
     });
 }
 
+void CatalogService::forgetState(PluginHost* host, const std::string& id) {
+    if (host) host->forgetState(id);
+    else PluginState(config_.pluginsDir + "/.state.json").forget(id);  // no host (an app update installing)
+}
+
+void CatalogService::cancel() { *cancel_ = true; }
+
 void CatalogService::remove(std::string id) {
+    set([&](State& s) {
+        s.removing.insert(id);
+        s.removed.erase(id);
+        s.removeFailed.erase(id);
+    });
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        shown_.removing = status_.removing;
+        shown_.removed = status_.removed;
+        shown_.removeFailed = status_.removeFailed;
+    }
+    if (std::find(queuedRemoves_.begin(), queuedRemoves_.end(), id) == queuedRemoves_.end()) queuedRemoves_.push_back(id);
+    poll();  // starts it now when nothing else runs
+}
+
+void CatalogService::startRemove(const std::string& id) {
     PluginHost* host = config_.host ? config_.host() : nullptr;
     run(Op::Remove, id, "Removing…", [this, id, host](std::string& error) {
+        const auto finish = [&](bool ok) {
+            set([&](State& s) {
+                s.removing.erase(id);
+                if (ok) s.removed.insert(id);
+                else s.removeFailed[id] = error.empty() ? "Couldn't remove the plugin." : error;
+            });
+            return ok;
+        };
         if (host && !host->hold(id)) {
             host->release(id);
             error = "Couldn't stop the plugin. Try again.";
-            return false;
+            return finish(false);
         }
         UserError e;
         const bool ok = removeFiles(config_.pluginsDir, id, &e);
         if (!ok) error = e.message;
-        if (host) {
-            if (ok) host->forget(id);  // its storage went with its folder; its state goes here
-            host->release(id);
+        if (ok) {
+            if (host) host->forget(id);  // its storage went with its folder; its state goes here
+            else forgetState(nullptr, id);
         }
-        return ok;
+        if (host) host->release(id);
+        return finish(ok);
     });
 }
 
@@ -320,6 +360,15 @@ void CatalogService::recount() {
 }
 
 bool CatalogService::poll() {
+    if (!queuedRemoves_.empty()) {  // a confirmed Remove waits for the operation before it
+        std::lock_guard<std::mutex> lock(mutex_);
+        shown_.busy = status_.busy;
+    }
+    if (!queuedRemoves_.empty() && !busy()) {
+        const std::string id = queuedRemoves_.front();
+        queuedRemoves_.erase(queuedRemoves_.begin());
+        startRemove(id);
+    }
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(mutex_);

@@ -206,6 +206,9 @@ public:
     // Off at once and no longer listed, its state forgotten and its log closed; its files are left
     // for the caller to delete (the catalog's remove, on its worker thread).
     void forget(const std::string& id);
+    // What the app remembers of an id (on/off, ever turned on, failures), even one not listed: a
+    // catalog install into a missing folder starts as new. Any thread.
+    void forgetState(const std::string& id);
     // The catalog swaps a plugin's files: hold() stops it (unloaded on the plugin thread, waiting up to
     // timeoutMs; call it from a worker, never the screen or plugin thread) and keeps it from loading
     // until release(), which rescans its folder (on the plugin thread; here when it isn't running,

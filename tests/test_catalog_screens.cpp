@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
 
 #include <miniz.h>
@@ -73,9 +74,17 @@ struct World {
     std::map<std::string, std::string> files;
     bool offline = false;
     std::vector<std::string> asked;
+    bool gated = false;  // requests wait until open()
+    std::condition_variable gate;
 
-    HttpResponse serve(const HttpRequest& r) {
+    void open() {
         std::lock_guard<std::mutex> lock(mu);
+        gated = false;
+        gate.notify_all();
+    }
+    HttpResponse serve(const HttpRequest& r) {
+        std::unique_lock<std::mutex> lock(mu);
+        gate.wait(lock, [&] { return !gated; });
         asked.push_back(r.url);
         HttpResponse resp;
         if (offline) {
@@ -198,10 +207,12 @@ struct Rig {
         settle();
     }
     // The worker's operation, then what the plugin thread was asked to do.
-    void settle() {
-        svc->wait();
-        if (host && hostStarted) REQUIRE(host->waitIdle(3000));
-        svc->poll();
+    void settle() {  // also what was queued behind it
+        do {
+            svc->wait();
+            if (host && hostStarted) REQUIRE(host->waitIdle(3000));
+            svc->poll();
+        } while (svc->busy());
     }
     void checkNow() {
         svc->check(true);
@@ -464,8 +475,11 @@ TEST_CASE("catalog screens: Remove asks first; Cancel keeps everything, yes dele
 
     page.onGesture(tapAt(page.removeRect().center()), r.nav);
     page.onGesture(tapAt(page.yesRect().center()), r.nav);
-    CHECK(r.nav.pops == 1);
+    CHECK(r.nav.pops == 0);  // said once it has worked
     r.settle();
+    page.onTick(r.nav);
+    CHECK(r.nav.pops == 1);
+    CHECK(r.nav.toasts.back() == "Feed Riffle was removed.");
     CHECK_FALSE(r.dir.exists("feed"));
     CHECK_FALSE(r.dir.exists(".previous/feed"));
     CHECK_FALSE(r.status("feed"));
@@ -661,4 +675,70 @@ TEST_CASE("catalog screens: goldens — Get plugins, a catalog page, Update to, 
     page.onTick(r.nav);
     page.draw(c);
     checkGolden(c, "tests/golden/plugin-page-reask.png");
+}
+
+TEST_CASE("catalog screens: a Remove confirmed while the catalog is checking waits for it, then runs") {
+    Rig r;
+    r.installFeed();
+    r.startHost();
+    r.host->setEnabled("feed", true);
+    r.startCatalog();
+    r.world->gated = true;  // the check hangs on GitHub
+    r.svc->check(true);
+    PluginPageScreen page("feed", r.fn());
+    page.onShow(r.nav);
+    page.onGesture(tapAt(page.removeRect().center()), r.nav);
+    page.onGesture(tapAt(page.yesRect().center()), r.nav);
+    page.onTick(r.nav);
+    CHECK(r.nav.pops == 0);
+    CHECK(r.nav.toasts.empty());
+    CHECK(r.dir.exists("feed/plugin.json"));
+    r.world->open();
+    r.settle();
+    page.onTick(r.nav);
+    CHECK(r.nav.pops == 1);
+    REQUIRE_FALSE(r.nav.toasts.empty());
+    CHECK(r.nav.toasts.back() == "Feed Riffle was removed.");
+    CHECK_FALSE(r.dir.exists("feed"));
+    CHECK_FALSE(r.status("feed"));
+}
+
+TEST_CASE("catalog screens: a Remove that fails says so and leaves the page and the plugin") {
+    Rig r;
+    r.installFeed();
+    r.startHost();
+    r.host->setEnabled("feed", true);
+    r.startCatalog();
+    r.dir.write(".incoming", "a file where the staging folder goes: deleting can't move anything aside");
+    PluginPageScreen page("feed", r.fn());
+    page.onShow(r.nav);
+    page.onGesture(tapAt(page.removeRect().center()), r.nav);
+    page.onGesture(tapAt(page.yesRect().center()), r.nav);
+    r.settle();
+    page.onTick(r.nav);
+    CHECK(r.nav.pops == 0);
+    REQUIRE_FALSE(r.nav.toasts.empty());
+    CHECK(r.nav.toasts.back() == "Couldn't remove the plugin.");
+    CHECK(r.dir.exists("feed/plugin.json"));
+    REQUIRE(r.status("feed"));
+    CHECK(r.status("feed")->enabled);
+    CHECK_FALSE(page.removeRect().empty());
+}
+
+TEST_CASE("catalog screens: a plugin once on, its folder deleted by hand, comes back from the catalog off and new") {
+    Rig r;
+    addPlugin(r.dir, "md", "Highlights to Markdown", "\"annotations:read\"");
+    r.startHost();
+    r.host->setEnabled("md", true);
+    fs::remove_all(r.dir.path("md"));
+    r.host->reload();
+    REQUIRE(r.host->waitIdle(3000));
+    REQUIRE_FALSE(r.status("md"));
+    r.startCatalog();
+    r.checkNow();
+    r.svc->install("md");
+    r.settle();
+    REQUIRE(r.status("md"));
+    CHECK_FALSE(r.status("md")->enabled);
+    CHECK_FALSE(r.status("md")->everEnabled);
 }

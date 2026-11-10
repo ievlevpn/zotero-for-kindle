@@ -77,6 +77,7 @@ private:
     PluginHostFn host_;
     CatalogService* catalog_ = nullptr;
     int catalogSerial_ = -1;
+    std::string removing_;  // its name while a confirmed Remove runs on the catalog's worker ("" when none)
     uint64_t hostVersion_ = 0;
     std::optional<PluginStatus> status_;  // nullopt: no longer installed (or no host)
     int pending_ = 0;

@@ -26,6 +26,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -63,6 +64,9 @@ public:
         std::string doneId;
         bool doneOk = false;
         std::map<std::string, std::string> kept;  // id → the version kept in .previous/
+        // Removes asked for and how each ended: waiting (queued or running), done, or failed (why).
+        std::set<std::string> removing, removed;
+        std::map<std::string, std::string> removeFailed;
         int serial = 0;  // changes with every change (screens compare it)
     };
 
@@ -81,7 +85,10 @@ public:
     void applyStaged(std::string id);
     void discardStaged(std::string id);
     void rollBack(std::string id);
-    void remove(std::string id);  // after the confirmation
+    // After the confirmation. Never dropped: queued while another operation runs. Its outcome shows
+    // in State::removed / removeFailed.
+    void remove(std::string id);
+    void cancel();  // the operation in progress (a download), e.g. before wait() on the UI thread
 
     const State& state() const { return shown_; }
     bool poll();  // true when changed
@@ -98,6 +105,9 @@ private:
     void refresh(State& s);  // kept versions, cache (worker)
     std::vector<std::string> installedIds(PluginHost*) const;
     void recount();
+    void startRemove(const std::string& id);
+    void forgetState(PluginHost*, const std::string& id);  // worker
+    std::vector<std::string> queuedRemoves_;
 
     CatalogConfig config_;
     mutable std::mutex mutex_;

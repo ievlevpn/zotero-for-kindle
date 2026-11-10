@@ -245,11 +245,17 @@ bool swapIn(const std::string& pluginsDir, const std::string& id, const fs::path
 // go ahead (the swap would delete one of them).
 bool dataSettled(const std::string& pluginsDir, const std::string& id, std::string* why) {
     repairOne(pluginsDir, id);
-    for (const char* item : kUserItems)
-        if (present(previousDir(pluginsDir) / id / item)) {
+    for (const char* item : kUserItems) {
+        const fs::path left = previousDir(pluginsDir) / id / item;
+        if (std::string(item).rfind("plugin.log", 0) == 0 && present(left)) {  // only a log: <id>'s own wins
+            std::error_code ec;
+            fs::remove(left, ec);
+        }
+        if (present(left)) {
             *why = std::string(item) + " in both " + id + " and .previous/" + id;
             return false;
         }
+    }
     return true;
 }
 

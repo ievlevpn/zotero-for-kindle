@@ -44,6 +44,7 @@ private:
     std::vector<Row> all_;
     Pager pager_{0, 1};
     int serial_ = -1;
+    bool wantCheck_ = false;  // the check on opening, until the catalog was free to start it
 };
 
 }  // namespace zk

@@ -84,6 +84,7 @@ void CatalogListScreen::onShow(Nav& nav) {
     if (catalog_) {
         catalog_->poll();
         catalog_->check(false);  // when the copy is more than an hour old
+        wantCheck_ = !catalog_->state().checking && catalog_->busy();  // busy with something else: retried
     }
     load();
 }
@@ -91,6 +92,10 @@ void CatalogListScreen::onShow(Nav& nav) {
 void CatalogListScreen::onTick(Nav& nav) {
     if (!catalog_) return;
     catalog_->poll();
+    if (wantCheck_ && !catalog_->busy()) {
+        wantCheck_ = false;
+        catalog_->check(false);
+    }
     if (catalog_->state().serial == serial_) return;
     load();
     nav.damage({0, 0, W(), H()}, Waveform::Ui);

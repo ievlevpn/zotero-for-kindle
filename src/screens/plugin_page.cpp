@@ -73,6 +73,19 @@ void PluginPageScreen::onTick(Nav& nav) {
     if (catalog_) catalog_->poll();
     const int serial = catalog_ ? catalog_->state().serial : -1;
     if (serial == catalogSerial_ && (h ? h->entriesVersion() : 0) == hostVersion_) return;
+    if (catalog_ && serial != catalogSerial_ && !removing_.empty()) {  // the Remove the user confirmed
+        const auto& st = catalog_->state();
+        if (st.removed.count(id_)) {
+            nav.toast(removing_ + " was removed.");
+            removing_.clear();
+            nav.pop();
+            return;
+        }
+        if (auto f = st.removeFailed.find(id_); f != st.removeFailed.end()) {
+            nav.toast(f->second);
+            removing_.clear();
+        }
+    }
     if (catalog_ && serial != catalogSerial_) {
         const auto& st = catalog_->state();
         using Op = CatalogService::Op;
@@ -266,7 +279,7 @@ PluginPageScreen::Layout PluginPageScreen::place(cairo_t* cr) const {
         row(l.reset, "Reset its data", false);
         row(l.discard, discardLabel(), false);
         row(l.rollBack, rollBack, false);
-        row(l.remove, "Remove", false);
+        row(l.remove, removing_.empty() ? "Remove" : "Removing…", false);
     }
     return l;
 }
@@ -354,10 +367,10 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
             return;
         }
         if (yes.value_or(false) && asked == Ask::Remove && catalog_ && status_) {  // files, storage and state, on its worker
-            const std::string n = name();
+            removing_ = name();  // said once it has worked (onTick); queued if the catalog is busy
             catalog_->remove(id_);
-            nav.toast(n + " was removed.");
-            nav.pop();
+            load(nav);
+            nav.damage(whole, Waveform::Ui);
             return;
         }
         if (yes.value_or(false) && host && status_) {
@@ -413,7 +426,7 @@ void PluginPageScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     const Ask ask = !l.reset.empty() && l.reset.contains(g.pos)       ? Ask::Reset
                     : !l.discard.empty() && l.discard.contains(g.pos) ? Ask::Discard
-                    : !l.remove.empty() && l.remove.contains(g.pos)   ? Ask::Remove
+                    : !l.remove.empty() && l.remove.contains(g.pos) && removing_.empty() ? Ask::Remove
                                                                        : Ask::None;
     if (ask == Ask::None) return;
     load(nav);  // the count it states is the count now

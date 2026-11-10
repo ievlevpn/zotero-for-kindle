@@ -509,7 +509,8 @@ int main(int argc, char** argv) {
             &keepAwake,
             [&] {  // the install failed and changed nothing
                 if (config) startService(*config);
-                catalogService.wait();  // its worker may still use the old host
+                catalogService.cancel();  // a plugin download in flight ends now...
+                catalogService.wait();    // ...and its worker may still use the old host
                 plugins.reset();
                 plugins = std::make_unique<PluginHost>(pluginHostDeps(paths, config));
                 pluginEvents.rebind(plugins.get(), app);
