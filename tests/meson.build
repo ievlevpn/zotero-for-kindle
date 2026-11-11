@@ -80,6 +80,8 @@ test_sources = files(
   'test_library_screens_ui.cpp',
   'test_search_screen.cpp',
   'test_open_flow.cpp',
+  'test_file_choice.cpp',
+  'test_jump_pills.cpp',
   'test_setup_settings.cpp',
   'test_lifecycle.cpp',
   'test_review_fixes.cpp',

@@ -232,7 +232,7 @@ TEST_CASE("library: a version-1 database is rebuilt at the current version") {
     {
         Db db = Db::open(path);
         Library lib(db);
-        CHECK(db.userVersion() == 9);
+        CHECK(db.userVersion() == 11);
         CHECK(lib.recentItems(10).empty());
         CHECK(lib.libraryVersion() == 0);
     }

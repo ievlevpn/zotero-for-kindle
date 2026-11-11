@@ -1,13 +1,17 @@
 #include "screens/open_flow.h"
 
 #include "screens/book.h"
+#include "screens/file_choice.h"
 #include "screens/reader.h"
 
 namespace zk {
 
 std::string OpenFlow::statusFor(const std::string& key) const {
     auto it = pending_.find(key);
-    return it == pending_.end() ? std::string{} : it->second.status;
+    if (it != pending_.end()) return it->second.status;
+    for (const auto& [k, p] : pending_)
+        if (!key.empty() && p.listKey == key) return p.status;
+    return {};
 }
 
 void OpenFlow::openNow(const ItemRow& row, Nav& nav, const std::optional<AnnotationRecord>& at) {
@@ -23,6 +27,20 @@ void OpenFlow::openNow(const ItemRow& row, Nav& nav, const std::optional<Annotat
 }
 
 void OpenFlow::open(const ItemRow& row, Nav& nav, std::optional<AnnotationRecord> at) {
+    if (row.files > 1 && !row.exactFile) {
+        auto files = nav.library().fileChoices(row.key);
+        if (files.size() > 1) {
+            const std::string listKey = row.attachmentKey;
+            nav.push(std::make_unique<FileChoiceScreen>(
+                row, std::move(files), const_cast<Screen*>(nav.top()),
+                [this, at, listKey](const ItemRow& r, Nav& n) { start(r, n, at, listKey); }));
+            return;
+        }
+    }
+    start(row, nav, std::move(at), row.attachmentKey);
+}
+
+void OpenFlow::start(const ItemRow& row, Nav& nav, std::optional<AnnotationRecord> at, const std::string& listKey) {
     if (row.attachmentKey.empty()) {
         bool linked = false;
         for (const auto& a : nav.library().attachmentsOf(row.key))
@@ -40,7 +58,7 @@ void OpenFlow::open(const ItemRow& row, Nav& nav, std::optional<AnnotationRecord
         return;
     }
     pending_[row.attachmentKey] =
-        Pending{row, nav.top(), nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true, std::move(at)};
+        Pending{row, nav.top(), nav.sync().busy() ? "Waiting for sync to finish…" : "Downloading…", true, std::move(at), listKey};
     nav.sync().openBook(row.key, row.attachmentKey);
 }
 
@@ -61,7 +79,7 @@ void OpenFlow::onSyncEvent(const SyncEvent& e, Nav& nav) {
         const bool stillThere = p.from && nav.top() == p.from;
         pending_.erase(it);
         if (stillThere) {
-            ItemRow fresh = nav.library().rowFor(row.key).value_or(row);
+            ItemRow fresh = nav.library().rowFor(row.key, row.attachmentKey).value_or(row);
             openNow(fresh, nav, at);
         }
     }

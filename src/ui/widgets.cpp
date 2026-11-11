@@ -33,17 +33,29 @@ std::string metaOf(const ItemRow& r) {
     return std::to_string(static_cast<int>(r.progress * 100 + 0.5)) + "%";
 }
 
+std::string filesOf(const ItemRow& r) { return r.files > 1 ? std::to_string(r.files) + " files" : ""; }
+
 }  // namespace
+
+std::string itemRowMeta(const ItemRow& item) {
+    const std::string files = filesOf(item);
+    if (item.read) return files;
+    return files.empty() ? metaOf(item) : files + " · " + metaOf(item);
+}
 
 void drawItemRow(cairo_t* cr, Rect row, const ItemRow& item, const std::string& status) {
     fillRect(cr, row, 255);
     const int badgeW = 74;
     itemTypeIcon(cr, {row.x, row.y + 26, badgeW, 92}, item.itemType, item.badge);
-    const int tx = row.x + badgeW + 38, metaW = 150, tw = row.x + row.w - tx;
+    const int tx = row.x + badgeW + 38, tw = row.x + row.w - tx;
+    const TextStyle metaStyle{kSans, 6.5, 400, false, kTertiary};
+    // "2 files · 45%": the meta column widens for the count.
+    const std::string files = filesOf(item), meta = itemRowMeta(item);
+    const int readW = item.read ? measureText("Read", {kSans, 6.5, 700, false, kInk}, tw, 1).width + 50 : 0;
+    const int metaW = std::max(150, (meta.empty() ? 0 : measureText(meta + (item.read ? " ·" : ""), metaStyle, tw, 1).width + 10) + readW);
     const int bottom = row.y + row.h - 12;
     const TextStyle titleStyle{kSerif, 10, 700};
     const TextStyle bylineStyle{kSans, 7.5, 400, false, kSecondary};
-    const TextStyle metaStyle{kSans, 6.5, 400, false, kTertiary};
     const TextStyle statusStyle{kSans, 7, 500, false, kInk};
     const std::string title = item.title.empty() ? "Untitled" : item.title;
     const std::string line2 = status.empty() ? item.byline : status;
@@ -60,6 +72,9 @@ void drawItemRow(cairo_t* cr, Rect row, const ItemRow& item, const std::string& 
         const int right = row.x + row.w;
         drawText(cr, "Read", readStyle, {right - textW, y2, textW, 50}, 1, Align::Right);
         const double cx = right - textW - 30, cy = y2 + 21;
+        if (!files.empty())
+            drawText(cr, files + " ·", metaStyle, {row.x + row.w - metaW, y2, static_cast<int>(cx) - 20 - (row.x + row.w - metaW), 50},
+                     1, Align::Right);
         cairo_save(cr);
         gray(cr, kInk);
         cairo_set_line_width(cr, 4);
@@ -71,7 +86,6 @@ void drawItemRow(cairo_t* cr, Rect row, const ItemRow& item, const std::string& 
         cairo_stroke(cr);
         cairo_restore(cr);
     } else if (status.empty()) {
-        const std::string meta = metaOf(item);
         drawText(cr, meta, metaStyle, {row.x + row.w - metaW, y2, metaW, 50}, 1, Align::Right);
     }
     hRule(cr, row.y + row.h - 2, row.x, row.x + row.w);

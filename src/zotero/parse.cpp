@@ -116,6 +116,7 @@ AttachmentRecord parseAttachment(const json& obj) {
     a.parentKey = str(d, "parentItem");
     a.contentType = str(d, "contentType");
     a.filename = str(d, "filename");
+    a.title = str(d, "title");
     a.md5 = str(d, "md5");
     a.linkMode = str(d, "linkMode");
     a.mtime = num(d, "mtime");

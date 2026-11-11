@@ -8,6 +8,7 @@
 #include "ui/theme.h"
 #include "ui/widgets.h"
 
+#include <algorithm>
 #include <cctype>
 
 namespace zk {
@@ -36,6 +37,12 @@ Rect ItemDetailsScreen::openRect() { return {kMargin, H() - kMargin - 100, 360, 
 std::vector<Rect> ItemDetailsScreen::removeRects() const {
     std::vector<Rect> out;
     for (const auto& [key, r] : removeTargets_) out.push_back(r);
+    return out;
+}
+
+std::vector<Rect> ItemDetailsScreen::fileOpenRects() const {
+    std::vector<Rect> out;
+    for (const auto& [key, r] : openTargets_) out.push_back(r);
     return out;
 }
 
@@ -106,19 +113,34 @@ void ItemDetailsScreen::draw(Canvas& canvas) {
     for (const auto& t : item.tags) tags += (tags.empty() ? "" : ", ") + t;
     section("Tags", tags, 2);
 
-    // Files, each with its own Remove from Kindle.
+    // Files, each with its own Open and Remove from Kindle.
     removeTargets_.clear();
+    openTargets_.clear();
     if (!details_.files.empty()) {
         drawText(cr, details_.files.size() == 1 ? "File" : "Files", label, {x, y, w, 40}, 1);
         y += 50;
+        auto readable = [](const AttachmentRecord& a) {
+            return (a.contentType == "application/epub+zip" || a.contentType == "application/pdf") &&
+                   a.linkMode != "linked_file" && a.linkMode != "linked_url";
+        };
+        const auto readables = std::count_if(details_.files.begin(), details_.files.end(),
+                                             [&](const ItemDetails::File& f) { return readable(f.attachment); });
         for (const auto& f : details_.files) {
-            y += drawText(cr, fileLine(f, details_.progress), value, {x, y, w, 110}, 2).height + 14;
+            y += drawText(cr, fileLine(f, f.progress), value, {x, y, w, 110}, 2).height + 14;
+            const auto& a = f.attachment;
+            int bx = x;
+            if (readables > 1 && readable(a) && open_) {  // one file: the page's Open is the file's
+                const Rect r{bx, y, 200, 84};
+                drawButton(cr, r, "Open", false);
+                openTargets_.push_back({a.key, r});
+                bx += 200 + 24;
+            }
             if (f.onKindle) {
-                const Rect r{x, y, 440, 84};
+                const Rect r{bx, y, 440, 84};
                 drawButton(cr, r, confirming_ == f.attachment.key ? "Tap again to remove" : "Remove from Kindle", false);
                 removeTargets_.push_back({f.attachment.key, r});
-                y += 84 + 14;
             }
+            if (bx > x || f.onKindle) y += 84 + 14;
             y += 16;
         }
         y += 12;
@@ -187,6 +209,11 @@ void ItemDetailsScreen::onGesture(const Gesture& g, Nav& nav) {
                                                      plugins::itemJson(*item, nav.library().isRead(row_.key)), Rect{0, 0, W(), H()});
             running_ = static_cast<int>(i);
             nav.damage(actionRects_[i], Waveform::Ui);
+            return;
+        }
+    for (const auto& [key, r] : openTargets_)
+        if (r.contains(g.pos)) {
+            if (auto row = nav.library().rowFor(row_.key, key)) open_(*row);
             return;
         }
     for (const auto& [key, r] : removeTargets_)

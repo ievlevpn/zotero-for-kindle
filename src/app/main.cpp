@@ -609,7 +609,8 @@ int main(int argc, char** argv) {
     app.setRoot(2, std::make_unique<CollectionsScreen>(openItem, flow.statusFn()));
     app.setRoot(3, std::make_unique<NotesScreen>(
                        [&flow, &app](const ItemRow& r, std::optional<AnnotationRecord> at) {
-                           if (r.fileState != AttachmentRecord::State::Local && !r.attachmentKey.empty())
+                           if (r.fileState != AttachmentRecord::State::Local && !r.attachmentKey.empty() &&
+                               (r.files <= 1 || r.exactFile))  // not before "Open which file?"
                                app.toast("Downloading the book…");  // Notes has no row to show progress in
                            flow.open(r, app, std::move(at));
                        }));
@@ -660,7 +661,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i + 1 < argc; ++i)  // --open <attachmentKey>: open a book at start (device checks)
         if (!std::strcmp(argv[i], "--open"))
             if (auto att = lib.attachment(argv[i + 1]))
-                if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey)) flow.open(*row, app);
+                if (auto row = lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey, att->key)) flow.open(*row, app);
     const int rc = app.run();
     if (safeMode.counting) confirmSafeModeStart(paths.pluginsDir);  // a clean end is a good start, however short
     watchdog.beat("shutting down");

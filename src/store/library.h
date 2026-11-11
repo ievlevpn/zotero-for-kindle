@@ -35,7 +35,7 @@ struct ListQuery {
     SortBy sort = SortBy::Recent;
     TypeFilter type = TypeFilter::Any;
     ReadFilter read = ReadFilter::Any;
-    bool downloaded = false;  // only items whose readable file is on the Kindle
+    bool downloaded = false;  // only items with a readable file on the Kindle (any of them)
     std::string tag, collectionKey;
     int offset = 0, limit = 8;
 };
@@ -60,6 +60,8 @@ struct ItemRow {
     double progress = -1;  // -1: never opened
     std::string itemType;  // Zotero's: "book", "journalArticle", "preprint", … ("attachment": a lone file)
     bool read = false;     // has the read tag (or was marked read on the Kindle, not sent yet)
+    int files = 0;         // its readable files (EPUB, PDF): with more than one, opening asks which
+    bool exactFile = false;  // attachmentKey is a file chosen (rowFor with a file): open it without asking
     bool operator==(const ItemRow&) const = default;
 };
 
@@ -73,10 +75,20 @@ struct ItemDetails {
         bool onKindle = false;  // downloaded, and the file is there
         int64_t bytes = 0;      // on the Kindle; 0 if not downloaded
         int highlights = 0;     // annotations shown in the reader (not deleted here)
+        double progress = -1;   // how far this file was read on the Kindle; -1 if never
     };
     std::vector<File> files;  // readable files first (EPUB, then PDF), as rows pick them
     double progress = -1;     // how far the item was read; -1 if never opened
     bool read = false;        // as ItemRow::read
+};
+
+// One of an item's readable files, as "Open which file?" lists them.
+struct FileChoice {
+    AttachmentRecord attachment;
+    std::string title;      // the attachment's title, else its filename
+    bool onKindle = false;  // downloaded
+    double progress = -1;   // read on the Kindle (0..1); -1 never opened here
+    bool lastRead = false;  // the item's file opened last on this Kindle
 };
 
 // Read or unread, set on the Kindle and not sent to Zotero yet: the read tag (as it was when
@@ -249,6 +261,10 @@ public:
     void rememberSearch(const std::string& query);  // moves it to the front if it was there
     void clearRecentSearches();
     std::optional<ItemRow> rowFor(const std::string& itemKey);
+    // The row opening that readable file of the item (exactFile); the item's own row if it has no such file.
+    std::optional<ItemRow> rowFor(const std::string& itemKey, const std::string& attachmentKey);
+    // The item's readable files: the one opened last first, then EPUB before PDF.
+    std::vector<FileChoice> fileChoices(const std::string& itemKey);
     std::optional<ItemDetails> details(const std::string& itemKey);
     // The item as the library shows it: with plugin changes not sent yet applied (tags, collections),
     // and nullopt while a pending plugin change trashes it. zoteroItem: as Zotero has it (as last
@@ -297,7 +313,7 @@ public:
     std::vector<std::string> keptCollections();
     void setCollectionKept(const std::string& key, bool kept);  // off deletes nothing
     // What keeping a collection covers: for every item in it or in its subcollections (any depth)
-    // that has one, the row with the file Open opens (ItemRow::attachmentKey), by title.
+    // that has one, a row per readable file (ItemRow::attachmentKey; the one Open opens first), by title.
     std::vector<ItemRow> collectionFiles(const std::string& collectionKey);
     // The Collections tab: the pinned ones (any level, those still there), then the other top-level ones.
     std::vector<CollectionEntry> collectionsTab();
@@ -310,11 +326,16 @@ public:
     void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);
     std::optional<ReadingState> lastOpened();
     std::optional<ReadingState> readingState(const std::string& itemKey);
-    // The reader's place in a book (engine position) and how far through it is (0..1).
+    // The reader's place in a file (engine position) and how far through it is (0..1): the file's,
+    // and the item's (as its last file's). Without a file: the item's last opened (else its row's).
+    void saveReading(const std::string& itemKey, const std::string& attachmentKey, const std::string& location,
+                     double progress);
     void saveReading(const std::string& itemKey, const std::string& location, double progress);
+    std::string readingLocation(const std::string& attachmentKey);  // "" if never read here
     void setFileState(const std::string& attachmentKey, AttachmentRecord::State, const std::string& localPath);
     std::vector<AttachmentRecord> downloadedAttachments();
     std::vector<std::string> attachmentKeys();  // every attachment in the library, whatever its state
+    std::vector<std::string> filesOfManyFileItems();  // the readable files of items that have more than one
 
     // Plugin changes (zk.zotero.*), kept until SyncEngine::push has sent them and applied to the
     // local copy at once: CreateItem inserts the item under a fresh local key, AddNote a note

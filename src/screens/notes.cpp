@@ -34,6 +34,9 @@ Rect NotesScreen::contentArea() const {
 // Notes per page: as many as fit if each comes from a different book (its own header): 4 on the PW5.
 int NotesScreen::perPage() const { return std::max(1, (contentArea().h - kPageIndicatorH) / (kNoteRowH + kGroupH)); }
 
+Rect NotesScreen::footerRect() const { return {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}; }
+Rect NotesScreen::sheetArea() const { return contentArea(); }
+
 Rect NotesScreen::confirmRect(int i) {
     const int w = (confirmBox().w - 3 * 40) / 2;
     return {confirmBox().x + 40 + i * (w + 40), confirmBox().y + confirmBox().h - 130, w, 90};
@@ -66,6 +69,7 @@ void NotesScreen::onShow(Nav& nav) {
         const Rect kb = nav.keyboard().bounds();
         bottom_ = kb.empty() ? H() : kb.y;
     }
+    jump_.reset();
     load(nav.library());
 }
 
@@ -146,7 +150,9 @@ void NotesScreen::draw(Canvas& canvas) {
         else
             drawNoteRow(cr, rects[i], lines_[i].note.annotation, true);
     }
-    drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
+    if (searching_) drawPageIndicator(cr, footerRect(), pager_.page(), pager_.pages());
+    else drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());
+    if (jump_) jump_->draw(cr, sheetArea());
     if (!discardKey_.empty()) {
         roundedRect(cr, confirmBox().x + 1.5, confirmBox().y + 1.5, confirmBox().w - 3, confirmBox().h - 3, 18);
         gray(cr, 255);
@@ -162,6 +168,14 @@ void NotesScreen::draw(Canvas& canvas) {
 }
 
 void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (jump_) {
+        Nav* n = &nav;
+        return jumpSheetGesture(jump_, g, sheetArea(), nav, pager_.page(), pager_.pages(), [](size_t) { return 0; },
+                                [this, n](int page) {
+                                    if (pager_.goTo(page)) load(n->library());
+                                    n->damage(contentArea(), Waveform::Quality);
+                                });
+    }
     if (g.type == GestureType::Swipe && (g.dir == Direction::Up ? pager_.next() : g.dir == Direction::Down && pager_.prev())) {
         load(nav.library());
         nav.damage(contentArea(), Waveform::Quality);
@@ -183,6 +197,13 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (!searching_ && searchRect().contains(g.pos)) {
         nav.push(std::make_unique<NotesScreen>(open_, true));
+        return;
+    }
+    if (!searching_ && discardKey_.empty() && footerRect().contains(g.pos)) {
+        if (pager_.pages() > 1) {
+            jump_.emplace(std::vector<JumpGroup>{}, pager_.page(), pager_.pages());
+            nav.damage(sheetArea(), Waveform::Ui);
+        }
         return;
     }
     if (!discardKey_.empty()) {
@@ -215,7 +236,8 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
                 return;
             }
         }
-        auto row = nav.library().rowFor(lines_[i].itemKey);
+        // A highlight opens its own file; the item's title, as a row's tap does.
+        auto row = lines_[i].header ? nav.library().rowFor(lines_[i].itemKey) : nav.library().rowFor(lines_[i].itemKey, a.parentKey);
         if (!row) return;
         if (searching_) nav.keyboard().hide();
         if (!open_) return nav.push(std::make_unique<BookScreen>(*row));  // no reader (screenshots)

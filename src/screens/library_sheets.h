@@ -5,6 +5,8 @@
 // Each sheet draws over the bottom of an area and takes the gestures while it is open; a tap
 // outside it closes it.
 
+#include <functional>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -135,5 +137,15 @@ private:
     int sheetPage_ = 0;
     size_t target_ = 0;
 };
+
+// A gesture on an open jump sheet over `area`, for a list now on `page` of `pages`: closes it as
+// its action says, and turns the list with go(page) — a section's page from sectionPage(section),
+// the first, or one entered on Go to page (pushed). Damages what it closes or changes.
+void jumpSheetGesture(std::optional<JumpSheet>& sheet, const Gesture&, Rect area, Nav&, int page, int pages,
+                      const std::function<int(size_t section)>& sectionPage, const std::function<void(int page)>& go);
+
+// The jump index of names in listSortKey order (collections): their initials, grouped by script as
+// the Library's Title sort. starts: each section's first name (an index into `names`).
+std::vector<ListSection> nameSections(const std::vector<std::string>& names, std::vector<int64_t>* starts);
 
 }  // namespace zk
