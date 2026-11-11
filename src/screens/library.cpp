@@ -100,6 +100,7 @@ void LibraryScreen::draw(Canvas& canvas) {
     centredText(cr, filterLine(), kLine, {line.x, line.y, line.w - (clear ? kClearW + 20 : 0), line.h}, Align::Left);
     if (clear) centredText(cr, "Clear", {kSans, 7.5, 700, false, kInk}, clearRect(), Align::Right);
     list_.draw(cr, listArea());
+    drawJumpIndicator(cr, footerRect(), list_.pager().page(), list_.pager().pages());  // it opens the jump sheet
     if (list_.rows().empty())
         drawText(cr,
                  view_.downloaded   ? "Nothing on this Kindle yet."
