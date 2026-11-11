@@ -116,6 +116,23 @@ TEST_CASE("reader menus: Light sets the frontlight; Sync refreshes the book's an
     CHECK(rig.nav.pops == 1);
 }
 
+TEST_CASE("reader menus: opening and closing Light or Display redraws both cells, so the frame moves at once") {
+    Rig rig;
+    rig.openMenus();
+    const Rect light = ReaderMenus::buttonRect(3), display = ReaderMenus::buttonRect(2);
+    auto redrawn = [&](Rect cell) {
+        for (const auto& d : rig.nav.damages)
+            if (d.rect.contains(cell.center())) return true;
+        return false;
+    };
+    for (Rect tap : {light, light, display, light, display, display}) {  // open, close, switch both ways
+        rig.nav.damages.clear();
+        rig.reader->onGesture(tapAt(tap.center()), rig.nav);
+        CHECK(redrawn(light));
+        CHECK(redrawn(display));
+    }
+}
+
 TEST_CASE("reader menus match the reviewed golden") {
     if (!std::filesystem::exists("assets/fonts-device/Bookerly-Regular.ttf")) return;
     addFontDir("assets/fonts-device");

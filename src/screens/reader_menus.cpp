@@ -493,10 +493,15 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (n == 7 && markAreaRect().contains(g.pos)) return reader_.markArea(nav);  // closes us
     if (n == 7 && addNoteRect().contains(g.pos)) return reader_.addNote(nav);    // closes us
     if (buttonRect(1, n).contains(g.pos)) return openNotes(nav);
+    // Opening or closing Display or Light moves the frame between their cells: both are redrawn
+    // with the panel, or the frame would show only at the next repaint of the row (a Sync tap).
+    const auto frames = [&] { nav.damage(buttonRect(2, n).united(buttonRect(3, n)), Waveform::Ui); };
     if (buttonRect(2, n).contains(g.pos)) {
         displayOpen_ = !displayOpen_;
+        if (lightOpen_) nav.damage(lightPanelRect(), Waveform::Quality);
         lightOpen_ = false;
         nav.damage(displayPanelRect(), displayOpen_ ? Waveform::Ui : Waveform::Quality);
+        frames();
         return;
     }
     if (displayOpen_ && onDisplayTap(g.pos, nav)) return;
@@ -509,6 +514,7 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
             light_ = v.empty() ? -1 : std::atoi(v.c_str());
         }
         nav.damage(lightPanelRect(), lightOpen_ ? Waveform::Ui : Waveform::Quality);
+        frames();
         return;
     }
     if (buttonRect(4, n).contains(g.pos)) {
