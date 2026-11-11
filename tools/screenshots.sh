@@ -10,7 +10,6 @@ mkdir -p "$OUT"
 build-desktop/zk-demo-library "$DB"
 shot() { build-desktop/zotero --screenshot "$1" "$OUT/$2.png" --db "$DB" >/dev/null 2>&1; }
 shot home home
-shot library library
 shot notes notes
 shot reader:PRIDEEPB:14 reader
 shot reader:PRIDEEPB:14:menus reader-menus
