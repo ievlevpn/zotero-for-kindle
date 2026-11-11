@@ -2,6 +2,8 @@
 
 #include "screens/item_details.h"
 
+#include <algorithm>
+
 #include "ui/paint.h"
 #include "ui/widgets.h"
 
@@ -21,24 +23,101 @@ ItemList ItemList::forQuery(ListQuery q) {
     return l;
 }
 
-void ItemList::setSource(Fetch f, Count c, Library& lib) {
+void ItemList::setSource(Fetch f, Count c, Library& lib, Sections s) {
     fetch_ = std::move(f);
     count_ = std::move(c);
-    pager_ = Pager(count_ ? count_(lib) : 0, perPage_);
+    sectionsOf_ = std::move(s);
+    pager_ = Pager(0, perPage_);
+    count(lib);
     load(lib);
 }
 
 void ItemList::refresh(Library& lib) {
-    pager_.setTotal(count_ ? count_(lib) : 0);
+    count(lib);
     load(lib);
 }
 
-void ItemList::load(Library& lib) { rows_ = fetch_ ? fetch_(lib, pager_.offset(), perPage_) : std::vector<ItemRow>{}; }
+void ItemList::count(Library& lib) {
+    sections_ = sectionsOf_ ? sectionsOf_(lib) : std::vector<ListSection>{};
+    sectionStarts_.clear();
+    int64_t total = 0;
+    for (const auto& s : sections_) {
+        sectionStarts_.push_back(total);
+        total += s.count;
+    }
+    if (sectionsOf_) pager_.setStarts(total, pageStarts(sections_, perPage_));
+    else pager_.setTotal(count_ ? count_(lib) : 0);
+}
+
+std::vector<int64_t> ItemList::pageStarts(const std::vector<ListSection>& sections, int rowsPerPage) {
+    const int room = std::max(3, 2 * rowsPerPage);  // in half rows: a heading takes 1, a row 2
+    std::vector<int64_t> starts = {0};
+    int used = 0;
+    int64_t row = 0;
+    for (const auto& s : sections) {
+        if (s.count <= 0) continue;
+        if (used > 0 && used + 3 > room) {  // the heading and a first row don't fit: a new page
+            starts.push_back(row);
+            used = 0;
+        }
+        used += 1;
+        for (int64_t left = s.count; left > 0;) {
+            int64_t fit = (room - used) / 2;
+            if (fit <= 0) {
+                starts.push_back(row);
+                used = 0;
+                fit = room / 2;
+            }
+            const int64_t take = std::min(fit, left);
+            row += take;
+            left -= take;
+            used += static_cast<int>(2 * take);
+        }
+    }
+    return starts;
+}
+
+bool ItemList::goToPage(int page, Library& lib) {
+    if (!pager_.goTo(page)) return false;
+    load(lib);
+    return true;
+}
+
+int ItemList::sectionPage(size_t section) const {
+    return section < sectionStarts_.size() ? pager_.pageOf(sectionStarts_[section]) : 0;
+}
+
+const ListSection* ItemList::sectionAt(int64_t row) const {
+    auto it = std::lower_bound(sectionStarts_.begin(), sectionStarts_.end(), row);
+    if (it == sectionStarts_.end() || *it != row) return nullptr;
+    // Empty sections share a start with the next: the heading is the last one's.
+    while (it + 1 != sectionStarts_.end() && *(it + 1) == row) ++it;
+    return &sections_[static_cast<size_t>(it - sectionStarts_.begin())];
+}
+
+bool ItemList::startsSection(int64_t row) const { return sectionAt(row) != nullptr; }
+
+void ItemList::load(Library& lib) {
+    rows_ = fetch_ ? fetch_(lib, pager_.offset(), pager_.rowsOnPage()) : std::vector<ItemRow>{};
+}
 
 std::vector<Rect> ItemList::rowRects(Rect area) const {
     std::vector<Rect> out;
-    for (size_t i = 0; i < rows_.size(); ++i)
-        out.push_back({area.x + kMargin, area.y + static_cast<int>(i) * kRowH, area.w - 2 * kMargin, kRowH});
+    int y = area.y;
+    for (size_t i = 0; i < rows_.size(); ++i) {
+        if (startsSection(pager_.offset() + static_cast<int64_t>(i))) y += kHeadingH;
+        out.push_back({area.x + kMargin, y, area.w - 2 * kMargin, kRowH});
+        y += kRowH;
+    }
+    return out;
+}
+
+std::vector<std::pair<std::string, Rect>> ItemList::headings(Rect area) const {
+    std::vector<std::pair<std::string, Rect>> out;
+    const auto rows = rowRects(area);
+    for (size_t i = 0; i < rows.size(); ++i)
+        if (const ListSection* s = sectionAt(pager_.offset() + static_cast<int64_t>(i)))
+            out.emplace_back(s->label, Rect{rows[i].x, rows[i].y - kHeadingH, rows[i].w, kHeadingH});
     return out;
 }
 
@@ -67,6 +146,7 @@ void ItemList::draw(cairo_t* cr, Rect area) const {
     fillRect(cr, area, 255);
     auto rects = rowRects(area);
     for (size_t i = 0; i < rows_.size(); ++i) drawItemRow(cr, rects[i], rows_[i], statusFor(rows_[i].attachmentKey));
+    for (const auto& [label, r] : headings(area)) drawSectionHeading(cr, r, label);
     drawPageIndicator(cr, {area.x, area.y + area.h - kPageIndicatorH, area.w, kPageIndicatorH}, pager_.page(),
                       pager_.pages());
     if (sheet_) sheet_->draw(cr, area);

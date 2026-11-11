@@ -82,8 +82,8 @@ store_lib = static_library('zk-store',
   'src/store/db.cpp',
   'src/store/library.cpp',
   include_directories : [inc, include_directories('third_party', is_system : true)],
-  dependencies : [net_dep, sqlite_dep])
-store_dep = declare_dependency(link_with : store_lib, dependencies : [net_dep, sqlite_dep])
+  dependencies : [net_dep, sqlite_dep, dependency('glib-2.0')])  # glib: Unicode folding for sort keys
+store_dep = declare_dependency(link_with : store_lib, dependencies : [net_dep, sqlite_dep, dependency('glib-2.0')])
 
 zotero_lib = static_library('zk-zotero',
   'src/zotero/parse.cpp',
@@ -209,6 +209,7 @@ screens_lib = static_library('zk-screens',
   'src/screens/sync_status.cpp',
   'src/screens/item_list.cpp',
   'src/screens/library.cpp',
+  'src/screens/library_sheets.cpp',
   'src/screens/collections.cpp',
   'src/screens/search.cpp',
   'src/screens/open_flow.cpp',

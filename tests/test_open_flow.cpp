@@ -31,7 +31,9 @@ struct Rig {
                                                  [this](const std::string& k) { return flow.statusFor(k); });
         nav.visible = screen.get();
         screen->onShow(nav);
-        screen->selectChip(1, nav);  // EPUBs only
+        LibraryView v;
+        v.type = TypeFilter::Epub;  // EPUBs only
+        screen->setView(v, nav);
         nav.damages.clear();
     }
     const ItemRow& row(int i) { return screen->list().rows()[static_cast<size_t>(i)]; }

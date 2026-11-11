@@ -21,19 +21,37 @@ class Library;
 std::string newLocalKey();
 bool isZoteroKey(const std::string&);
 
-enum class SortBy { Recent, Title, Author, Year };
-// Unread: not read, as ItemRow::read.
-enum class Filter { All, Epub, Pdf, Unread };
+// Recent and Added: newest added first (Added comes in months, Recent without sections).
+enum class SortBy { Recent, Title, Author, Year, Added };
+// WithFile: an EPUB or PDF the Kindle can open (Any: metadata-only items too).
+enum class TypeFilter { Any, WithFile, Pdf, Epub };
+// Unread / Read: as ItemRow::read.
+enum class ReadFilter { Any, Unread, Read };
 
 // The Zotero tag that means "read", unless the user picks another (Settings).
 constexpr const char* kDefaultReadTag = "read";
 
 struct ListQuery {
     SortBy sort = SortBy::Recent;
-    Filter filter = Filter::All;
+    TypeFilter type = TypeFilter::Any;
+    ReadFilter read = ReadFilter::Any;
+    bool downloaded = false;  // only items whose readable file is on the Kindle
     std::string tag, collectionKey;
     int offset = 0, limit = 8;
 };
+
+// A run of rows sharing a heading, in the list's order (Library::sectionCounts): by Title or
+// Author the initial ("1A" Latin, "2Ж" Cyrillic, "3#" digits and the rest), by Year the year
+// ("" none), by Added the month ("2025-03", "" none).
+struct SectionCount {
+    std::string key;
+    int64_t count = 0;
+    bool operator==(const SectionCount&) const = default;
+};
+
+// What Title and Author sort by: the initial as SectionCount names it, then 0x1F, then the text
+// folded (case, accents). Leading punctuation is skipped; Ё goes with Е, Œ with O.
+std::string listSortKey(const std::string& text);
 
 // One line in a list: an item and the file it opens (EPUB preferred over PDF).
 struct ItemRow {
@@ -221,6 +239,8 @@ public:
     // Screens (spec §6): paged lists, counts, collections, notes, reading state, downloads.
     std::vector<ItemRow> rows(const ListQuery&);
     int64_t countRows(const ListQuery&);
+    // The sections of rows(q) in order, with how many rows each has (none for Recent). One query.
+    std::vector<SectionCount> sectionCounts(const ListQuery&);
     // collectionKey: only items in that collection or its subcollections (any depth).
     std::vector<ItemRow> searchRows(const std::string& query, int offset, int limit, const std::string& collectionKey = "");
     // Searches made on the Kindle, newest first (kRecentSearches at most; kept here only).

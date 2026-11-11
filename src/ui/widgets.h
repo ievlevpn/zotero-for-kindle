@@ -35,6 +35,13 @@ void drawBanner(cairo_t*, Rect, const UserError&);
 void drawToggle(cairo_t*, Rect, bool on);
 void drawButton(cairo_t*, Rect, const std::string& label, bool primary);
 void drawPageIndicator(cairo_t*, Rect, int page /* 0-based */, int pages);  // "3 / 41"
+// The same, as a tappable control (it opens a jump sheet): "3 / 41 ›" in a light outline.
+void drawJumpIndicator(cairo_t*, Rect, int page /* 0-based */, int pages);
+// A list's section heading ("A", "2025", "March 2025"), half a row high: the label, bold, low in it.
+void drawSectionHeading(cairo_t*, Rect, const std::string& label);
+// A segmented toggle (All | Downloaded): the active half filled.
+void drawSegments(cairo_t*, Rect, const std::vector<std::string>& labels, int active);
+std::vector<Rect> segmentRects(Rect, size_t count);
 
 // Screen header: large title, or "‹" + title for pushed screens; the back target is backRect().
 void drawHeader(cairo_t*, const std::string& title, bool back, int rightReserve = 0);  // px kept free on the right

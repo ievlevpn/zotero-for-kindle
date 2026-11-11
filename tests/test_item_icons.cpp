@@ -67,7 +67,7 @@ TEST_CASE("item rows: an item without a file still gets its type's icon") {
     Db db{Db::open(":memory:")};
     Library lib{db};
     fillFixtureLibrary(lib, 10);
-    auto rows = lib.rows(ListQuery{SortBy::Title, Filter::All, "", "", 0, 50});
+    auto rows = lib.rows(ListQuery{.sort = SortBy::Title, .limit = 50});
     bool sawType = false;
     for (const auto& r : rows) sawType |= !r.itemType.empty();
     CHECK(sawType);

@@ -1,10 +1,14 @@
 #pragma once
-// Library tab: every item, sortable (Recent · Title · Author · Year) and filterable (All, EPUB,
-// PDF, Unread, and the three most used tags), one page at a time.
+// Library tab: the items, Kindle-like. "Library", All | Downloaded under it, Filter and Sort
+// buttons; a quiet line naming the filter applied (with Clear) and the count; the list a page at
+// a time, with section headings by Title, Author, Year or Date added. The footer ("12 / 359")
+// opens the jump sheet. The view is remembered on this Kindle (library_sheets.h).
 
 #include <functional>
+#include <optional>
 
 #include "screens/item_list.h"
+#include "screens/library_sheets.h"
 #include "screens/screen.h"
 
 namespace zk {
@@ -18,27 +22,40 @@ public:
     void onSyncEvent(const SyncEvent&, Nav&) override;
     void onShow(Nav&) override;
 
-    void selectSort(SortBy, Nav&);
-    void selectChip(int index, Nav&);
-    std::vector<std::string> chipLabels() const;
+    const LibraryView& view() const { return view_; }
+    void setView(const LibraryView&, Nav&);  // applies it (page 1) and remembers it
+    ListQuery query() const { return view_.query(); }
+    std::string filterLine() const;
     ItemList& list() { return list_; }
+    const FilterSheet* filterSheet() const { return filter_ ? &*filter_ : nullptr; }
+    const SortSheet* sortSheet() const { return sort_ ? &*sort_ : nullptr; }
+    const JumpSheet* jumpSheet() const { return jump_ ? &*jump_ : nullptr; }
 
-    static Rect listArea();
-    static Rect chipsArea();
+    static Rect filterButtonRect();
     static Rect sortButtonRect();
+    static Rect segmentRect(int index);  // 0 All, 1 Downloaded
+    static Rect filterLineRect();
+    static Rect clearRect();  // on the filter line, while the filter isn't the default
+    static Rect listArea();
+    static Rect footerRect();  // the page indicator: opens the jump sheet
+    static Rect sheetArea();   // what the sheets cover: everything under the title
 
 private:
     void apply(Nav&);
-    Rect menuRect() const;
+    void closeSheets();
+    void changed(Nav&);  // the view changed: list, filter line and toggle repainted
+    void onFilterGesture(const Gesture&, Nav&);
+    void onSortGesture(const Gesture&, Nav&);
+    void onJumpGesture(const Gesture&, Nav&);
+    void openJump(Nav&);
 
     std::function<void(const ItemRow&)> openItem_;
     ItemList list_;
-    ListQuery query_;
-    std::vector<std::pair<std::string, int64_t>> tags_;
-    int chip_ = 0;
-    bool menuOpen_ = false;
+    LibraryView view_;
+    bool loaded_ = false;
+    std::optional<FilterSheet> filter_;
+    std::optional<SortSheet> sort_;
+    std::optional<JumpSheet> jump_;
 };
-
-const char* sortLabel(SortBy);
 
 }  // namespace zk

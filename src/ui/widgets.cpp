@@ -171,6 +171,55 @@ void drawPageIndicator(cairo_t* cr, Rect r, int page, int pages) {
     centredText(cr, std::to_string(page + 1) + " / " + std::to_string(pages), {kSans, 6.5, 400, false, kTertiary}, r);
 }
 
+void drawJumpIndicator(cairo_t* cr, Rect r, int page, int pages) {
+    fillRect(cr, r, 255);
+    if (pages <= 1) return;
+    const std::string label = std::to_string(page + 1) + " / " + std::to_string(pages) + "  \u203A";
+    const int w = 240, h = r.h - 12;
+    const Rect pill{r.x + (r.w - w) / 2, r.y + (r.h - h) / 2, w, h};
+    gray(cr, 170);
+    cairo_set_line_width(cr, 2);
+    roundedRect(cr, pill.x + 1, pill.y + 1, pill.w - 2, pill.h - 2, pill.h / 2.0);
+    cairo_stroke(cr);
+    centredText(cr, label, {kSans, 6.5, 400, false, kSecondary}, pill);
+}
+
+void drawSectionHeading(cairo_t* cr, Rect r, const std::string& label) {
+    fillRect(cr, r, 255);
+    centredText(cr, label, {kSans, 8, 700, false, kInk}, {r.x, r.y + 24, r.w, r.h - 24}, Align::Left);
+}
+
+std::vector<Rect> segmentRects(Rect r, size_t count) {
+    std::vector<Rect> out;
+    if (count == 0) return out;
+    const int w = r.w / static_cast<int>(count);
+    for (size_t i = 0; i < count; ++i) out.push_back({r.x + static_cast<int>(i) * w, r.y, w, r.h});
+    return out;
+}
+
+void drawSegments(cairo_t* cr, Rect r, const std::vector<std::string>& labels, int active) {
+    fillRect(cr, r, 255);
+    const auto rects = segmentRects(r, labels.size());
+    const double radius = r.h / 2.0;
+    gray(cr, kInk);
+    if (active >= 0 && active < static_cast<int>(rects.size())) {  // the active half, its outer end rounded
+        const Rect a = rects[static_cast<size_t>(active)];
+        cairo_save(cr);
+        roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, radius);
+        cairo_clip(cr);
+        cairo_rectangle(cr, a.x, a.y, a.w, a.h);
+        cairo_fill(cr);
+        cairo_restore(cr);
+    }
+    cairo_set_line_width(cr, 3);
+    roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, radius);
+    cairo_stroke(cr);
+    for (size_t i = 0; i < rects.size(); ++i) {
+        const bool on = static_cast<int>(i) == active;
+        centredText(cr, labels[i], {kSans, 8, on ? 700 : 400, false, static_cast<uint8_t>(on ? 255 : kInk)}, rects[i]);
+    }
+}
+
 void drawToast(cairo_t* cr, Rect r, const std::string& text) {
     gray(cr, 40);
     roundedRect(cr, r.x, r.y, r.w, r.h, r.h / 2.0);

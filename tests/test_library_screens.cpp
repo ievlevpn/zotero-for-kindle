@@ -82,7 +82,7 @@ TEST_CASE("library rows: sort by title is case-insensitive, author and year sort
     ListQuery q;
     q.sort = SortBy::Title;
     auto t = titles(all(rig.lib, q));
-    CHECK(t.front().empty());  // untitled first
+    CHECK(t.back().empty());  // untitled last, under "#"
     std::vector<std::string> latin;
     for (const auto& s : t)
         if (!s.empty() && (unsigned char)s[0] < 0x80) latin.push_back(s);
@@ -100,17 +100,17 @@ TEST_CASE("library rows: sort by title is case-insensitive, author and year sort
 TEST_CASE("library rows: badges, filters, tags and collections") {
     Rig rig;
     ListQuery q;
-    q.filter = Filter::Epub;
+    q.type = TypeFilter::Epub;
     auto epubs = all(rig.lib, q);
     CHECK(epubs.size() == 20);
     for (const auto& r : epubs) {
         CHECK(r.badge == "EPUB");
         CHECK(r.attachmentKey.rfind("EP", 0) == 0);
     }
-    q.filter = Filter::Pdf;
+    q.type = TypeFilter::Pdf;
     auto pdfs = all(rig.lib, q);
     CHECK(pdfs.size() == 21);  // 20 + the standalone
-    q.filter = Filter::All;
+    q.type = TypeFilter::Any;
     auto rows = all(rig.lib, q);
     auto none = std::count_if(rows.begin(), rows.end(), [](const ItemRow& r) { return r.badge.empty(); });
     CHECK(none == 20);  // no attachment, or a linked file only
@@ -130,7 +130,7 @@ TEST_CASE("library rows: badges, filters, tags and collections") {
 TEST_CASE("library rows: unread and reading state") {
     Rig rig;
     ListQuery q;
-    q.filter = Filter::Unread;
+    q.read = ReadFilter::Unread;
     const auto before = rig.lib.countRows(q);
     CHECK_FALSE(rig.lib.lastOpened());
     rig.lib.markOpened("IT000003", "EP000003", 1000);
@@ -143,7 +143,7 @@ TEST_CASE("library rows: unread and reading state") {
     CHECK(last->itemKey == "IT000006");
     CHECK(last->attachmentKey == "EP000006");
     CHECK(last->openedMs == 2000);
-    q.filter = Filter::All;
+    q.type = TypeFilter::Any;
     for (const auto& r : all(rig.lib, q)) {
         if (r.key == "IT000006") CHECK(r.progress == 0.0);
         if (r.key == "IT000009") CHECK(r.progress == -1.0);
@@ -185,7 +185,7 @@ TEST_CASE("library: search rows, top tags, collections, notes and downloads") {
     REQUIRE(local.size() == 1);
     CHECK(local[0].localPath == "/mnt/us/zotero/files/EP000003/book.epub");
     ListQuery q;
-    q.filter = Filter::Epub;
+    q.type = TypeFilter::Epub;
     bool sawLocal = false;
     for (const auto& r : all(rig.lib, q))
         if (r.attachmentKey == "EP000003") sawLocal = r.fileState == AttachmentRecord::State::Local;
@@ -211,7 +211,7 @@ TEST_CASE("library rows: 6,000 items page fast") {
         CHECK(countMs < 50);
     }
     ListQuery epub;
-    epub.filter = Filter::Epub;
+    epub.type = TypeFilter::Epub;
     epub.sort = SortBy::Title;
     auto t0 = std::chrono::steady_clock::now();
     rig.lib.rows(epub);
@@ -231,7 +231,7 @@ TEST_CASE("library: a version-1 database is rebuilt at the current version") {
     {
         Db db = Db::open(path);
         Library lib(db);
-        CHECK(db.userVersion() == 8);
+        CHECK(db.userVersion() == 9);
         CHECK(lib.recentItems(10).empty());
         CHECK(lib.libraryVersion() == 0);
     }

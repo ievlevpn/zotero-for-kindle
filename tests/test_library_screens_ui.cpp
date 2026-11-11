@@ -44,7 +44,7 @@ TEST_CASE("library screen: swipe up shows the next page and repaints only the li
     Rig rig;
     LibraryScreen screen(rig.open);
     screen.onShow(rig.nav);
-    CHECK(screen.list().pager().pages() == 7);  // 41 rows, 6 per page
+    CHECK(screen.list().pager().pages() == 5);  // 28 rows with a file, 6 per page
     auto first = keys(screen.list().rows());
     REQUIRE(first.size() == 6);
     rig.nav.damages.clear();
@@ -52,7 +52,7 @@ TEST_CASE("library screen: swipe up shows the next page and repaints only the li
     auto second = keys(screen.list().rows());
     REQUIRE(second.size() == 6);
     CHECK(second[0] != first[0]);
-    ListQuery q;
+    ListQuery q = screen.query();
     q.offset = 6;
     q.limit = 6;
     CHECK(second == keys(rig.lib.rows(q)));
@@ -63,22 +63,26 @@ TEST_CASE("library screen: swipe up shows the next page and repaints only the li
     CHECK(keys(screen.list().rows()) == first);
 }
 
-TEST_CASE("library screen: sort and filter chips reset to the first page") {
+TEST_CASE("library screen: a new sort or filter goes back to the first page") {
     Rig rig;
     LibraryScreen screen(rig.open);
     screen.onShow(rig.nav);
     screen.onGesture(swipe(Direction::Up), rig.nav);
     CHECK(screen.list().pager().page() == 1);
-    screen.selectSort(SortBy::Title, rig.nav);
+    LibraryView v = screen.view();
+    v.sort = SortBy::Title;
+    screen.setView(v, rig.nav);
     CHECK(screen.list().pager().page() == 0);
-    CHECK(screen.list().rows()[0].title.empty());  // untitled sort first
-    screen.selectChip(1, rig.nav);  // EPUB
+    CHECK(screen.list().rows()[0].title == "Algebraic Topology");
+    screen.onGesture(swipe(Direction::Up), rig.nav);
+    v.type = TypeFilter::Epub;
+    screen.setView(v, rig.nav);
+    CHECK(screen.list().pager().page() == 0);
     for (const auto& r : screen.list().rows()) CHECK(r.badge == "EPUB");
     CHECK(screen.list().pager().total() == 14);
-    auto chips = screen.chipLabels();
-    REQUIRE(chips.size() >= 5);
-    CHECK(chips[4] == "economics");
-    screen.selectChip(5, rig.nav);  // second tag: pinn
+    v.type = TypeFilter::WithFile;
+    v.tag = "pinn";
+    screen.setView(v, rig.nav);
     CHECK(screen.list().pager().total() == 14);
 }
 
@@ -94,7 +98,7 @@ TEST_CASE("library screen: a sync that adds items keeps the page you are on") {
     e.kind = SyncEvent::Kind::SyncFinished;
     screen.onSyncEvent(e, rig.nav);
     CHECK(screen.list().pager().offset() == 12);
-    CHECK(screen.list().pager().total() == 81);
+    CHECK(screen.list().pager().total() == 55);  // with a file: 54 of the 80, and the standalone PDF
 }
 
 TEST_CASE("library screen: tapping a row opens it") {

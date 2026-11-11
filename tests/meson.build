@@ -71,6 +71,8 @@ test_sources = files(
   'test_power.cpp',
   'test_keysym.cpp',
   'test_library_screens.cpp',
+  'test_library_nav.cpp',
+  'test_library_nav_ui.cpp',
   'test_widgets.cpp',
   'test_app_shell.cpp',
   'test_sync_service.cpp',

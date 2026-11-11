@@ -1,5 +1,6 @@
 #pragma once
-// Go to… (from Contents): a number pad for a page number, or a percentage ("45%").
+// Go to… (from Contents, and the Library's jump sheet): a number pad for a page number, or a
+// percentage ("45%").
 
 #include <functional>
 #include <string>
@@ -11,11 +12,12 @@ namespace zk {
 class GoToPageScreen final : public Screen {
 public:
     // `go` gets the page index (0-based) once a valid one is entered; the pad closes itself first.
-    GoToPageScreen(int pageCount, int currentPage, std::function<void(int page)> go);
+    // reading: part of the reader (turns to landscape with it); the Library's isn't.
+    GoToPageScreen(int pageCount, int currentPage, std::function<void(int page)> go, bool reading = true);
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     bool showsTabBar() const override { return false; }
-    bool isReading() const override { return true; }
+    bool isReading() const override { return reading_; }
 
     // "0"–"9", "%", "⌫", "Go".
     static Rect keyRect(const std::string& key);
@@ -27,6 +29,7 @@ private:
     int pageCount_, current_;
     std::function<void(int)> go_;
     std::string entry_, error_;
+    bool reading_;
 };
 
 }  // namespace zk
