@@ -168,6 +168,13 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         lib_.setMetaValue("notesBackfill", "0");
     }
 
+    if (lib_.metaValue("attachmentTitlesBackfill") == "1") {
+        // A database from before attachment titles were kept: the files of items with more than
+        // one are fetched once more, for the titles "Open which file?" names them by.
+        if (!fetchAndApply("items", "attachments", lib_.filesOfManyFileItems(), rep, progress)) return;
+        lib_.setMetaValue("attachmentTitlesBackfill", "0");
+    }
+
     if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
         std::vector<std::string> keys;
         keys.swap(refetch_);

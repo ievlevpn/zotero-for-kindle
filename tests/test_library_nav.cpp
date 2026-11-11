@@ -227,7 +227,7 @@ TEST_CASE("library nav: a version-8 database gets the sort keys") {
     {
         Db db = Db::open(path);
         Library lib(db);
-        CHECK(db.userVersion() == 9);
+        CHECK(db.userVersion() == 10);
         ListQuery q;
         q.sort = SortBy::Title;
         auto sections = lib.sectionCounts(q);

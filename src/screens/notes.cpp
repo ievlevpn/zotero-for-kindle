@@ -236,7 +236,8 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
                 return;
             }
         }
-        auto row = nav.library().rowFor(lines_[i].itemKey);
+        // A highlight opens its own file; the item's title, as a row's tap does.
+        auto row = lines_[i].header ? nav.library().rowFor(lines_[i].itemKey) : nav.library().rowFor(lines_[i].itemKey, a.parentKey);
         if (!row) return;
         if (searching_) nav.keyboard().hide();
         if (!open_) return nav.push(std::make_unique<BookScreen>(*row));  // no reader (screenshots)

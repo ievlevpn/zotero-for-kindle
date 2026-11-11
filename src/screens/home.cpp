@@ -97,7 +97,7 @@ void HomeScreen::reload(Library& lib) {
     cardOpened_ = false;
     cardHighlights_ = 0;
     if (auto last = lib.lastOpened()) {
-        card_ = lib.rowFor(last->itemKey);
+        card_ = lib.rowFor(last->itemKey, last->attachmentKey);  // Continue reading: the very file read last
         cardOpened_ = card_.has_value();
         cardOpenedMs_ = last->openedMs;
     }
@@ -379,7 +379,7 @@ void HomeScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         case SyncEvent::Kind::DownloadProgress: {
             auto rects = recentRowRects();
             for (size_t i = 0; i < rects.size(); ++i)
-                if (recent_[i].attachmentKey == e.attachmentKey) nav.damage(rects[i], Waveform::Ui);
+                if (recent_[i].attachmentKey == e.attachmentKey || recent_[i].key == e.itemKey) nav.damage(rects[i], Waveform::Ui);
             break;
         }
         case SyncEvent::Kind::DownloadFinished:

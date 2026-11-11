@@ -22,7 +22,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 9;
+constexpr int64_t kSchemaVersion = 10;
 
 // Deletes an attachment's downloaded copy: the file, and its <files>/<attachmentKey>/ folder.
 void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& localPath) {
@@ -57,13 +57,15 @@ CREATE INDEX items_authorkey ON items(parentKey, authorKey, titleKey);
 CREATE TABLE reading_state (itemKey TEXT PRIMARY KEY, attachmentKey TEXT NOT NULL DEFAULT '',
   openedMs INTEGER NOT NULL DEFAULT 0, progress REAL NOT NULL DEFAULT 0, location TEXT NOT NULL DEFAULT '');
 CREATE INDEX reading_state_opened ON reading_state(openedMs DESC);
+CREATE TABLE file_reading (attachmentKey TEXT PRIMARY KEY, location TEXT NOT NULL DEFAULT '', progress REAL NOT NULL DEFAULT 0);
 CREATE TABLE item_collections (itemKey TEXT NOT NULL, collectionKey TEXT NOT NULL, PRIMARY KEY (collectionKey, itemKey));
 CREATE INDEX item_collections_item ON item_collections(itemKey);
 CREATE TABLE collections (key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', parentKey TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE attachments (
   key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', contentType TEXT NOT NULL DEFAULT '',
   filename TEXT NOT NULL DEFAULT '', md5 TEXT NOT NULL DEFAULT '', linkMode TEXT NOT NULL DEFAULT '',
-  mtime INTEGER NOT NULL DEFAULT 0, localPath TEXT NOT NULL DEFAULT '', state INTEGER NOT NULL DEFAULT 0);
+  mtime INTEGER NOT NULL DEFAULT 0, localPath TEXT NOT NULL DEFAULT '', state INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL DEFAULT '');
 CREATE INDEX attachments_parent ON attachments(parentKey);
 CREATE TABLE annotations (
   key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', type TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',
@@ -223,7 +225,7 @@ std::string nowUtc() {
     return buf;
 }
 
-const char* kAttachmentColumns = "key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state";
+const char* kAttachmentColumns = "key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state, title";
 
 std::vector<AttachmentRecord> readAttachments(Stmt& st) {
     std::vector<AttachmentRecord> out;
@@ -238,6 +240,7 @@ std::vector<AttachmentRecord> readAttachments(Stmt& st) {
         a.mtime = st.integer(6);
         a.localPath = st.text(7);
         a.state = static_cast<AttachmentRecord::State>(st.integer(8));
+        a.title = st.text(9);
         out.push_back(std::move(a));
     }
     return out;
@@ -416,7 +419,7 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 8) {
+        if (version >= 2 && version <= 9) {
             // Versions 2 to 8 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
@@ -476,6 +479,17 @@ void Library::migrate() {
                     set.reset();
                 }
             }
+            if (has("attachments") && version < 10) {  // version 10: attachment titles, each file's place
+                Stmt st = db_.prepare("SELECT 1 FROM pragma_table_info('attachments') WHERE name = 'title'");
+                if (!st.step()) db_.exec("ALTER TABLE attachments ADD COLUMN title TEXT NOT NULL DEFAULT '';");
+                db_.exec("INSERT INTO meta (key, value) VALUES ('attachmentTitlesBackfill', '1') "
+                         "ON CONFLICT(key) DO UPDATE SET value = '1'");
+            }
+            db_.exec("CREATE TABLE IF NOT EXISTS file_reading (attachmentKey TEXT PRIMARY KEY, location TEXT NOT NULL "
+                     "DEFAULT '', progress REAL NOT NULL DEFAULT 0);");
+            if (has("reading_state") && version < 10)  // the place so far was the item's: its last file's
+                db_.exec("INSERT OR IGNORE INTO file_reading (attachmentKey, location, progress) SELECT attachmentKey, "
+                         "location, progress FROM reading_state WHERE attachmentKey != ''");
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -590,12 +604,13 @@ void Library::upsertAttachment(const AttachmentRecord& r) {
     guarded([&] {
         const std::string oldParent = itemOfAttachment(r.key);
         Stmt st = db_.prepare(
-            "INSERT INTO attachments (key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state) "
-            "VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
+            "INSERT INTO attachments (key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state, title) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
             "contentType=excluded.contentType, filename=excluded.filename, md5=excluded.md5, "
-            "linkMode=excluded.linkMode, mtime=excluded.mtime, localPath=excluded.localPath, state=excluded.state");
+            "linkMode=excluded.linkMode, mtime=excluded.mtime, localPath=excluded.localPath, state=excluded.state, "
+            "title=excluded.title");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.contentType).bind(4, r.filename).bind(5, r.md5);
-        st.bind(6, r.linkMode).bind(7, r.mtime).bind(8, r.localPath).bind(9, static_cast<int64_t>(r.state));
+        st.bind(6, r.linkMode).bind(7, r.mtime).bind(8, r.localPath).bind(9, static_cast<int64_t>(r.state)).bind(10, r.title);
         st.step();
         const std::string entry = r.parentKey.empty() ? r.key : r.parentKey;
         if (!oldParent.empty() && oldParent != entry) touch(oldParent);
@@ -1018,7 +1033,9 @@ namespace {
 
 const char* kRowColumns =
     "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
-    "coalesce(rs.progress, -1), i.itemType, i.tags, coalesce(m.read, -1), coalesce(m.tag, '')";
+    "coalesce(rs.progress, -1), i.itemType, i.tags, coalesce(m.read, -1), coalesce(m.tag, ''), "
+    "(SELECT count(*) FROM attachments f WHERE f.parentKey = i.key AND f.contentType IN ('application/epub+zip', "
+    "'application/pdf') AND f.linkMode NOT IN ('linked_file', 'linked_url'))";
 const char* kRowJoins =
     " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key "
     "LEFT JOIN read_marks m ON m.itemKey = i.key ";
@@ -1049,6 +1066,7 @@ std::vector<ItemRow> readRows(Stmt& st, const std::string& readTag) {
         r.progress = st.real(7);
         r.itemType = st.text(8);
         r.read = isReadNow(strings(st.text(9)), st.integer(10) >= 0, st.integer(10) == 1, st.text(11), readTag);
+        r.files = static_cast<int>(st.integer(12));
         out.push_back(std::move(r));
     }
     return out;
@@ -1075,9 +1093,11 @@ Where whereOf(const ListQuery& q, const std::string& readTag) {
         w.args.push_back(readTag);
         w.args.push_back(readTag);
     }
-    if (q.downloaded)
-        w.sql += " AND i.readableKey IN (SELECT key FROM attachments WHERE state = " +
-                 std::to_string(static_cast<int>(AttachmentRecord::State::Local)) + ")";
+    if (q.downloaded)  // any of its files
+        w.sql += " AND EXISTS (SELECT 1 FROM attachments d WHERE (d.parentKey = i.key OR d.key = i.key) AND d.state = " +
+                 std::to_string(static_cast<int>(AttachmentRecord::State::Local)) +
+                 " AND d.contentType IN ('application/epub+zip', 'application/pdf') AND d.linkMode NOT IN ('linked_file', "
+                 "'linked_url'))";
     if (!q.tag.empty()) {
         w.sql += " AND EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?)";
         w.args.push_back(q.tag);
@@ -1212,6 +1232,43 @@ std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
     });
 }
 
+std::optional<ItemRow> Library::rowFor(const std::string& itemKey, const std::string& attachmentKey) {
+    auto row = rowFor(itemKey);
+    if (!row) return std::nullopt;
+    for (const auto& a : readableAttachments(itemKey))
+        if (a.key == attachmentKey) {
+            row->attachmentKey = a.key;
+            row->badge = a.contentType == "application/pdf" ? "PDF" : "EPUB";
+            row->fileState = a.state;
+            row->exactFile = true;
+        }
+    return row;
+}
+
+std::vector<FileChoice> Library::fileChoices(const std::string& itemKey) {
+    std::vector<FileChoice> out;
+    const auto rs = readingState(itemKey);
+    for (auto& a : readableAttachments(itemKey)) {
+        FileChoice c;
+        c.title = !a.title.empty() ? a.title : !a.filename.empty() ? a.filename : "Untitled";
+        c.onKindle = a.state == AttachmentRecord::State::Local;
+        c.lastRead = rs && rs->openedMs > 0 && rs->attachmentKey == a.key;
+        c.progress = guarded([&] {
+            Stmt st = db_.prepare("SELECT progress FROM file_reading WHERE attachmentKey = ?");
+            st.bind(1, a.key);
+            return st.step() ? st.real(0) : -1.0;
+        });
+        c.attachment = std::move(a);
+        out.push_back(std::move(c));
+    }
+    // The one read last, then EPUB before PDF (as rows pick their file), then by key.
+    std::stable_sort(out.begin(), out.end(), [](const FileChoice& a, const FileChoice& b) {
+        if (a.lastRead != b.lastRead) return a.lastRead;
+        return (a.attachment.contentType == "application/epub+zip") > (b.attachment.contentType == "application/epub+zip");
+    });
+    return out;
+}
+
 std::optional<ItemDetails> Library::details(const std::string& itemKey) {
     std::optional<ItemRecord> item = this->item(itemKey);
     if (!item) return std::nullopt;
@@ -1247,6 +1304,11 @@ std::optional<ItemDetails> Library::details(const std::string& itemKey) {
                      std::filesystem::exists(a.localPath, ec);
         if (f.onKindle) f.bytes = static_cast<int64_t>(std::filesystem::file_size(a.localPath, ec));
         f.highlights = static_cast<int>(annotationsFor(a.key).size());
+        f.progress = guarded([&] {
+            Stmt st = db_.prepare("SELECT progress FROM file_reading WHERE attachmentKey = ?");
+            st.bind(1, a.key);
+            return st.step() ? st.real(0) : -1.0;
+        });
         f.attachment = std::move(a);
         d.files.push_back(std::move(f));
     }
@@ -1484,7 +1546,23 @@ std::vector<ItemRow> Library::collectionFiles(const std::string& collectionKey) 
                               "WITH RECURSIVE sub(key) AS (SELECT ?1 UNION SELECT c.key FROM collections c JOIN sub ON c.parentKey = sub.key) "
                               "SELECT key FROM sub)) ORDER BY i.title COLLATE NOCASE, i.key");
         st.bind(1, collectionKey);
-        return readRows(st, readTag());
+        std::vector<ItemRow> out;
+        for (auto& row : readRows(st, readTag())) {
+            if (row.files <= 1) {
+                out.push_back(std::move(row));
+                continue;
+            }
+            out.push_back(row);  // the one Open opens first, then the item's other files
+            for (const auto& a : readableAttachments(row.key))
+                if (a.key != row.attachmentKey) {
+                    ItemRow other = row;
+                    other.attachmentKey = a.key;
+                    other.badge = a.contentType == "application/pdf" ? "PDF" : "EPUB";
+                    other.fileState = a.state;
+                    out.push_back(std::move(other));
+                }
+        }
+        return out;
     });
 }
 
@@ -1585,10 +1663,19 @@ int64_t Library::countAnnotations(const std::string& query) {
 
 void Library::markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs) {
     guarded([&] {
+        Stmt was = db_.prepare("SELECT attachmentKey FROM reading_state WHERE itemKey = ?");
+        was.bind(1, itemKey);
+        const std::string before = was.step() ? was.text(0) : std::string{};
         Stmt st = db_.prepare(
             "INSERT INTO reading_state (itemKey, attachmentKey, openedMs) VALUES (?, ?, ?) ON CONFLICT(itemKey) DO UPDATE "
             "SET attachmentKey = excluded.attachmentKey, openedMs = excluded.openedMs");
         st.bind(1, itemKey).bind(2, attachmentKey).bind(3, nowMs).step();
+        // The item's place and progress are its file's: another file of it brings its own.
+        Stmt place = db_.prepare(
+            "UPDATE reading_state SET location = coalesce((SELECT location FROM file_reading WHERE attachmentKey = ?2), ''), "
+            "progress = coalesce((SELECT progress FROM file_reading WHERE attachmentKey = ?2), 0) WHERE itemKey = ?1 "
+            "AND (?3 OR EXISTS (SELECT 1 FROM file_reading WHERE attachmentKey = ?2))");
+        place.bind(1, itemKey).bind(2, attachmentKey).bind(3, int64_t{!before.empty() && before != attachmentKey}).step();
     });
 }
 
@@ -1680,6 +1767,18 @@ std::optional<ReadingState> Library::readingState(const std::string& itemKey) {
 }
 
 void Library::saveReading(const std::string& itemKey, const std::string& location, double progress) {
+    std::string file = guarded([&] {
+        Stmt st = db_.prepare(
+            "SELECT coalesce(nullif((SELECT attachmentKey FROM reading_state WHERE itemKey = ?1), ''), "
+            "(SELECT readableKey FROM items WHERE key = ?1), '')");
+        st.bind(1, itemKey);
+        return st.step() ? st.text(0) : std::string{};
+    });
+    saveReading(itemKey, file, location, progress);
+}
+
+void Library::saveReading(const std::string& itemKey, const std::string& attachmentKey, const std::string& location,
+                          double progress) {
     guarded([&] {
         Stmt st = db_.prepare(
             "INSERT INTO reading_state (itemKey, location, progress) VALUES (?, ?, ?) ON CONFLICT(itemKey) DO UPDATE "
@@ -1687,6 +1786,21 @@ void Library::saveReading(const std::string& itemKey, const std::string& locatio
         st.bind(1, itemKey).bind(2, location);
         st.bindReal(3, progress);
         st.step();
+        if (attachmentKey.empty()) return;
+        Stmt file = db_.prepare(
+            "INSERT INTO file_reading (attachmentKey, location, progress) VALUES (?, ?, ?) ON CONFLICT(attachmentKey) DO "
+            "UPDATE SET location = excluded.location, progress = excluded.progress");
+        file.bind(1, attachmentKey).bind(2, location);
+        file.bindReal(3, progress);
+        file.step();
+    });
+}
+
+std::string Library::readingLocation(const std::string& attachmentKey) {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT location FROM file_reading WHERE attachmentKey = ?");
+        st.bind(1, attachmentKey);
+        return st.step() ? st.text(0) : std::string{};
     });
 }
 
@@ -1694,6 +1808,18 @@ void Library::setFileState(const std::string& attachmentKey, AttachmentRecord::S
     guarded([&] {
         Stmt st = db_.prepare("UPDATE attachments SET state = ?, localPath = ? WHERE key = ?");
         st.bind(1, static_cast<int64_t>(state)).bind(2, localPath).bind(3, attachmentKey).step();
+    });
+}
+
+std::vector<std::string> Library::filesOfManyFileItems() {
+    return guarded([&] {
+        const std::string readable =
+            "contentType IN ('application/epub+zip', 'application/pdf') AND linkMode NOT IN ('linked_file', 'linked_url')";
+        Stmt st = db_.prepare("SELECT key FROM attachments WHERE " + readable + " AND parentKey IN (SELECT parentKey FROM "
+                              "attachments WHERE parentKey != '' AND " + readable + " GROUP BY parentKey HAVING count(*) > 1) ORDER BY key");
+        std::vector<std::string> out;
+        while (st.step()) out.push_back(st.text(0));
+        return out;
     });
 }
 

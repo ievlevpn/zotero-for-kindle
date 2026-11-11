@@ -698,3 +698,27 @@ TEST_CASE("kept: an opened book isn't told to wait while only kept files downloa
     release = true;
     rig.service.reset();  // before `release` goes
 }
+
+TEST_CASE("kept: every readable file of an item downloads, not only the one Open opens; with its title") {
+    KeptRig rig;
+    {
+        std::lock_guard<std::mutex> lock(rig.serverMutex);
+        auto pdf = FakeZotero::attachment("ATTA0002", "BOOKA001", KeptRig::md5("ATTA0002"));
+        pdf["contentType"] = "application/pdf";
+        pdf["filename"] = "paper.pdf";
+        pdf["title"] = "Full Text PDF";
+        rig.zotero.put(pdf);
+    }
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    CHECK(rig.waitUntil([&] { return rig.fetches("ATTA0001") && rig.fetches("ATTA0002") && rig.fetches("ATTB0001"); }));
+    CHECK(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    Db db = Db::open(rig.db());
+    Library ui(db);
+    CHECK(ui.attachment("ATTA0001")->state == AttachmentRecord::State::Local);
+    CHECK(ui.attachment("ATTA0002")->state == AttachmentRecord::State::Local);
+    CHECK(ui.attachment("ATTA0002")->title == "Full Text PDF");
+    CHECK(ui.rowFor("BOOKA001")->files == 2);
+}

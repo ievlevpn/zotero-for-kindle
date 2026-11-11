@@ -413,7 +413,7 @@ void CollectionScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
         // from the library when it finished, not the whole page.
         auto rects = lineRects();
         for (size_t i = 0; i < page_.size(); ++i) {
-            if (page_[i].isCollection || page_[i].item.attachmentKey != e.attachmentKey) continue;
+            if (page_[i].isCollection || (page_[i].item.attachmentKey != e.attachmentKey && page_[i].item.key != e.itemKey)) continue;
             if (e.kind == SyncEvent::Kind::DownloadFinished)
                 if (auto row = nav.library().rowFor(page_[i].item.key)) page_[i].item = std::move(*row);
             nav.damage(rects[i], Waveform::Ui);

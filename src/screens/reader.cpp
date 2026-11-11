@@ -328,7 +328,7 @@ void ReaderScreen::onShow(Nav& nav) {
     if (const std::string w = nav.library().metaValue(kPenWidthKey); w == "0" || w == "2") penWidth_ = w[0] - '0';
     nav.setSystemInkWidth(inkWidthPx());
     DocPosition start;
-    if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
+    start.value = nav.library().readingLocation(row_.attachmentKey);
     // Zotero's reading position: where to open a book never read here, or a question if the
     // computer moved on since this Kindle last agreed with it.
     // Held (nothing sent) until it has been compared with the page the book opens on.
@@ -492,7 +492,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 position_ = e.position;
                 turning_ = false;
                 layoutPending_ = false;
-                nav.library().saveReading(row_.key, position_.value, progress_);
+                nav.library().saveReading(row_.key, row_.attachmentKey, position_.value, progress_);
                 markPlaces_ = e.bookmarkPlaces;
                 links_ = e.links;
                 if (turned) linkPopup_.reset();  // a pop-up belongs to the page it opened on

@@ -28,6 +28,7 @@ struct AttachmentRecord {
     int64_t mtime = 0;
     std::string localPath;
     enum class State { Remote, Downloading, Local } state = State::Remote;
+    std::string title;  // Zotero's ("Full Text PDF"), "" if none
 };
 
 struct AnnotationRecord {

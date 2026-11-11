@@ -23,6 +23,9 @@ constexpr int kPageIndicatorH = 60;
 // Badge, Bookerly title (2 lines), byline, and on the right "✓ Read" or the progress ("71%", "new", "opened")
 // unless `status` is set ("Downloading 42%", or an error message, shown in place of the byline).
 void drawItemRow(cairo_t*, Rect, const ItemRow&, const std::string& status);
+// What a row shows on the right of its byline: "45%", "new", "2 files · opened"; a read item's
+// "2 files" before its "✓ Read" ("" with one file).
+std::string itemRowMeta(const ItemRow&);
 
 void drawTabBar(cairo_t*, Rect bar, const std::vector<std::string>& tabs, int active);
 Rect tabRect(Rect bar, int index, int count);
