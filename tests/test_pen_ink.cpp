@@ -637,3 +637,43 @@ TEST_CASE("pen ink fix: a pen resting on the glass keeps blocking the palm") {
     run(6);
     CHECK(screen->gestures == 0);
 }
+
+namespace {
+
+class ShownKeyboard : public Keyboard {
+public:
+    void show() override {}
+    void hide() override {}
+    Rect bounds() const override { return {0, 980, 1236, 567}; }
+};
+
+}  // namespace
+
+TEST_CASE("pen ink: a pen tap on the system keyboard isn't the screen's (a note being typed stays open)") {
+    FakeDisplay display;
+    FakeSync sync;
+    ShownKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    auto s = std::make_unique<TouchCounter>();
+    TouchCounter* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    auto run = [&] {
+        for (int i = 0; i < 6; ++i) {
+            app.step(0);
+            now += 70;
+        }
+    };
+    display.pen(PenEvent::Type::Down, {600, 1200}, now);  // on a key
+    display.pen(PenEvent::Type::Up, {600, 1200}, now + 80);
+    run();
+    CHECK(screen->pens == 0);
+    CHECK(screen->gestures == 0);
+    display.pen(PenEvent::Type::Down, {600, 500}, now);  // above the keyboard: the screen's again
+    display.pen(PenEvent::Type::Up, {600, 500}, now + 80);
+    run();
+    CHECK(screen->gestures == 1);
+}

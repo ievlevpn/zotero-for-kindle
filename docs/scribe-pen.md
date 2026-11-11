@@ -11,6 +11,9 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
   (`ReaderScreen::kInkWidthPx`), stored in PDF points.
 - A quick pen touch that hardly moves, with nothing written before it, is a tap (menus, page turns);
   a dot right after writing stays ink (`kTapSlopPx`, `kTapMs`).
+- The pen writes in the white bands beside a letterboxed page too (room for notes in the margin).
+  Those strokes lie outside the PDF page: they are saved whole and shown on the Kindle, but Zotero
+  desktop draws ink only inside the page and cuts the rest off.
 - The eraser end takes away the strokes it crosses: an annotation is rewritten without them, and
   deleted when none is left, unless it has a comment or tags (then a toast points to Notes).
 - Display panel, PDF, once the pen was used: "Pen: Write | Tap" (kept in the library). Tap makes the

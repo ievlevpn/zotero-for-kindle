@@ -168,6 +168,7 @@ private:
     void handlePen(const PenEvent&, std::vector<Gesture>& gestures);
     static constexpr int kPenFinger = 99;  // the touch id of a pen stroke used as a finger
     bool penAsTouch_ = false;
+    bool penOnKeyboard_ = false;  // this stroke began on the system keyboard: not ours
     Point penTouchAt_;
     int64_t penLastMs_ = 0;
     void penReset(std::vector<Gesture>& gestures);

@@ -342,6 +342,14 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     } else {
         penNear_ = true;
     }
+    // A stroke that starts on the system keyboard is the keyboard's (its own window takes it, as it
+    // takes a finger): the pen is read from the digitizer, so without this the screen under the
+    // keyboard saw a tap too, and a note being typed closed.
+    if (p.type == PenEvent::Type::Down) penOnKeyboard_ = keyboard_.bounds().contains(p.pos);
+    if (penOnKeyboard_) {
+        if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) penOnKeyboard_ = false;
+        return;
+    }
     Screen* s = visibleTop();
     if (!s) return;
     if (confirmShown()) {  // the pen never answers it, nor writes under it
