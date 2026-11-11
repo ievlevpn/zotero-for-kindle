@@ -79,6 +79,16 @@ TEST_CASE("library nav: sort keys put a title under its initial, grouped by scri
     CHECK(listSortKey("Ёж") < listSortKey("ель"));  // ё sorts as е
 }
 
+TEST_CASE("library nav: numbers sort by value, not character by character") {
+    CHECK(listSortKey("Lecture 2") < listSortKey("Lecture 10"));
+    CHECK(listSortKey("Alpha 9") < listSortKey("Alpha 11"));
+    CHECK(listSortKey("Alpha 11") < listSortKey("Alpha 100"));
+    CHECK(listSortKey("Part 2b") < listSortKey("Part 10a"));
+    CHECK(listSortKey("v2 notes") < listSortKey("v02 notes"));  // equal values: the leading zero only breaks the tie
+    CHECK(listSortKey("Lecture 2") < listSortKey("Lectures"));   // as before, apart from the numbers
+    CHECK(listSortKey("1984") > listSortKey("Яблоко"));          // still under #, last
+}
+
 TEST_CASE("library nav: type filter, With a file by default on the Library") {
     Rig rig;
     ListQuery q;
@@ -227,7 +237,7 @@ TEST_CASE("library nav: a version-8 database gets the sort keys") {
     {
         Db db = Db::open(path);
         Library lib(db);
-        CHECK(db.userVersion() == 10);
+        CHECK(db.userVersion() == 11);
         ListQuery q;
         q.sort = SortBy::Title;
         auto sections = lib.sectionCounts(q);

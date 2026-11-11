@@ -22,7 +22,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 10;
+constexpr int64_t kSchemaVersion = 11;
 
 // Deletes an attachment's downloaded copy: the file, and its <files>/<attachmentKey>/ folder.
 void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& localPath) {
@@ -392,12 +392,35 @@ std::string initialOf(gunichar c) {
 
 }  // namespace
 
+// Numbers in their order, not the characters': each run of digits becomes its digit count, then the
+// digits ("Lecture 2" before "Lecture 10"). Leading zeros are kept after the count, so "02" follows "2".
+static std::string numbersInOrder(const std::string& text) {
+    std::string out;
+    for (size_t i = 0; i < text.size();) {
+        if (text[i] < '0' || text[i] > '9') {
+            out += text[i++];
+            continue;
+        }
+        size_t j = i;
+        while (j < text.size() && text[j] >= '0' && text[j] <= '9') ++j;
+        size_t first = i;
+        while (first + 1 < j && text[first] == '0') ++first;  // the value's digits
+        const size_t n = std::min<size_t>(j - first, 99);
+        out += static_cast<char>('0' + n / 10);
+        out += static_cast<char>('0' + n % 10);
+        out.append(text, first, j - first);
+        out.append(text, i, first - i);  // leading zeros, last: a tie-break only
+        i = j;
+    }
+    return out;
+}
+
 std::string listSortKey(const std::string& text) {
     if (!g_utf8_validate(text.c_str(), static_cast<gssize>(text.size()), nullptr)) return "3#\x1f";
     const char* p = text.c_str();
     while (*p && !g_unichar_isalnum(g_utf8_get_char(p))) p = g_utf8_next_char(p);  // quotes, brackets, spaces
-    if (!*p) return "3#\x1f" + folded(text.c_str());
-    return initialOf(g_utf8_get_char(p)) + "\x1f" + folded(p);
+    if (!*p) return "3#\x1f" + numbersInOrder(folded(text.c_str()));
+    return initialOf(g_utf8_get_char(p)) + "\x1f" + numbersInOrder(folded(p));
 }
 
 Library::Library(Db& db) : db_(db) { guarded([&] { migrate(); }); }
@@ -419,7 +442,7 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 9) {
+        if (version >= 2 && version <= 10) {
             // Versions 2 to 8 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
@@ -460,7 +483,7 @@ void Library::migrate() {
                 st.bind(1, std::string(column));
                 return st.step();
             };
-            if (has("items") && version < 9) {  // version 9: sort keys for Title and Author, with their sections
+            if (has("items") && version < 11) {  // version 9: sort keys for Title and Author; 11: numbers in order
                 for (const char* column : {"titleKey", "authorKey"})
                     if (!hasColumn(column))
                         db_.exec(std::string("ALTER TABLE items ADD COLUMN ") + column + " TEXT NOT NULL DEFAULT '';");
