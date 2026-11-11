@@ -677,3 +677,37 @@ TEST_CASE("pen ink: a pen tap on the system keyboard isn't the screen's (a note 
     run();
     CHECK(screen->gestures == 1);
 }
+
+TEST_CASE("pen ink: a hand put down before the pen came near is a palm (no tap, no swipe)") {
+    FakeDisplay display;
+    FakeSync sync;
+    NoKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    auto s = std::make_unique<TouchCounter>();
+    TouchCounter* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    auto run = [&](int steps) {
+        for (int i = 0; i < steps; ++i) {
+            app.step(0);
+            now += 20;
+        }
+    };
+    display.touch(TouchEvent::Type::Down, {300, 1200}, now);  // the hand lands first
+    run(3);
+    display.pen(PenEvent::Type::Near, {600, 700}, now);       // then the pen comes near
+    run(2);
+    display.touch(TouchEvent::Type::Move, {420, 1210}, now);  // the hand slides (a swipe's start)
+    display.touch(TouchEvent::Type::Up, {520, 1220}, now + 10);
+    run(4);
+    CHECK(screen->gestures == 0);
+    display.pen(PenEvent::Type::Leave, {600, 700}, now);
+    now += App::kPalmMs + 50;
+    display.tap({200, 900}, now);  // a finger later is a finger again
+    run(6);
+    CHECK(screen->gestures == 1);
+}
+

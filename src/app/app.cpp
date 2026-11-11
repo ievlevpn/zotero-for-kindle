@@ -334,6 +334,7 @@ void App::penReset(std::vector<Gesture>& gestures) {
 
 void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
     penLastMs_ = clock_();
+    if (p.type == PenEvent::Type::Near || p.type == PenEvent::Type::Down) palmsFromFingersDown();
     if (p.type == PenEvent::Type::Down) penDown_ = true;
     if (p.type == PenEvent::Type::Up || p.type == PenEvent::Type::Leave) penDown_ = false;
     if (p.type == PenEvent::Type::Leave) {
@@ -386,7 +387,22 @@ void App::handlePen(const PenEvent& p, std::vector<Gesture>& gestures) {
 
 // A finger that lands while the pen is near (or just left) is the palm: it and its later samples
 // are dropped. Fingers already down when the pen came keep going (the gesture must end).
+// The pen came into range while fingers were down: they were the hand resting before the pen
+// arrived. They become palms (their later samples are dropped) and the gesture they began is
+// forgotten: a tap or a swipe is only decided on lift, so it never happens.
+void App::palmsFromFingersDown() {
+    bool any = false;
+    for (int id : fingersDown_)
+        if (std::find(palmFingers_.begin(), palmFingers_.end(), id) == palmFingers_.end()) {
+            palmFingers_.push_back(id);
+            any = true;
+        }
+    if (any && !penAsTouch_) gestures_.cancel();
+}
+
 bool App::palmBlocked(const TouchEvent& t) {
+    if (t.type == TouchEvent::Type::Down) fingersDown_.insert(t.id);
+    if (t.type == TouchEvent::Type::Up) fingersDown_.erase(t.id);
     auto it = std::find(palmFingers_.begin(), palmFingers_.end(), t.id);
     if (t.type == TouchEvent::Type::Down) {
         // Near only while it keeps reporting: a Leave that never came must not block touch forever.

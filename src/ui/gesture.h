@@ -37,6 +37,13 @@ public:
     // DragMove, DragEnd), with no long press first (the reader's "Mark an area").
     void setDragAtOnce(bool on) { dragAtOnce_ = on; }
 
+    // Forget the touch being tracked without emitting anything (it was a palm): its later
+    // samples are ignored until it lifts, and the next finger down starts afresh.
+    void cancel() {
+        state_ = State::Idle;
+        finger_ = -1;
+        dragging_ = false;
+    }
     // Call periodically while a finger is down; emits LongPress when due.
     std::vector<Gesture> tick(int64_t now_ms);
     // When tick() has something to emit (the long press of a finger held still); -1: nothing.
