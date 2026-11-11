@@ -17,11 +17,34 @@ ZK_LAUNCHER=${ZK_LAUNCHER:-/mnt/us/documents/Zotero.sh}
 ZK_CONFIG=${ZK_CONFIG:-/var/local/zotero/config.json}
 ZK_DISPLAY=${ZK_DISPLAY:-:0}
 ZK_INK_MARK=${ZK_INK_MARK:-/tmp/zk-wet-ink-session}  # left by the app while the Scribe's wet ink is on
+ZK_PIDFILE=${ZK_PIDFILE:-/tmp/zotero.pid}  # the running app's pid; /tmp is emptied at boot
 cd "$ZK_HOME" || exit 1
 mkdir -p log
 U=update
 
 note() { echo "$(date '+%H:%M:%S') launcher: $*" >> log/zotero.log; }
+
+# One app at a time: a second copy would work on the same database. The app can outlive its
+# launcher (a killed upstart job, say), so the check is on the app's pid, not on a launcher's.
+# Where /proc exists, a pid that now belongs to another program doesn't count.
+running_pid() {
+    [ -f "$ZK_PIDFILE" ] || return 1
+    pid=
+    read -r pid < "$ZK_PIDFILE" 2>/dev/null
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 1
+    if [ -r "/proc/$pid/cmdline" ]; then
+        tr '\0' ' ' < "/proc/$pid/cmdline" | grep -q 'bin/zotero' || return 1
+    fi
+    echo "$pid"
+}
+if pid=$(running_pid); then
+    # SIGWINCH asks the app to come to the front. An older app ignores it (the signal's default),
+    # where SIGUSR1 would kill it: a new launcher can meet an old app around updates and rollbacks.
+    kill -WINCH "$pid" 2>/dev/null
+    note "already running (pid $pid): brought to the front, no second copy"
+    exit 0
+fi
+mkdir -p "$(dirname "$ZK_PIDFILE")"
 
 # Keeps the log to about 2 MB in all: over 1 MB, it becomes zotero.log.1 (replacing the old one).
 # `wc -c <` is in POSIX and busybox alike; unquoted, its macOS padding goes.
@@ -81,8 +104,11 @@ while [ "$starts" -lt 5 ]; do
     rotate_log
     check_update
     chmod +x bin/* 2>/dev/null  # copied over USB, the programs may have lost their execute bit
-    DISPLAY=$ZK_DISPLAY ./bin/zotero >> log/zotero.log 2>&1
+    # The shell writes its own pid, then becomes the app: the file is there before the app runs.
+    DISPLAY=$ZK_DISPLAY sh -c 'echo $$ > "$1" && exec ./bin/zotero' sh "$ZK_PIDFILE" >> log/zotero.log 2>&1 &
+    wait $!
     code=$?
+    rm -f "$ZK_PIDFILE"
     [ "$code" = 75 ] && continue
     # A new version that ended before confirming: go back now, and start the old one.
     if [ -f "$U/state" ] && read -r word rest < "$U/state" && [ "$word" = tried ]; then

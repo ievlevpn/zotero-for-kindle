@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -40,6 +41,15 @@ void writeWake() {
     if (gWakePipe[1] < 0) return;
     const char b = 1;
     [[maybe_unused]] const ssize_t n = ::write(gWakePipe[1], &b, 1);  // full (EAGAIN): a wake is waiting anyway
+}
+
+// SIGWINCH, from the launcher when Zotero is started again while it runs (assets/launcher/Zotero.sh):
+// come to the front. The handler only notes it and wakes the loop (both async-signal-safe).
+volatile sig_atomic_t gRaiseRequested = 0;
+
+void onRaiseSignal(int) {
+    gRaiseRequested = 1;
+    writeWake();
 }
 
 class X11Display final : public Display {
@@ -105,6 +115,11 @@ public:
             }
             setUiWaker(writeWake);
         }
+        struct sigaction sa {};
+        sa.sa_handler = onRaiseSignal;
+        sigemptyset(&sa.sa_mask);
+        sa.sa_flags = SA_RESTART;
+        sigaction(SIGWINCH, &sa, nullptr);
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
     }
 
@@ -199,6 +214,10 @@ public:
             while (::read(gWakePipe[0], buf, sizeof buf) > 0) {
             }
         }
+        if (gRaiseRequested) {
+            gRaiseRequested = 0;
+            raise();
+        }
         // The pen first: its strokes are what must not wait (palm touches queued behind it are
         // then dropped by the app while the pen is near).
         if (pen_ && wet_ && nowMs() - lastTurnCheckMs_ > 1000) {  // a 180-degree turn sends no event
@@ -275,6 +294,17 @@ private:
         char buf[8];
         XLookupString(&key, buf, sizeof buf, &sym, nullptr);
         return sym ? sym : XLookupKeysym(&key, 0);
+    }
+
+    // To the front: the window manager (lab126 awesome) makes a newly mapped application window the
+    // active one, so the window goes and comes back. The Expose that follows repaints it from the
+    // backing store and turns the app to the foreground (seen on a PW5, 5.18.4).
+    void raise() {
+        log(LogLevel::Info, "asked to come to the front");
+        XUnmapWindow(dpy_, win_);
+        XSync(dpy_, False);
+        XMapRaised(dpy_, win_);
+        XSync(dpy_, False);
     }
 
     void setBackground(bool background, std::vector<InputEvent>& out) {

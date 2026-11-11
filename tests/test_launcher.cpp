@@ -83,10 +83,11 @@ struct Kindle {
                                 ":'\"$PATH\" ZK_HOME='" + home.string() +
                                 "' ZK_LAUNCHER='" + (root / "documents/Zotero.sh").string() + "' ZK_CONFIG='" +
                                 (root / "var/config.json").string() + "' ZK_DISPLAY=none ZK_INK_MARK='" +
-                                (root / "ink-session").string() + "' sh '" +
+                                (root / "ink-session").string() + "' ZK_PIDFILE='" + pidfile().string() + "' sh '" +
                                 (root / "documents/Zotero.sh.src").string() + "'";
         return std::system(cmd.c_str());
     }
+    fs::path pidfile() const { return root / "run/zotero.pid"; }
     std::string runs() const { return readFile(home / "runs"); }
     std::string file(const fs::path& rel) const { return readFile(root / rel); }
     void checkRolledBack() const {
@@ -113,6 +114,61 @@ TEST_CASE("launcher: a normal run starts the app once") {
     CHECK(k.launch() == 0);
     CHECK(k.runs() == "0.2.0 0\n");
     CHECK(fs::exists(k.home / "log/zotero.log"));
+}
+
+namespace {
+
+// The output of a shell command, trailing newline dropped.
+std::string shell(const std::string& cmd) {
+    std::string out;
+    if (FILE* p = popen(cmd.c_str(), "r")) {
+        char buf[256];
+        while (fgets(buf, sizeof buf, p)) out += buf;
+        pclose(p);
+    }
+    while (!out.empty() && out.back() == '\n') out.pop_back();
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("launcher: while the app runs, another start brings it to the front instead of a second copy") {
+    Kindle k;
+    // A running app, as the launcher sees one: its pid in the pid file, its command line bin/zotero.
+    // It notes SIGWINCH, the app's "come to the front" (short sleeps: a trap runs between commands).
+    writeFile(k.home / "bin/zotero-running",
+              "#!/bin/sh\ntrap 'echo raised >> raised' WINCH\ni=0\n"
+              "while [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\n",
+              true);
+    const std::string pid =
+        shell("cd '" + k.home.string() + "' && { sh ./bin/zotero-running >/dev/null 2>&1 & echo $!; }");
+    REQUIRE_FALSE(pid.empty());
+    writeFile(k.pidfile(), pid + "\n");
+    CHECK(k.launch() == 0);
+    CHECK_FALSE(fs::exists(k.home / "runs"));
+    CHECK(k.file("run/zotero.pid") == pid + "\n");  // the running copy's file stays
+    CHECK(readFile(k.home / "log/zotero.log").find("already running") != std::string::npos);
+    for (int i = 0; i < 50 && !fs::exists(k.home / "raised"); i++) usleep(100 * 1000);
+    CHECK(k.file("zotero/raised") == "raised\n");
+    shell("kill " + pid);
+}
+
+TEST_CASE("launcher: a pid file left by an app that is gone does not stop a start") {
+    Kindle k;
+    const std::string gone = shell("sh -c 'echo $$'");  // that process has ended
+    writeFile(k.pidfile(), gone + "\n");
+    CHECK(k.launch() == 0);
+    CHECK(k.runs() == "0.2.0 0\n");
+}
+
+TEST_CASE("launcher: the pid file holds the app's pid while it runs, and goes when it ends") {
+    Kindle k(std::string("#!/bin/sh\necho \"$$ $(cat \"$ZK_PIDFILE\")\" > pids\necho '0.2.0 0' >> runs\n"));
+    CHECK(k.launch() == 0);
+    const std::string pids = k.file("zotero/pids");
+    const auto space = pids.find(' ');
+    REQUIRE(space != std::string::npos);
+    CHECK(pids.substr(0, space) + "\n" == pids.substr(space + 1));
+    CHECK_FALSE(fs::exists(k.pidfile()));
 }
 
 TEST_CASE("launcher: an app that lost its execute bit still starts") {
