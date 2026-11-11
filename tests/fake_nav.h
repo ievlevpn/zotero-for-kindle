@@ -65,6 +65,8 @@ public:
     void paintNow(Rect r, Waveform w, const std::function<void(cairo_t*)>&) override { painted.push_back({r, w}); }
     bool systemInk() const override { return hasSystemInk; }
     void setSystemInk(bool on) override { systemInkOn = on; }
+    void setSystemInkWidth(int px) override { systemInkWidth = px; }
+    int systemInkWidth = 0;
     PluginSink& plugins() override { return pluginSink; }
     PluginEntries* pluginEntries() override { return entries; }
     CatalogService* catalog() override { return catalogService; }

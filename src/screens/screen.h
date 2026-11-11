@@ -47,6 +47,7 @@ public:
     // screen is visible; the app turns it off whenever another screen shows).
     virtual bool systemInk() const { return false; }
     virtual void setSystemInk(bool /*on*/) {}
+    virtual void setSystemInkWidth(int /*px*/) {}  // the pen's width, in pixels
     // Where plugin events go (src/plugins/events.h): queuing only, never waits. Drops them by default.
     virtual PluginSink& plugins() { return nullPluginSink(); }
     // Plugins' entry points and actions (plugin_entries.h); null: none (no plugin shows anywhere).

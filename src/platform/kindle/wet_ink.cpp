@@ -163,8 +163,7 @@ bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
     const uint32_t id = static_cast<uint32_t>(window);
     send(kSetWindow, &id, 4);
     unsigned char thickness[5] = {0};
-    const float t = 3.5f;
-    std::memcpy(thickness + 1, &t, 4);
+    std::memcpy(thickness + 1, &thickness_, 4);
     send(kSetParam, thickness, 5);
     const uint16_t canvas[4] = {0, 0, static_cast<uint16_t>(canvasW), static_cast<uint16_t>(canvasH)};
     send(kSetCanvas, canvas, 8);
@@ -175,6 +174,25 @@ bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
     mode_ = Mode::Paused;
     log(LogLevel::Info, "wet ink: connected, window 0x%lx, canvas %dx%d", window, canvasW, canvasH);
     return true;
+}
+
+void WetInk::setThickness(float t) {
+    thickness_ = t;
+    if (!connected_) return;
+    unsigned char m[5] = {0};  // index 0: the pen
+    std::memcpy(m + 1, &t, 4);
+    send(kSetParam, m, 5);
+    post(kMessages, 1);
+    post(kWake, 1);
+}
+
+void WetInk::setCanvas(int w, int h) {
+    if (!connected_) return;
+    const uint16_t canvas[4] = {0, 0, static_cast<uint16_t>(w), static_cast<uint16_t>(h)};
+    send(kSetCanvas, canvas, 8);
+    post(kMessages, 1);
+    post(kWake, 1);
+    log(LogLevel::Info, "wet ink: canvas %dx%d", w, h);
 }
 
 bool WetInk::setMode(Mode m) {

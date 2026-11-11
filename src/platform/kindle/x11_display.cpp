@@ -166,6 +166,10 @@ public:
 
     bool repaintsOnForeground() const override { return true; }  // Expose: from the backing store
     bool systemInk() const override { return wet_ && wet_->connected(); }
+    // The handler's 3.5 (its notebook's default pen) draws about the app's 7 px line.
+    void setSystemInkWidth(int px) override {
+        if (wet_) wet_->setThickness(px / 2.0f);
+    }
     bool setSystemInk(bool on) override {
         return !wet_ || wet_->setMode(on ? WetInk::Mode::Pen : WetInk::Mode::Paused);
     }
@@ -317,6 +321,9 @@ private:
                               reinterpret_cast<char*>(backing_.data()), w_, h_, 8, w_);
         if (fb_ >= 0 && fbink_reinit(fb_, &cfg_) < 0) log(LogLevel::Warn, "FBInk reinit after a turn failed");
         updatePenView();
+        // The canvas as the screen is turned now, from the window (Xlib's DisplayWidth keeps the
+        // size from when the display was opened and doesn't follow a turn).
+        if (wet_) wet_->setCanvas(originX_ + w_, originY_ + h_);
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
         InputEvent e;
         e.kind = InputEvent::Kind::Resize;

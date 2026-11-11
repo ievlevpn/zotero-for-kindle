@@ -10,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <set>
+#include <strings.h>
 #include <unistd.h>
 
 using namespace zk;

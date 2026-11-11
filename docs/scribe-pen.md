@@ -11,6 +11,9 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
   (`ReaderScreen::kInkWidthPx`), stored in PDF points.
 - A quick pen touch that hardly moves, with nothing written before it, is a tap (menus, page turns);
   a dot right after writing stays ink (`kTapSlopPx`, `kTapMs`).
+- The pen writes in the white bands beside a letterboxed page too (room for notes in the margin).
+  Those strokes lie outside the PDF page: they are saved whole and shown on the Kindle, but Zotero
+  desktop draws ink only inside the page and cuts the rest off.
 - The eraser end takes away the strokes it crosses: an annotation is rewritten without them, and
   deleted when none is left, unless it has a comment or tags (then a toast points to Notes).
 - Display panel, PDF, once the pen was used: "Pen: Write | Tap" (kept in the library). Tap makes the
@@ -49,8 +52,13 @@ Amazon and may change with firmware updates; the app falls back to drawing the l
 handler doesn't answer.
 
 Only on the 1st-gen Scribe (FBInk's device name "Scribe"), where the protocol was checked;
-`ZK_WET_INK=1` forces it elsewhere, `ZK_NO_WET_INK=1` turns it off. In landscape the app draws the line
-itself for now (the handler's canvas is registered portrait).
+`ZK_WET_INK=1` forces it elsewhere, `ZK_NO_WET_INK=1` turns it off.
+
+Landscape works (checked on the Scribe, 2026-11-11). The handler notices the turn itself
+("setOrientation from 0 to 1" in its log) but draws only inside the canvas it was given: with the
+portrait canvas (1860 x 2480) kept, everything right of x = 1860 stayed dry. After each turn the app
+sends the canvas again at the window's new size (message 6, `WetInk::setCanvas`). The size comes
+from the window: Xlib's `DisplayWidth` keeps the size from when the display was opened.
 
 What the app does:
 - Goes full screen (`PC:N` in the window title): the handler only draws over the top window, and the
@@ -100,7 +108,6 @@ What the app does:
 Notebook open sequence: 1:0a, 7:window, 1:0a, 8:thickness, 5:exclusions, 1:00, 8, 6:canvas, 9:scale.
 
 ## Not verified on a device yet
-- Landscape reading with wet ink (the quarter-turn direction is derived from `fb0/rotate`).
 - Strokes made less than 1.5 s before the reader closes other than through the menus are lost.
 - Wet ink drawn while the page is being repainted (just after a save) can vanish from the screen; the
   stroke itself is saved and comes back with the annotation.

@@ -7,6 +7,7 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <set>
 #include <memory>
 #include <vector>
 
@@ -49,6 +50,7 @@ public:
     void paintNow(Rect, Waveform, const std::function<void(cairo_t*)>&) override;
     bool systemInk() const override { return display_.systemInk(); }
     void setSystemInk(bool on) override;
+    void setSystemInkWidth(int px) override { display_.setSystemInkWidth(px); }
     // Palm rejection: touches are ignored while the pen is in range and this long after it left.
     static constexpr int64_t kPalmMs = 700;
     // No pen event this long: not near any more (a Leave may have been lost). A pen held still
@@ -168,6 +170,9 @@ private:
     void handlePen(const PenEvent&, std::vector<Gesture>& gestures);
     static constexpr int kPenFinger = 99;  // the touch id of a pen stroke used as a finger
     bool penAsTouch_ = false;
+    std::set<int> fingersDown_;  // touches down now (from the display, palms included)
+    void palmsFromFingersDown();
+    bool penOnKeyboard_ = false;  // this stroke began on the system keyboard: not ours
     Point penTouchAt_;
     int64_t penLastMs_ = 0;
     void penReset(std::vector<Gesture>& gestures);

@@ -1,5 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <array>
+#include <initializer_list>
+#include <vector>
+
 #include "platform/pen_decoder.h"
 
 using namespace zk;

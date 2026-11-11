@@ -152,7 +152,12 @@ public:
     // Handwriting (PDF, Scribe): strokes wait this long after the last one, then become one
     // Zotero ink annotation (a page turn sends them at once).
     static constexpr int64_t kInkCommitMs = 1500;
-    static constexpr int kInkWidthPx = 7;  // about the Scribe wet ink line
+    static constexpr int kInkWidthPx = 7;  // the medium pen (default)
+    // The pen's widths, thin / medium / thick (Display panel; kept in the library).
+    static constexpr int kInkWidthsPx[3] = {4, kInkWidthPx, 11};
+    int penWidth() const { return penWidth_; }
+    void setPenWidth(int i, Nav&);
+    int inkWidthPx() const { return kInkWidthsPx[penWidth_]; }  // about the Scribe wet ink line
     // A pen touch within this box and time, with nothing written before it, is a tap.
     static constexpr int kTapSlopPx = 12;
     static constexpr int64_t kTapMs = 300;
@@ -328,6 +333,7 @@ private:
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
     bool buttonHeld_ = false;  // the side button: the pen taps, no ink
     bool penWrites_ = true, penSeen_ = false;
+    int penWidth_ = 1;
     bool wantsSystemInk() const override;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
     bool inkFlushGaveUp_ = false;

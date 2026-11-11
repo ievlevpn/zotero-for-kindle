@@ -23,6 +23,12 @@ public:
     // Pen: the handler draws the tip's line; Paused: it draws nothing (menus, other screens).
     enum class Mode { Pen, Paused };
     bool setMode(Mode);  // false: not sent (try again later)
+    // The window turned: the handler draws only inside the canvas it was given, so it gets the
+    // canvas again at the new size (landscape, 2026-11-11: without it the right of 1860 px stayed dry).
+    void setCanvas(int w, int h);
+    // The line's thickness, in the handler's unit (the notebook's default pen: 3.5). Kept for
+    // later connects too.
+    void setThickness(float t);
     bool connected() const { return connected_; }
     void disconnect();  // also on destruction; leaves the handler off
     // For crash paths (signal handlers, the stall watchdog): turns the handler off and ends the
@@ -45,7 +51,8 @@ private:
     std::atomic<bool> connected_{false}, stop_{false};
     std::thread acker_;
     Mode mode_ = Mode::Paused;
-    bool sendFailing_ = false;  // log a failing queue once, not on every send
+    bool sendFailing_ = false;
+    float thickness_ = 3.5f;  // log a failing queue once, not on every send
 };
 
 }  // namespace zk

@@ -479,15 +479,15 @@ TEST_CASE("pen ink: steady writing is cut into annotations of at most kMaxInkStr
     REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
 }
 
-TEST_CASE("pen ink: wet ink stays off in landscape for now") {
+TEST_CASE("pen ink: wet ink stays on in landscape") {
     InkRig rig;
     rig.nav.hasSystemInk = true;
     rig.reader->onTick(rig.nav);
     REQUIRE(rig.nav.systemInkOn);
     ScopedMetrics turned(Metrics{2480, 1759, {0, 101}, 300, "Scribe"});  // the window turned
     rig.reader->onResize(rig.nav);
-    rig.reader->onTick(rig.nav);
-    CHECK_FALSE(rig.nav.systemInkOn);
+    // Off while the book is laid out again for the turned window, back on once the page is there.
+    CHECK(rig.settle([&] { return rig.nav.systemInkOn; }));
 }
 
 TEST_CASE("pen ink: a lost Leave doesn't block touch for good; the background resets the pen") {
@@ -636,4 +636,95 @@ TEST_CASE("pen ink fix: a pen resting on the glass keeps blocking the palm") {
     display.tap({200, 900}, now);
     run(6);
     CHECK(screen->gestures == 0);
+}
+
+namespace {
+
+class ShownKeyboard : public Keyboard {
+public:
+    void show() override {}
+    void hide() override {}
+    Rect bounds() const override { return {0, 980, 1236, 567}; }
+};
+
+}  // namespace
+
+TEST_CASE("pen ink: a pen tap on the system keyboard isn't the screen's (a note being typed stays open)") {
+    FakeDisplay display;
+    FakeSync sync;
+    ShownKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    auto s = std::make_unique<TouchCounter>();
+    TouchCounter* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    auto run = [&] {
+        for (int i = 0; i < 6; ++i) {
+            app.step(0);
+            now += 70;
+        }
+    };
+    display.pen(PenEvent::Type::Down, {600, 1200}, now);  // on a key
+    display.pen(PenEvent::Type::Up, {600, 1200}, now + 80);
+    run();
+    CHECK(screen->pens == 0);
+    CHECK(screen->gestures == 0);
+    display.pen(PenEvent::Type::Down, {600, 500}, now);  // above the keyboard: the screen's again
+    display.pen(PenEvent::Type::Up, {600, 500}, now + 80);
+    run();
+    CHECK(screen->gestures == 1);
+}
+
+TEST_CASE("pen ink: a hand put down before the pen came near is a palm (no tap, no swipe)") {
+    FakeDisplay display;
+    FakeSync sync;
+    NoKeyboard keyboard;
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    int64_t now = 1000;
+    App app{display, lib, sync, keyboard, [&] { return now; }};
+    auto s = std::make_unique<TouchCounter>();
+    TouchCounter* screen = s.get();
+    app.setRoot(0, std::move(s));
+    app.start();
+    auto run = [&](int steps) {
+        for (int i = 0; i < steps; ++i) {
+            app.step(0);
+            now += 20;
+        }
+    };
+    display.touch(TouchEvent::Type::Down, {300, 1200}, now);  // the hand lands first
+    run(3);
+    display.pen(PenEvent::Type::Near, {600, 700}, now);       // then the pen comes near
+    run(2);
+    display.touch(TouchEvent::Type::Move, {420, 1210}, now);  // the hand slides (a swipe's start)
+    display.touch(TouchEvent::Type::Up, {520, 1220}, now + 10);
+    run(4);
+    CHECK(screen->gestures == 0);
+    display.pen(PenEvent::Type::Leave, {600, 700}, now);
+    now += App::kPalmMs + 50;
+    display.tap({200, 900}, now);  // a finger later is a finger again
+    run(6);
+    CHECK(screen->gestures == 1);
+}
+
+TEST_CASE("pen ink: the pen's thickness: the saved ink, the system's line, kept for the next book") {
+    InkRig rig;
+    CHECK(rig.nav.systemInkWidth == ReaderScreen::kInkWidthPx);  // medium by default
+    rig.reader->setPenWidth(2, rig.nav);
+    CHECK(rig.nav.systemInkWidth == 11);
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    CHECK(nlohmann::json::parse(rig.inks()[0].position)["width"] == 11);
+    auto other = std::make_unique<ReaderScreen>(rig.row, "book.pdf", DocType::Pdf, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::make_unique<FakeEngine>(); });
+    }, 6);
+    rig.nav.systemInkWidth = 0;
+    other->onShow(rig.nav);
+    CHECK(other->penWidth() == 2);
+    CHECK(rig.nav.systemInkWidth == 11);
 }
