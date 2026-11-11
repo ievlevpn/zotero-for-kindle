@@ -479,15 +479,15 @@ TEST_CASE("pen ink: steady writing is cut into annotations of at most kMaxInkStr
     REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
 }
 
-TEST_CASE("pen ink: wet ink stays off in landscape for now") {
+TEST_CASE("pen ink: wet ink stays on in landscape") {
     InkRig rig;
     rig.nav.hasSystemInk = true;
     rig.reader->onTick(rig.nav);
     REQUIRE(rig.nav.systemInkOn);
     ScopedMetrics turned(Metrics{2480, 1759, {0, 101}, 300, "Scribe"});  // the window turned
     rig.reader->onResize(rig.nav);
-    rig.reader->onTick(rig.nav);
-    CHECK_FALSE(rig.nav.systemInkOn);
+    // Off while the book is laid out again for the turned window, back on once the page is there.
+    CHECK(rig.settle([&] { return rig.nav.systemInkOn; }));
 }
 
 TEST_CASE("pen ink: a lost Leave doesn't block touch for good; the background resets the pen") {

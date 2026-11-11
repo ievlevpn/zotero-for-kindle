@@ -1586,8 +1586,7 @@ bool ReaderScreen::penAllowed() const {
 }
 
 bool ReaderScreen::wantsSystemInk() const {
-    // Not in landscape yet: the handler's canvas is registered portrait (untried turned).
-    return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_ && !landscape();
+    return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_;
 }
 
 void ReaderScreen::setPenWrites(bool on, Nav& nav) {

@@ -317,6 +317,9 @@ private:
                               reinterpret_cast<char*>(backing_.data()), w_, h_, 8, w_);
         if (fb_ >= 0 && fbink_reinit(fb_, &cfg_) < 0) log(LogLevel::Warn, "FBInk reinit after a turn failed");
         updatePenView();
+        // The canvas as the screen is turned now, from the window (Xlib's DisplayWidth keeps the
+        // size from when the display was opened and doesn't follow a turn).
+        if (wet_) wet_->setCanvas(originX_ + w_, originY_ + h_);
         log(LogLevel::Info, "window %dx%d at (%d,%d)", w_, h_, originX_, originY_);
         InputEvent e;
         e.kind = InputEvent::Kind::Resize;

@@ -177,6 +177,15 @@ bool WetInk::connect(unsigned long window, int canvasW, int canvasH) {
     return true;
 }
 
+void WetInk::setCanvas(int w, int h) {
+    if (!connected_) return;
+    const uint16_t canvas[4] = {0, 0, static_cast<uint16_t>(w), static_cast<uint16_t>(h)};
+    send(kSetCanvas, canvas, 8);
+    post(kMessages, 1);
+    post(kWake, 1);
+    log(LogLevel::Info, "wet ink: canvas %dx%d", w, h);
+}
+
 bool WetInk::setMode(Mode m) {
     if (!connected_) return false;
     if (m == mode_) return true;
