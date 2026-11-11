@@ -60,7 +60,7 @@ struct Rig {
     }
     int64_t unread() {
         ListQuery q;
-        q.filter = Filter::Unread;
+        q.read = ReadFilter::Unread;
         return lib.countRows(q);
     }
 };

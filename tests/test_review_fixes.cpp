@@ -48,7 +48,9 @@ TEST_CASE("review I-1: a download finishing for the last row of a shrinking Unre
     LibraryScreen screen([&](const ItemRow& r) { flow.open(r, nav); }, flow.statusFn());
     nav.visible = &screen;
     screen.onShow(nav);
-    screen.selectChip(3, nav);  // Unread
+    LibraryView unread;
+    unread.read = ReadFilter::Unread;
+    screen.setView(unread, nav);
     while (screen.list().pager().page() + 1 < screen.list().pager().pages()) screen.onGesture(swipe(Direction::Up), nav);
     const auto rows = screen.list().rows();
     REQUIRE_FALSE(rows.empty());

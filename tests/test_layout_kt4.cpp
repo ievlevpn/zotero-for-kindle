@@ -9,6 +9,7 @@
 #include "fake_nav.h"
 #include "fixture_library.h"
 #include "golden.h"
+#include "library_nav_fit.h"
 #include "platform/scaled_display.h"
 #include "screens/collections.h"
 #include "screens/goto_page.h"
@@ -360,4 +361,12 @@ TEST_CASE("kt4 goldens: a crowded plugin page") {
     Canvas c(kKt4.width, kKt4.height);
     page.draw(c);
     checkShrunk(c, "tests/golden/plugin-page-kt4.png");
+}
+
+TEST_CASE("kt4 layout: the Library's header, Filter, Sort and jump sheets fit") {
+    Rig rig;
+    ScopedMetrics s(kKt4);
+    LibraryScreen library(nullptr);
+    library.onShow(rig.nav);
+    checkLibraryNavFits(library);
 }

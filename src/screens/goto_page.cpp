@@ -21,8 +21,8 @@ constexpr int kKeyW = 300, kKeyH = 150, kGap = 24, kFieldY = kHeaderH + 40, kPad
 
 }  // namespace
 
-GoToPageScreen::GoToPageScreen(int pageCount, int currentPage, std::function<void(int)> go)
-    : pageCount_(pageCount), current_(currentPage), go_(std::move(go)) {}
+GoToPageScreen::GoToPageScreen(int pageCount, int currentPage, std::function<void(int)> go, bool reading)
+    : pageCount_(pageCount), current_(currentPage), go_(std::move(go)), reading_(reading) {}
 
 Rect GoToPageScreen::keyRect(const std::string& key) {
     const int left = (W() - 3 * kKeyW - 2 * kGap) / 2;

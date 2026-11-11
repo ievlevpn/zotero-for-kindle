@@ -3,11 +3,14 @@
 #include "core/log.h"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <map>
 #include <sstream>
 #include <nlohmann/json.hpp>
 #include <sqlite3.h>
+
+#include <glib.h>
 
 #include <chrono>
 #include <ctime>
@@ -19,7 +22,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 8;
+constexpr int64_t kSchemaVersion = 9;
 
 // Deletes an attachment's downloaded copy: the file, and its <files>/<attachmentKey>/ folder.
 void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& localPath) {
@@ -33,6 +36,7 @@ void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& l
 // The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
 // readableKey/readableType: the item's file to open (EPUB preferred), kept by reindex().
+// titleKey/authorKey: listSortKey() of the title and of sortCreator, kept by upsertItem().
 const char* kSchema = R"sql(
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE items (
@@ -42,12 +46,14 @@ CREATE TABLE items (
   tags TEXT NOT NULL DEFAULT '[]', dateAdded TEXT NOT NULL DEFAULT '', dateModified TEXT NOT NULL DEFAULT '',
   json TEXT NOT NULL DEFAULT '{}', creatorsText TEXT NOT NULL DEFAULT '', tagsText TEXT NOT NULL DEFAULT '',
   year TEXT NOT NULL DEFAULT '', sortCreator TEXT NOT NULL DEFAULT '', readableKey TEXT NOT NULL DEFAULT '',
-  readableType TEXT NOT NULL DEFAULT '');
+  readableType TEXT NOT NULL DEFAULT '', titleKey TEXT NOT NULL DEFAULT '', authorKey TEXT NOT NULL DEFAULT '');
 CREATE INDEX items_recent ON items(parentKey, dateAdded DESC);
 CREATE INDEX items_title ON items(parentKey, title COLLATE NOCASE);
 CREATE INDEX items_author ON items(parentKey, sortCreator COLLATE NOCASE, title COLLATE NOCASE);
-CREATE INDEX items_year ON items(parentKey, year DESC, title COLLATE NOCASE);
+CREATE INDEX items_year ON items(parentKey, year DESC, titleKey);
 CREATE INDEX items_readable ON items(parentKey, readableType);
+CREATE INDEX items_titlekey ON items(parentKey, titleKey);
+CREATE INDEX items_authorkey ON items(parentKey, authorKey, titleKey);
 CREATE TABLE reading_state (itemKey TEXT PRIMARY KEY, attachmentKey TEXT NOT NULL DEFAULT '',
   openedMs INTEGER NOT NULL DEFAULT 0, progress REAL NOT NULL DEFAULT 0, location TEXT NOT NULL DEFAULT '');
 CREATE INDEX reading_state_opened ON reading_state(openedMs DESC);
@@ -331,6 +337,62 @@ void Transaction::commit() {
     done_ = true;
 }
 
+namespace {
+
+bool isMark(gunichar c) {
+    const GUnicodeType t = g_unichar_type(c);
+    return t == G_UNICODE_NON_SPACING_MARK || t == G_UNICODE_SPACING_MARK || t == G_UNICODE_ENCLOSING_MARK;
+}
+
+// Case and accents folded away: "Über" -> "uber", "Ёлка" -> "елка".
+std::string folded(const char* text) {
+    gchar* nfd = g_utf8_normalize(text, -1, G_NORMALIZE_NFD);
+    if (!nfd) return "";
+    std::string bare;
+    for (const gchar* p = nfd; *p; p = g_utf8_next_char(p)) {
+        const gunichar c = g_utf8_get_char(p);
+        if (isMark(c)) continue;
+        char buf[6];
+        bare.append(buf, static_cast<size_t>(g_unichar_to_utf8(c, buf)));
+    }
+    g_free(nfd);
+    gchar* f = g_utf8_casefold(bare.c_str(), -1);
+    std::string out = f ? f : "";
+    g_free(f);
+    return out;
+}
+
+// "1A", "2Ж" or "3#": the letter a title or name is filed under.
+std::string initialOf(gunichar c) {
+    if (g_unichar_isdigit(c)) return "3#";
+    gunichar u = g_unichar_toupper(c);
+    if (u == 0x0401) u = 0x0415;  // Ё with Е
+    char buf[6];
+    if (u >= 0x0410 && u <= 0x042F) return "2" + std::string(buf, static_cast<size_t>(g_unichar_to_utf8(u, buf)));
+    switch (u) {  // letters without a decomposition
+        case 0x00C6: return "1A";                          // Æ
+        case 0x0152: case 0x00D8: return "1O";             // Œ Ø
+        case 0x0141: return "1L";                          // Ł
+        case 0x0110: case 0x00D0: return "1D";             // Đ Ð
+        case 0x1E9E: case 0x00DF: return "1S";             // ẞ ß
+        default: break;
+    }
+    gunichar parts[G_UNICHAR_MAX_DECOMPOSITION_LENGTH];
+    if (g_unichar_fully_decompose(u, FALSE, parts, G_UNICHAR_MAX_DECOMPOSITION_LENGTH) > 0) u = g_unichar_toupper(parts[0]);
+    if (u >= 'A' && u <= 'Z') return std::string("1") + static_cast<char>(u);
+    return "3#";
+}
+
+}  // namespace
+
+std::string listSortKey(const std::string& text) {
+    if (!g_utf8_validate(text.c_str(), static_cast<gssize>(text.size()), nullptr)) return "3#\x1f";
+    const char* p = text.c_str();
+    while (*p && !g_unichar_isalnum(g_utf8_get_char(p))) p = g_utf8_next_char(p);  // quotes, brackets, spaces
+    if (!*p) return "3#\x1f" + folded(text.c_str());
+    return initialOf(g_utf8_get_char(p)) + "\x1f" + folded(p);
+}
+
 Library::Library(Db& db) : db_(db) { guarded([&] { migrate(); }); }
 
 template <class F> auto Library::guarded(F&& f) -> decltype(f()) {
@@ -350,8 +412,8 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 7) {
-            // Versions 2 to 7 may hold unsent Kindle work, so they are extended in place, never rebuilt.
+        if (version >= 2 && version <= 8) {
+            // Versions 2 to 8 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
                     "ALTER TABLE annotations ADD COLUMN deletedHere INTEGER NOT NULL DEFAULT 0;"
@@ -386,6 +448,30 @@ void Library::migrate() {
                 db_.exec("INSERT INTO note_fts(rowid, text, comment, tags) SELECT rowid, text, comment, tags FROM annotations;");
             }
             db_.exec(kPluginChanges);  // version 8: plugin changes
+            auto hasColumn = [&](const char* column) {
+                Stmt st = db_.prepare("SELECT 1 FROM pragma_table_info('items') WHERE name = ?");
+                st.bind(1, std::string(column));
+                return st.step();
+            };
+            if (has("items") && version < 9) {  // version 9: sort keys for Title and Author, with their sections
+                for (const char* column : {"titleKey", "authorKey"})
+                    if (!hasColumn(column))
+                        db_.exec(std::string("ALTER TABLE items ADD COLUMN ") + column + " TEXT NOT NULL DEFAULT '';");
+                db_.exec("CREATE INDEX IF NOT EXISTS items_titlekey ON items(parentKey, titleKey);"
+                         "CREATE INDEX IF NOT EXISTS items_authorkey ON items(parentKey, authorKey, titleKey);"
+                         "DROP INDEX IF EXISTS items_year;"
+                         "CREATE INDEX items_year ON items(parentKey, year DESC, titleKey);");
+                std::vector<std::array<std::string, 3>> keys;
+                {
+                    Stmt st = db_.prepare("SELECT key, title, sortCreator FROM items");
+                    while (st.step()) keys.push_back({st.text(0), listSortKey(st.text(1)), listSortKey(st.text(2))});
+                }
+                Stmt set = db_.prepare("UPDATE items SET titleKey = ?, authorKey = ? WHERE key = ?");
+                for (const auto& k : keys) {
+                    set.bind(1, k[1]).bind(2, k[2]).bind(3, k[0]).step();
+                    set.reset();
+                }
+            }
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -463,14 +549,14 @@ void Library::upsertItem(const ItemRecord& r) {
         }
         Stmt st = db_.prepare(
             "INSERT INTO items (key, version, itemType, title, date, publication, parentKey, creators, collections, "
-            "tags, dateAdded, dateModified, json, creatorsText, tagsText, year, sortCreator) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "tags, dateAdded, dateModified, json, creatorsText, tagsText, year, sortCreator, titleKey, authorKey) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET version=excluded.version, itemType=excluded.itemType, "
             "title=excluded.title, date=excluded.date, publication=excluded.publication, parentKey=excluded.parentKey, "
             "creators=excluded.creators, collections=excluded.collections, tags=excluded.tags, "
             "dateAdded=excluded.dateAdded, dateModified=excluded.dateModified, json=excluded.json, "
             "creatorsText=excluded.creatorsText, tagsText=excluded.tagsText, year=excluded.year, "
-            "sortCreator=excluded.sortCreator");
+            "sortCreator=excluded.sortCreator, titleKey=excluded.titleKey, authorKey=excluded.authorKey");
         st.bind(1, r.key).bind(2, r.version).bind(3, r.itemType).bind(4, r.title).bind(5, r.date);
         st.bind(6, r.publication).bind(7, r.parentKey).bind(8, creators.dump());
         // Pending plugin changes on it are applied again below, to Zotero's lists (kept in its json).
@@ -483,7 +569,7 @@ void Library::upsertItem(const ItemRecord& r) {
         std::string sortCreator = r.sortCreator;
         if (sortCreator.empty() && !r.creators.empty())
             sortCreator = r.creators[0].last.empty() ? r.creators[0].name : r.creators[0].last;
-        st.bind(16, r.year).bind(17, sortCreator);
+        st.bind(16, r.year).bind(17, sortCreator).bind(18, listSortKey(r.title)).bind(19, listSortKey(sortCreator));
         st.step();
         Stmt clear = db_.prepare("DELETE FROM item_collections WHERE itemKey = ?");
         clear.bind(1, r.key).step();
@@ -972,17 +1058,22 @@ struct Where {
 
 Where whereOf(const ListQuery& q, const std::string& readTag) {
     Where w{" WHERE i.parentKey = ''" + notTrashed("i.key"), {}};
-    switch (q.filter) {
-        case Filter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
-        case Filter::Pdf: w.sql += " AND i.readableType = 'PDF'"; break;
-        case Filter::Unread:  // not read: as isReadNow()
-            w.sql += " AND NOT coalesce((SELECT r.read FROM read_marks r WHERE r.itemKey = i.key AND r.tag = ?), "
-                     "EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?))";
-            w.args.push_back(readTag);
-            w.args.push_back(readTag);
-            break;
-        case Filter::All: break;
+    switch (q.type) {
+        case TypeFilter::WithFile: w.sql += " AND i.readableType != ''"; break;
+        case TypeFilter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
+        case TypeFilter::Pdf: w.sql += " AND i.readableType = 'PDF'"; break;
+        case TypeFilter::Any: break;
     }
+    if (q.read != ReadFilter::Any) {  // as isReadNow()
+        w.sql += std::string(q.read == ReadFilter::Unread ? " AND NOT" : " AND") +
+                 " coalesce((SELECT r.read FROM read_marks r WHERE r.itemKey = i.key AND r.tag = ?), "
+                 "EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?))";
+        w.args.push_back(readTag);
+        w.args.push_back(readTag);
+    }
+    if (q.downloaded)
+        w.sql += " AND i.readableKey IN (SELECT key FROM attachments WHERE state = " +
+                 std::to_string(static_cast<int>(AttachmentRecord::State::Local)) + ")";
     if (!q.tag.empty()) {
         w.sql += " AND EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?)";
         w.args.push_back(q.tag);
@@ -996,12 +1087,24 @@ Where whereOf(const ListQuery& q, const std::string& readTag) {
 
 const char* orderOf(SortBy s) {
     switch (s) {
-        case SortBy::Title: return " ORDER BY i.title COLLATE NOCASE, i.key";
-        case SortBy::Author: return " ORDER BY i.sortCreator COLLATE NOCASE, i.title COLLATE NOCASE, i.key";
-        case SortBy::Year: return " ORDER BY i.year DESC, i.title COLLATE NOCASE, i.key";
-        case SortBy::Recent: break;
+        case SortBy::Title: return " ORDER BY i.titleKey, i.key";
+        case SortBy::Author: return " ORDER BY i.authorKey, i.titleKey, i.key";
+        case SortBy::Year: return " ORDER BY i.year DESC, i.titleKey, i.key";
+        case SortBy::Recent: case SortBy::Added: break;
     }
     return " ORDER BY i.dateAdded DESC, i.key";
+}
+
+// What sectionCounts() groups by, in orderOf()'s order; "" when the sort has no sections.
+std::string sectionOf(SortBy s) {
+    switch (s) {
+        case SortBy::Title: return "substr(i.titleKey, 1, 2) ORDER BY 1";
+        case SortBy::Author: return "substr(i.authorKey, 1, 2) ORDER BY 1";
+        case SortBy::Year: return "i.year ORDER BY 1 DESC";
+        case SortBy::Added: return "substr(i.dateAdded, 1, 7) ORDER BY 1 DESC";
+        case SortBy::Recent: break;
+    }
+    return "";
 }
 
 }  // namespace
@@ -1037,6 +1140,21 @@ int64_t Library::countRows(const ListQuery& q) {
         for (const auto& a : w.args) st.bind(n++, a);
         st.step();
         return st.integer(0);
+    });
+}
+
+std::vector<SectionCount> Library::sectionCounts(const ListQuery& q) {
+    const std::string by = sectionOf(q.sort);
+    if (by.empty()) return {};
+    return guarded([&] {
+        Where w = whereOf(q, readTag());
+        const std::string group = by.substr(0, by.find(" ORDER BY"));
+        Stmt st = db_.prepare("SELECT " + group + ", count(*) FROM items i" + w.sql + " GROUP BY 1" + by.substr(group.size()));
+        int n = 1;
+        for (const auto& a : w.args) st.bind(n++, a);
+        std::vector<SectionCount> out;
+        while (st.step()) out.push_back({st.text(0), st.integer(1)});
+        return out;
     });
 }
 

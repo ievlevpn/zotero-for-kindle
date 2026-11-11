@@ -7,6 +7,7 @@
 #include "fake_plugins.h"
 #include "fixture_library.h"
 #include "golden.h"
+#include "library_nav_fit.h"
 #include "screens/collections.h"
 #include "screens/home.h"
 #include "screens/library.h"
@@ -279,4 +280,12 @@ TEST_CASE("scribe goldens: the reader's overlays") {
     REQUIRE(rig.waitFor([&] { return rig.reader->annotationBar() != nullptr; }));
     rig.reader->draw(c);
     checkGolden(c, "tests/golden/annotation-bar-scribe.png");
+}
+
+TEST_CASE("scribe layout: the Library's header, Filter, Sort and jump sheets fit") {
+    Rig rig;
+    ScopedMetrics s(kScribe);
+    LibraryScreen library(nullptr);
+    library.onShow(rig.nav);
+    checkLibraryNavFits(library);
 }
