@@ -1,6 +1,7 @@
 #pragma once
-// Collections tab: the top-level collections; a collection shows its subcollections first,
-// then its items, one page at a time.
+// Collections tab: the pinned collections, then the top-level ones by name; a collection shows its
+// subcollections first, then its items by title, one page at a time. The page pill ("2 / 5 ›")
+// opens the jump sheet: the initials of the names (and of the items' titles), as the Library's.
 
 #include <functional>
 #include <map>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "screens/library_sheets.h"
 #include "screens/screen.h"
 #include "ui/pager.h"
 
@@ -52,12 +54,19 @@ public:
     static Rect pinButtonRect() { return PinSheet::buttonRect(); }
     static Rect keepButtonRect() { return PinSheet::keepButtonRect(); }
     std::string rowNote(size_t i) const;  // the second line of this page's row i
+    const Pager& pager() const { return pager_; }
+    const JumpSheet* jumpSheet() const { return jump_ ? &*jump_ : nullptr; }
+    static Rect footerRect();  // the page pill: opens the jump sheet
+    static Rect sheetArea();   // what the jump sheet covers
 
 private:
     void load(Library&);
     void loadKept(Nav&);
     void showPage();
     std::optional<PinSheet> sheet_;
+    std::optional<JumpSheet> jump_;
+    std::vector<ListSection> sections_;  // the initials of the collections after the pinned ones
+    std::vector<int64_t> starts_;        // each section's first entry in all_
     std::map<std::string, KeptStatus> kept_;  // kept collections catching up (as the sync last said)
     std::function<void(const ItemRow&)> openItem_;
     StatusFn status_;
@@ -84,6 +93,10 @@ public:
     static Rect backRect();
     static Rect searchRect();  // the header's search icon: search in this collection
     Rect lineRect(size_t i) const { return lineRects().at(i); }
+    const Pager& pager() const { return pager_; }
+    const JumpSheet* jumpSheet() const { return jump_ ? &*jump_ : nullptr; }
+    static Rect footerRect() { return CollectionsScreen::footerRect(); }
+    static Rect sheetArea() { return CollectionsScreen::sheetArea(); }
     std::optional<std::string> pinSheetLabel() const { return sheet_ ? std::optional(sheet_->label()) : std::nullopt; }
     std::optional<std::string> keepSheetLabel() const { return sheet_ ? std::optional(sheet_->keepLabel()) : std::nullopt; }
     static Rect pinButtonRect() { return PinSheet::buttonRect(); }
@@ -93,7 +106,11 @@ private:
     void load(Library&);
     void loadKept(Nav&);
     std::vector<Rect> lineRects() const;
+    std::vector<JumpGroup> jumpIndex() const;
     std::optional<PinSheet> sheet_;
+    std::optional<JumpSheet> jump_;
+    std::vector<ListSection> subSections_, itemSections_;
+    std::vector<int64_t> starts_;  // each section's first line: the subcollections', then the items'
     std::map<std::string, KeptStatus> kept_;
 
     CollectionEntry entry_;

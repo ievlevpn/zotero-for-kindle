@@ -8,6 +8,7 @@
 #include <functional>
 #include <optional>
 
+#include "screens/library_sheets.h"
 #include "screens/screen.h"
 #include "ui/pager.h"
 #include "ui/text_field.h"
@@ -44,6 +45,10 @@ public:
     std::vector<Rect> lineRects() const;
     bool confirmingDiscard() const { return !discardKey_.empty(); }
     static Rect confirmRect(int i);  // 0 Discard, 1 Cancel
+    const Pager& pager() const { return pager_; }
+    const JumpSheet* jumpSheet() const { return jump_ ? &*jump_ : nullptr; }
+    Rect footerRect() const;  // the page pill (not while searching): First page and Go to page
+    Rect sheetArea() const;
 
 private:
     void load(Library&);
@@ -51,6 +56,7 @@ private:
     int perPage() const;
     void search(Nav&);
     std::vector<Line> lines_;
+    std::optional<JumpSheet> jump_;
     Pager pager_{0, 1};
     bool allOffline_ = false;
     std::string discardKey_;

@@ -7,6 +7,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "screens/goto_page.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -488,6 +489,49 @@ JumpSheet::Action JumpSheet::onGesture(const Gesture& g, Rect area) {
         }
     }
     return Action::None;
+}
+
+void jumpSheetGesture(std::optional<JumpSheet>& sheet, const Gesture& g, Rect area, Nav& nav, int page, int pages,
+                      const std::function<int(size_t)>& sectionPage, const std::function<void(int)>& go) {
+    switch (sheet->onGesture(g, area)) {
+        case JumpSheet::Action::Close:
+            sheet.reset();
+            nav.damage(area, Waveform::Ui);
+            break;
+        case JumpSheet::Action::Changed: nav.damage(sheet->sheetRect(area), Waveform::Ui); break;
+        case JumpSheet::Action::Jump: {
+            const size_t section = sheet->target();
+            sheet.reset();
+            go(sectionPage(section));
+            nav.damage(area, Waveform::Quality);
+            break;
+        }
+        case JumpSheet::Action::FirstPage:
+            sheet.reset();
+            go(0);
+            nav.damage(area, Waveform::Quality);
+            break;
+        case JumpSheet::Action::GoToPage:
+            sheet.reset();
+            nav.push(std::make_unique<GoToPageScreen>(pages, page, go, false));
+            break;
+        case JumpSheet::Action::None: break;
+    }
+}
+
+std::vector<ListSection> nameSections(const std::vector<std::string>& names, std::vector<int64_t>* starts) {
+    std::vector<ListSection> out;
+    if (starts) starts->clear();
+    for (size_t i = 0; i < names.size(); ++i) {
+        const std::string sortKey = listSortKey(names[i]);
+        const std::string key = sortKey.substr(0, sortKey.find('\x1f'));
+        if (out.empty() || out.back().key != key) {
+            out.push_back({key, sectionLabel(SortBy::Title, key), 0});
+            if (starts) starts->push_back(static_cast<int64_t>(i));
+        }
+        ++out.back().count;
+    }
+    return out;
 }
 
 }  // namespace zk
