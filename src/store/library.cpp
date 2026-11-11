@@ -377,8 +377,12 @@ std::string initialOf(gunichar c) {
         case 0x1E9E: case 0x00DF: return "1S";             // ẞ ß
         default: break;
     }
-    gunichar parts[G_UNICHAR_MAX_DECOMPOSITION_LENGTH];
-    if (g_unichar_fully_decompose(u, FALSE, parts, G_UNICHAR_MAX_DECOMPOSITION_LENGTH) > 0) u = g_unichar_toupper(parts[0]);
+    // The base letter of an accented one (É -> E). g_utf8_normalize, not g_unichar_fully_decompose:
+    // the Kindle's GLib predates 2.30.
+    if (char* nfd = g_utf8_normalize(buf, g_unichar_to_utf8(u, buf), G_NORMALIZE_NFD)) {
+        u = g_unichar_toupper(g_utf8_get_char(nfd));
+        g_free(nfd);
+    }
     if (u >= 'A' && u <= 'Z') return std::string("1") + static_cast<char>(u);
     return "3#";
 }
