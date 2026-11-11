@@ -1,5 +1,5 @@
 project('zotero-kindle', 'c', 'cpp',
-  version : '0.6.5',
+  version : '0.6.6',
   license : 'AGPL-3.0-or-later',
   default_options : ['cpp_std=c++20', 'warning_level=2', 'buildtype=debugoptimized'])
 
