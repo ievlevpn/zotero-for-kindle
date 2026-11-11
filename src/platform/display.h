@@ -47,6 +47,7 @@ public:
     // The system draws the pen's line itself (Scribe wet ink): on while a screen takes handwriting.
     virtual bool systemInk() const { return false; }
     virtual bool setSystemInk(bool /*on*/) { return true; }  // false: not done, ask again
+    virtual void setSystemInkWidth(int /*px*/) {}            // the system's line, as wide as the app's
 };
 
 // Backend chosen at build time (-Dplatform=desktop|kindle).

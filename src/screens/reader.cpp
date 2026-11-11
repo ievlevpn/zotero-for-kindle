@@ -292,6 +292,7 @@ Rect boundsOf(const std::vector<Rect>& rects) {
 
 constexpr const char* kColourKey = "annotationColour";
 constexpr const char* kPenModeKey = "penMode";  // "tap": the pen taps instead of writing
+constexpr const char* kPenWidthKey = "penWidth";  // "0" thin, "1" medium (default), "2" thick
 
 // What the page shows: not conflict copies (they sit over Zotero's version and are resolved in Notes).
 std::vector<AnnotationRecord> pageAnnotations(Library& lib, const std::string& attachmentKey) {
@@ -324,6 +325,8 @@ void ReaderScreen::onShow(Nav& nav) {
     layout_ = loadLayout(nav.library(), row_.key, type_, twoColumnsSetting_);
     if (const std::string c = nav.library().metaValue(kColourKey); !c.empty()) colour_ = c;
     penWrites_ = nav.library().metaValue(kPenModeKey) != "tap";
+    if (const std::string w = nav.library().metaValue(kPenWidthKey); w == "0" || w == "2") penWidth_ = w[0] - '0';
+    nav.setSystemInkWidth(inkWidthPx());
     DocPosition start;
     if (auto st = nav.library().readingState(row_.key)) start.value = st->location;
     // Zotero's reading position: where to open a book never read here, or a question if the
@@ -1059,11 +1062,11 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
         cairo_clip(cr);
         for (const auto& s : inkSaved_)
-            if (s.page == page_) strokePaths(cr, s.paths, kInkWidthPx);
+            if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
         for (const auto& [id, s] : inkSent_)
-            if (s.page == page_) strokePaths(cr, s.paths, kInkWidthPx);
-        strokePaths(cr, inkPending_, kInkWidthPx);
-        if (inkDown_) strokePaths(cr, {inkStroke_}, kInkWidthPx);
+            if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
+        strokePaths(cr, inkPending_, inkWidthPx());
+        if (inkDown_) strokePaths(cr, {inkStroke_}, inkWidthPx());
         cairo_restore(cr);
     }
     if (selection_) drawSelection(canvas, selection_->rects);
@@ -1589,6 +1592,12 @@ bool ReaderScreen::wantsSystemInk() const {
     return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_;
 }
 
+void ReaderScreen::setPenWidth(int i, Nav& nav) {
+    penWidth_ = std::clamp(i, 0, 2);
+    nav.library().setMetaValue(kPenWidthKey, std::to_string(penWidth_));
+    nav.setSystemInkWidth(inkWidthPx());
+}
+
 void ReaderScreen::setPenWrites(bool on, Nav& nav) {
     penWrites_ = on;
     nav.library().setMetaValue(kPenModeKey, on ? "" : "tap");
@@ -1645,7 +1654,7 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
             if (tap) {
                 const Point at = inkStroke_.front();
                 inkStroke_.clear();
-                const int pad = kInkWidthPx + 2;  // the system may have inked the dot
+                const int pad = inkWidthPx() + 2;  // the system may have inked the dot
                 nav.damage({extent.x - pad, extent.y - pad, extent.w + 2 * pad, extent.h + 2 * pad}, Waveform::Ui);
                 onGesture(Gesture{GestureType::Tap, at, at}, nav);
                 return false;
@@ -1700,10 +1709,10 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         inkDown_ = true;
         inkDownMs_ = nav.nowMs();
         inkStroke_ = {p.pos};
-        const Rect r{p.pos.x - kInkWidthPx, p.pos.y - kInkWidthPx, 2 * kInkWidthPx + 1, 2 * kInkWidthPx + 1};
+        const Rect r{p.pos.x - inkWidthPx(), p.pos.y - inkWidthPx(), 2 * inkWidthPx() + 1, 2 * inkWidthPx() + 1};
         if (!nav.systemInk())  // the system's wet ink already shows the line
             nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
-                     [&](cairo_t* cr) { strokePaths(cr, {{p.pos}}, kInkWidthPx); });
+                     [&](cairo_t* cr) { strokePaths(cr, {{p.pos}}, inkWidthPx()); });
         return true;
     }
     // Move.
@@ -1717,17 +1726,17 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     if (std::abs(a.x - b.x) + std::abs(a.y - b.y) < 2) return true;
     inkStroke_.push_back(b);
     if (nav.systemInk()) return true;
-    const int pad = kInkWidthPx + 1;
+    const int pad = inkWidthPx() + 1;
     const Rect r{std::min(a.x, b.x) - pad, std::min(a.y, b.y) - pad, std::abs(a.x - b.x) + 2 * pad + 1,
                  std::abs(a.y - b.y) + 2 * pad + 1};
     nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
-                 [&](cairo_t* cr) { strokePaths(cr, {{a, b}}, kInkWidthPx); });
+                 [&](cairo_t* cr) { strokePaths(cr, {{a, b}}, inkWidthPx()); });
     return true;
 }
 
 void ReaderScreen::commitInk() {
     if (inkPending_.empty() || !worker_ || inkPage_ < 0) return;
-    const uint64_t id = worker_->ink(inkPage_, inkPending_, kInkWidthPx);
+    const uint64_t id = worker_->ink(inkPage_, inkPending_, inkWidthPx());
     inkSent_[id] = SentInk{inkPage_, std::move(inkPending_), false};
     inkPending_.clear();
 }
@@ -1755,7 +1764,7 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     inkSent_.erase(it);
     if (sent.paths.empty()) return;  // all of it erased while it was being placed
     if (sent.erased) {               // placed with strokes since erased: place what is left
-        const uint64_t id = worker_->ink(sent.page, sent.paths, kInkWidthPx);
+        const uint64_t id = worker_->ink(sent.page, sent.paths, inkWidthPx());
         inkSent_[id] = SentInk{sent.page, std::move(sent.paths), false};
         return;
     }
@@ -1791,7 +1800,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
         for (int k = 1; k <= steps; ++k)
             probe.push_back({a.x + (b.x - a.x) * k / steps, a.y + (b.y - a.y) * k / steps});
     }
-    const double radius = kInkWidthPx / 2.0 + 12;
+    const double radius = inkWidthPx() / 2.0 + 12;
     auto near = [&](const std::vector<Point>& p, double r) { return pathNear(p, probe, r); };
     bool changed = false;
 

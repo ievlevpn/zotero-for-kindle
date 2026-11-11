@@ -711,3 +711,20 @@ TEST_CASE("pen ink: a hand put down before the pen came near is a palm (no tap, 
     CHECK(screen->gestures == 1);
 }
 
+TEST_CASE("pen ink: the pen's thickness: the saved ink, the system's line, kept for the next book") {
+    InkRig rig;
+    CHECK(rig.nav.systemInkWidth == ReaderScreen::kInkWidthPx);  // medium by default
+    rig.reader->setPenWidth(2, rig.nav);
+    CHECK(rig.nav.systemInkWidth == 11);
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    CHECK(nlohmann::json::parse(rig.inks()[0].position)["width"] == 11);
+    auto other = std::make_unique<ReaderScreen>(rig.row, "book.pdf", DocType::Pdf, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::make_unique<FakeEngine>(); });
+    }, 6);
+    rig.nav.systemInkWidth = 0;
+    other->onShow(rig.nav);
+    CHECK(other->penWidth() == 2);
+    CHECK(rig.nav.systemInkWidth == 11);
+}

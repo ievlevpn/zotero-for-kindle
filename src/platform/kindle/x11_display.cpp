@@ -166,6 +166,10 @@ public:
 
     bool repaintsOnForeground() const override { return true; }  // Expose: from the backing store
     bool systemInk() const override { return wet_ && wet_->connected(); }
+    // The handler's 3.5 (its notebook's default pen) draws about the app's 7 px line.
+    void setSystemInkWidth(int px) override {
+        if (wet_) wet_->setThickness(px / 2.0f);
+    }
     bool setSystemInk(bool on) override {
         return !wet_ || wet_->setMode(on ? WetInk::Mode::Pen : WetInk::Mode::Paused);
     }

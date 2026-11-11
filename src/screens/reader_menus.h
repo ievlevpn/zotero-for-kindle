@@ -59,7 +59,8 @@ public:
     static Rect pdfViewRect(int i);  // PDF, same row: 0 the Page, 1 Trim its margins, 2 Columns
     static Rect spacingRect(int i);  // 100, 120, 140 %
     static Rect orientationRect(int i);  // 0 Portrait, 1 Landscape, 2 Two columns (EPUB in landscape)
-    static Rect penRect(int i);          // PDF once a pen was used: 0 Write, 1 Tap
+    static Rect penRect(int i);
+    static Rect penWidthRect(int i);     // PDF once a pen was used: 0 Thin, 1 Medium, 2 Thick          // PDF once a pen was used: 0 Write, 1 Tap
 
     bool displayOpen() const { return displayOpen_; }
     bool showsTextOptions() const;
