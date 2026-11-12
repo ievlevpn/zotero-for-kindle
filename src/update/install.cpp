@@ -275,8 +275,11 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) {
     }
     // Everything an update leaves in update/ and beside the account. The state goes first: without it
     // the launcher never rolls back, so a clean-up cut short is finished at a later start.
+    // FAT orders nothing by itself: the state's removal reaches the disk before old/ starts going, or a
+    // power cut could leave a "tried" state over a half-deleted backup for the launcher to restore.
     auto clearAll = [&] {
         fs::remove(update / "state", ec);
+        ::sync();
         for (const char* leftover : {"state.tmp", "old", "new", "trash", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
             fs::remove_all(update / leftover, ec);
         if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
