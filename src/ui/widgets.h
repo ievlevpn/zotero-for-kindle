@@ -59,6 +59,7 @@ constexpr int kNoteRowH = 220;
 // conflictButtons: only where a screen handles Re-apply · Discard (the Notes tab).
 void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&, bool conflictButtons = false);
 std::string noteSyncMark(const AnnotationRecord&);  // "" when it is simply in Zotero
+std::string noteRowTags(const AnnotationRecord&);   // "#method · #to-cite" ("" without tags)
 std::string noteRowLabel(const AnnotationRecord&);  // "Area · p. 12", a sticky note "Note · p. 12"; else ""
 Rect noteRowButtonRect(Rect row, int i);            // a conflict's 0 Re-apply, 1 Discard
 

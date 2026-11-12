@@ -4,6 +4,7 @@
 
 #include "screens/book.h"
 #include "screens/collections.h"
+#include "screens/read_tag.h"
 #include "screens/search.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -19,16 +20,33 @@ namespace {
 
 int W() { return metrics().width; }
 int H() { return metrics().height; }
-constexpr int kGroupH = 70;
+constexpr int kGroupH = 70, kLineH = 60, kTagButtonW = 160, kClearW = 160;
 Rect confirmBox() { return {kMargin, 560, W() - 2 * kMargin, 300}; }
 
 }  // namespace
 
 Rect NotesScreen::searchRect() { return CollectionsScreen::searchRect(); }
+Rect NotesScreen::tagButtonRect() { return {searchRect().x - 20 - kTagButtonW, 22, kTagButtonW, 80}; }
+Rect NotesScreen::filterLineRect() { return {kMargin, kHeaderH, W() - 2 * kMargin, kLineH}; }
+Rect NotesScreen::clearRect() { return {W() - kMargin - kClearW, kHeaderH, kClearW, kLineH}; }
 
 Rect NotesScreen::contentArea() const {
     const int bottom = bottom_ > 0 ? bottom_ : H() - kTabBarH;
-    return {0, kHeaderH, W(), bottom - kHeaderH};
+    const int top = kHeaderH + (tag_.empty() ? 0 : kLineH);
+    return {0, top, W(), bottom - top};
+}
+
+std::string NotesScreen::filterLine() const {
+    const int64_t n = pager_.total();
+    return "tag: " + tag_ + " · " + withThousands(n) + (n == 1 ? " note" : " notes");
+}
+
+void NotesScreen::setTag(const std::string& tag, Nav& nav) {
+    tag_ = tag;
+    jump_.reset();
+    pager_ = Pager(0, 1);  // from the first page
+    load(nav.library());
+    nav.damage({0, kHeaderH, W(), H() - kHeaderH - (searching_ ? 0 : kTabBarH)}, Waveform::Quality);
 }
 
 // Notes per page: as many as fit if each comes from a different book (its own header): 4 on the PW5.
@@ -50,11 +68,11 @@ void NotesScreen::load(Library& lib) {
         pager_ = Pager(0, perPage());
         return;
     }
-    pager_ = Pager(lib.countAnnotations(query_), perPage());
+    pager_ = Pager(lib.countAnnotations(query_, tag_), perPage());
     while (pager_.offset() < offset && pager_.next()) {
     }
     std::string current;
-    for (auto& n : lib.recentAnnotations(static_cast<int>(pager_.offset()), perPage(), query_)) {
+    for (auto& n : lib.recentAnnotations(static_cast<int>(pager_.offset()), perPage(), query_, tag_)) {
         if (n.itemKey != current) {
             current = n.itemKey;
             lines_.push_back({true, n.itemKey, n.itemTitle, {}});
@@ -126,15 +144,23 @@ void NotesScreen::draw(Canvas& canvas) {
         centredText(cr, empty ? "Search your highlights…" : field_.text() + "|",
                     {kSans, 9, 400, false, empty ? kTertiary : kInk}, {f.x + 96, f.y, f.w - 120, f.h}, Align::Left);
     } else {
-        drawHeader(cr, "Notes", false, searchRect().w + 20);
+        drawHeader(cr, "Notes", false, searchRect().w + kTagButtonW + 40);
         const Rect s = searchRect();
         searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
+        drawButton(cr, tagButtonRect(), "Tag", !tag_.empty());
+    }
+    if (!tag_.empty()) {
+        const Rect line = filterLineRect();
+        centredText(cr, filterLine(), {kSans, 7.5, 400, false, kSecondary}, {line.x, line.y, line.w - kClearW - 20, line.h},
+                    Align::Left);
+        centredText(cr, "Clear", {kSans, 7.5, 700, false, kInk}, clearRect(), Align::Right);
     }
     if (lines_.empty()) {
         if (searching_ && query_.empty()) return;
         const std::string onDemand = "Only books you've opened on the Kindle are searched. To search all highlights, "
                                      "turn on Keep all highlights offline in Settings.";
         const std::string msg = searching_ ? "Nothing found for “" + query_ + "”." + (allOffline_ ? "" : "\n" + onDemand)
+                                : !tag_.empty() ? "No highlights or notes with this tag."
                                 : allOffline_ ? "No highlights yet."
                                               : "Highlights appear here for books you've opened on the Kindle. To see all "
                                                 "of them, turn on Keep all highlights offline in Settings.";
@@ -199,6 +225,13 @@ void NotesScreen::onGesture(const Gesture& g, Nav& nav) {
         nav.push(std::make_unique<NotesScreen>(open_, true));
         return;
     }
+    if (!searching_ && discardKey_.empty() && tagButtonRect().contains(g.pos)) {
+        Nav* n = &nav;
+        nav.push(std::make_unique<TagPickerScreen>([this, n](const std::string& tag) { setTag(tag, *n); },
+                                                   annotationTagFilter("")));
+        return;
+    }
+    if (!tag_.empty() && discardKey_.empty() && clearRect().contains(g.pos)) return setTag("", nav);
     if (!searching_ && discardKey_.empty() && footerRect().contains(g.pos)) {
         if (pager_.pages() > 1) {
             jump_.emplace(std::vector<JumpGroup>{}, pager_.page(), pager_.pages());

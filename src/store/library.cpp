@@ -1244,6 +1244,33 @@ void Library::clearRecentSearches() {
     guarded([&] { setMeta("recentSearches", "[]"); });
 }
 
+std::vector<std::string> Library::recentAnnotationTags() {
+    return guarded([&] { return strings(meta("recentAnnotationTags")); });
+}
+
+void Library::rememberAnnotationTag(const std::string& tag) {
+    if (tag.empty()) return;
+    guarded([&] {
+        std::vector<std::string> list = strings(meta("recentAnnotationTags"));
+        list.erase(std::remove(list.begin(), list.end(), tag), list.end());
+        list.insert(list.begin(), tag);
+        if (list.size() > kRecentAnnotationTags) list.resize(kRecentAnnotationTags);
+        setMeta("recentAnnotationTags", json(list).dump());
+    });
+}
+
+std::vector<std::pair<std::string, int64_t>> Library::annotationTags(const std::string& attachmentKey) {
+    return guarded([&] {
+        Stmt st = db_.prepare(std::string("SELECT t.value, count(*) FROM annotations n, json_each(n.tags) t "
+                                          "WHERE n.deletedHere = 0") +
+                              (attachmentKey.empty() ? "" : " AND n.parentKey = ?") + " GROUP BY t.value ORDER BY 2 DESC, 1");
+        if (!attachmentKey.empty()) st.bind(1, attachmentKey);
+        std::vector<std::pair<std::string, int64_t>> out;
+        while (st.step()) out.emplace_back(st.text(0), st.integer(1));
+        return out;
+    });
+}
+
 std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
     return guarded([&]() -> std::optional<ItemRow> {
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + " WHERE i.key = ?" +
@@ -1640,7 +1667,7 @@ std::vector<ItemRow> Library::recentlyOpened(int limit) {
     return rows;
 }
 
-std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std::string& query) {
+std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std::string& query, const std::string& tag) {
     const std::string fts = ftsQuery(query);
     if (!query.empty() && fts.empty()) return {};
     return guarded([&] {
@@ -1654,12 +1681,14 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std
                               "LEFT JOIN attachments a ON a.key = n.parentKey "
                               "LEFT JOIN items i ON i.key = CASE WHEN a.parentKey = '' THEN a.key ELSE a.parentKey END "
                               "WHERE n.deletedHere = 0" +
+                              (tag.empty() ? std::string() : std::string(" AND EXISTS (SELECT 1 FROM json_each(n.tags) WHERE value = ?4)")) +
                               (fts.empty() ? std::string(" ORDER BY n.dateModified DESC, n.key")
                                            : std::string(" AND n.rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?3) "
                                                          "ORDER BY i.title COLLATE NOCASE, i.key, n.parentKey, n.sortIndex, n.key")) +
                               " LIMIT ?1 OFFSET ?2");
         st.bind(1, int64_t{limit}).bind(2, int64_t{offset});
         if (!fts.empty()) st.bind(3, fts);
+        if (!tag.empty()) st.bind(4, tag);
         std::vector<NoteRow> out;
         while (st.step()) {
             NoteRow row;
@@ -1672,13 +1701,15 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std
     });
 }
 
-int64_t Library::countAnnotations(const std::string& query) {
+int64_t Library::countAnnotations(const std::string& query, const std::string& tag) {
     const std::string fts = ftsQuery(query);
     if (!query.empty() && fts.empty()) return 0;
     return guarded([&] {
-        Stmt st = db_.prepare(std::string("SELECT count(*) FROM annotations WHERE deletedHere = 0") +
-                              (fts.empty() ? "" : " AND rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?)"));
+        Stmt st = db_.prepare(std::string("SELECT count(*) FROM annotations n WHERE deletedHere = 0") +
+                              (fts.empty() ? "" : " AND rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?1)") +
+                              (tag.empty() ? "" : " AND EXISTS (SELECT 1 FROM json_each(n.tags) WHERE value = ?2)"));
         if (!fts.empty()) st.bind(1, fts);
+        if (!tag.empty()) st.bind(2, tag);
         st.step();
         return st.integer(0);
     });

@@ -13,17 +13,18 @@ namespace zk {
 using namespace theme;
 
 namespace {
-constexpr int kPad = 40, kTextTop = 100, kGap = 30, kButtonH = 90, kBottom = 36, kButtonGap = 24, kNear = 24;
+constexpr int kPad = 40, kTextTop = 100, kGap = 30, kButtonH = 90, kBottom = 36, kButtonGap = 24, kNear = 24, kTagGap = 20;
 const TextStyle kBody{kSerif, 9, 400};
 const char* kLabels[] = {"Edit", "Delete", "Close"};
 
 std::string bodyOf(const AnnotationRecord& a) { return a.comment.empty() ? " " : a.comment; }
 }  // namespace
 
-NotePopup::NotePopup(AnnotationRecord note, Rect icon, Rect area) : note_(std::move(note)), icon_(icon), area_(area) {
+NotePopup::NotePopup(AnnotationRecord note, Rect icon, Rect area, std::vector<std::string> chips)
+    : note_(std::move(note)), icon_(icon), area_(area), tags_(std::move(chips), note_.tags) {
     const int w = std::min(area.w - kMargin, 900);
     tops_ = lineTops(bodyOf(note_), kBody, w - 2 * kPad);
-    const int chrome = kTextTop + kGap + kButtonH + kBottom;
+    const int chrome = kTextTop + kGap + TagRow::kH + kTagGap + kButtonH + kBottom;
     const int lineH = tops_.size() > 1 ? tops_[1] : 50;
     const int room = std::max(lineH, area.h * 11 / 20 - chrome);
     starts_.assign(1, 0);
@@ -36,6 +37,7 @@ NotePopup::NotePopup(AnnotationRecord note, Rect icon, Rect area) : note_(std::m
     if (y + h > area.y + area.h - kMargin / 2) y = icon.y - kNear - h;
     y = std::clamp(y, area.y + kMargin / 2, std::max(area.y + kMargin / 2, area.y + area.h - kMargin / 2 - h));
     rect_ = {x, y, w, h};
+    tags_.place({x + kPad, y + h - kBottom - kButtonH - kTagGap - TagRow::kH, w - 2 * kPad, TagRow::kH});
 }
 
 std::string NotePopup::title() const {
@@ -65,8 +67,9 @@ void NotePopup::draw(cairo_t* cr) const {
         drawText(cr, "Empty note", {kSerif, 9, 400, true, kTertiary}, {r.x + kPad, r.y + kTextTop, r.w - 2 * kPad, 60}, 1);
     else
         drawTextLines(cr, note_.comment, kBody,
-                      {r.x + kPad, r.y + kTextTop, r.w - 2 * kPad, r.h - kTextTop - kGap - kButtonH - kBottom}, first,
+                      {r.x + kPad, r.y + kTextTop, r.w - 2 * kPad, r.h - kTextTop - kGap - TagRow::kH - kTagGap - kButtonH - kBottom}, first,
                       end - first);
+    tags_.draw(cr);
     for (int i = 0; i < 3; ++i) drawButton(cr, buttonRect(i), kLabels[i], i == 0);
 }
 
@@ -80,6 +83,11 @@ NotePopup::Action NotePopup::onGesture(const Gesture& g, Nav& nav) {
         return Action::None;
     }
     if (g.type != GestureType::Tap) return Action::None;
+    if (const int t = tags_.hit(g.pos); t == TagRow::kAdd) return Action::AddTag;
+    else if (t >= 0) {
+        chip_ = t;
+        return Action::Tag;
+    }
     if (buttonRect(0).contains(g.pos)) return Action::Edit;
     if (buttonRect(1).contains(g.pos)) return Action::Delete;
     if (buttonRect(2).contains(g.pos) || !rect_.contains(g.pos)) return Action::Close;

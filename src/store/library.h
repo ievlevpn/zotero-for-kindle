@@ -260,6 +260,14 @@ public:
     std::vector<std::string> recentSearches();
     void rememberSearch(const std::string& query);  // moves it to the front if it was there
     void clearRecentSearches();
+    // The tags put on annotations on this Kindle, most recent first (kRecentAnnotationTags at
+    // most; kept here only). The annotation bar's chips are the first four.
+    static constexpr size_t kRecentAnnotationTags = 12;
+    std::vector<std::string> recentAnnotationTags();
+    void rememberAnnotationTag(const std::string& tag);  // moves it to the front if it was there
+    // The tags on annotations (not deleted here), most used first, with how many carry each;
+    // attachmentKey: only that file's.
+    std::vector<std::pair<std::string, int64_t>> annotationTags(const std::string& attachmentKey = "");
     std::optional<ItemRow> rowFor(const std::string& itemKey);
     // The row opening that readable file of the item (exactFile); the item's own row if it has no such file.
     std::optional<ItemRow> rowFor(const std::string& itemKey, const std::string& attachmentKey);
@@ -320,9 +328,9 @@ public:
     // Items whose books were opened on the Kindle, last opened first.
     std::vector<ItemRow> recentlyOpened(int limit);
     // Highlights and notes, newest first; with a query (as search()'s, over their text, comment and
-    // tags) only those that match, grouped by item and in book order.
-    std::vector<NoteRow> recentAnnotations(int offset, int limit, const std::string& query = "");
-    int64_t countAnnotations(const std::string& query = "");
+    // tags) only those that match, grouped by item and in book order. tag: only those with that tag.
+    std::vector<NoteRow> recentAnnotations(int offset, int limit, const std::string& query = "", const std::string& tag = "");
+    int64_t countAnnotations(const std::string& query = "", const std::string& tag = "");
     void markOpened(const std::string& itemKey, const std::string& attachmentKey, int64_t nowMs);
     std::optional<ReadingState> lastOpened();
     std::optional<ReadingState> readingState(const std::string& itemKey);

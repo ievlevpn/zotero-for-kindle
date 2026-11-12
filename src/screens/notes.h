@@ -4,6 +4,8 @@
 // Each note shows its sync state; a conflict has Re-apply and Discard (which asks first).
 // The header's search icon opens the same list searching: a field in place of the title, the
 // highlights and notes whose text, comment or tags match, by book and in book order.
+// The header's Tag (0.7) filters the list by a tag of the annotations (the Library's tag picker);
+// a line under the header then reads "tag: method · 12 notes", with Clear.
 
 #include <functional>
 #include <optional>
@@ -38,6 +40,12 @@ public:
     bool wantsKeyboard() const override { return searching_; }
     bool showsTabBar() const override { return !searching_; }
     static Rect searchRect();  // the tab's search icon
+    static Rect tagButtonRect();  // the tab's Tag (filter)
+    const std::string& tag() const { return tag_; }
+    void setTag(const std::string& tag, Nav&);  // "" none
+    std::string filterLine() const;  // "tag: method · 12 notes"
+    static Rect filterLineRect();    // under the header, while a tag filters the list
+    static Rect clearRect();
     bool searching() const { return searching_; }
     const std::string& query() const { return query_; }
 
@@ -64,6 +72,7 @@ private:
     bool searching_ = false;
     TextField field_;
     std::string query_;  // what the list shows matches for
+    std::string tag_;    // the Tag filter ("" none)
     bool pending_ = false;
     int64_t lastKeyMs_ = 0;
     int bottom_ = 0;  // the list's bottom: above the tab bar, or the keyboard while searching

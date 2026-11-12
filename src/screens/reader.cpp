@@ -384,6 +384,7 @@ void ReaderScreen::dropSelection() {
     selecting_ = selDragging_ = false;
     selection_.reset();
     bar_.reset();
+    selTags_.clear();
     note_.reset();
     notePlace_.reset();
 }
@@ -836,7 +837,7 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
     for (const auto& h : highlights_)
         if (h.annotationKey == key) anchor = anchor.united(h.rect);
     linkId_ = 0;
-    editor_ = std::make_unique<AnnotationEditor>(*a, anchor);
+    editor_ = std::make_unique<AnnotationEditor>(*a, anchor, recentChips(nav.library()));
     nav.damage(editor_->rect(), Waveform::Ui);
     if (a->type == "image")  // its frame turns to ink while selected
         for (const Rect& r : frameEdges(anchor, 3)) nav.damage(r.intersected(pageArea()), Waveform::Ui);
@@ -920,7 +921,8 @@ void ReaderScreen::showBar(Nav& nav) {
     if (!selection_) return;
     PluginEntries* e = nav.pluginEntries();
     const bool more = e && !e->actions("selectionAction").empty();
-    bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more);
+    bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
+                                           TagRow(selectionChips(nav), selTags_));
     bar_->setWorking(result_ && result_->running());
     nav.damage(bar_->rect(), Waveform::Ui);
 }
@@ -932,6 +934,23 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             colour_ = zoteroColours()[hit.colour].hex;
             bar_->setColour(colour_);
             nav.damage(bar_->rect(), Waveform::Ui);
+            break;
+        case AnnotationBar::Action::Tag: {  // marks the tag for the highlight about to be made
+            const std::string tag = bar_->tags().chips()[static_cast<size_t>(hit.colour)];
+            bar_->toggleTag(tag);
+            selTags_ = bar_->tags().on();
+            nav.damage(bar_->tags().rect(), Waveform::Ui);
+            break;
+        }
+        case AnnotationBar::Action::AddTag:
+            pickAnnotationTag(nav, [this, n = &nav](const std::string& tag) {
+                if (!selection_) return;  // gone meanwhile (the page changed)
+                if (std::find(selTags_.begin(), selTags_.end(), tag) == selTags_.end()) selTags_.push_back(tag);
+                if (bar_) {
+                    bar_->tags().setChips(selectionChips(*n, tag));
+                    bar_->tags().setOn(selTags_);
+                }
+            });
             break;
         case AnnotationBar::Action::Highlight:
             saveSelection("highlight", "", nav);
@@ -984,7 +1003,7 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             bar_->setWorking(true);
             break;
         }
-        case AnnotationBar::Action::Note:
+        case AnnotationBar::Action::Note:  // the tags marked stay for the note's highlight (selTags_)
             nav.damage(bar_->rect(), Waveform::Ui);
             bar_.reset();
             note_.emplace();
@@ -1009,6 +1028,8 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     a.position = selection_->position;
     a.pageLabel = selection_->pageLabel;
     a.localOnly = !selection_->roundTrips;  // §7.5: never upload a place that doesn't round-trip
+    a.tags = selTags_;  // the chips marked on the bar
+    for (auto it = selTags_.rbegin(); it != selTags_.rend(); ++it) nav.library().rememberAnnotationTag(*it);
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", nav.library().createAnnotation(a));
     nav.library().setMetaValue(kColourKey, colour_);
     if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
@@ -1505,7 +1526,7 @@ void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
         return;
     auto saved = nav.library().annotation(key);
     if (!saved) return;
-    editor_ = std::make_unique<AnnotationEditor>(*saved, sent.rect);
+    editor_ = std::make_unique<AnnotationEditor>(*saved, sent.rect, recentChips(nav.library()));
     newAreaKey_ = key;
     nav.damage(editor_->rect(), Waveform::Ui);
 }
@@ -1560,7 +1581,7 @@ bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
     auto a = nav.library().annotation(best->annotationKey);
     if (!a) return false;
     linkId_ = 0;
-    notePopup_ = std::make_unique<NotePopup>(*a, noteIcon(best->rect), pageArea());
+    notePopup_ = std::make_unique<NotePopup>(*a, noteIcon(best->rect), pageArea(), recentChips(nav.library()));
     nav.damage(notePopup_->rect(), Waveform::Ui);
     return true;
 }
@@ -1568,6 +1589,32 @@ bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
 void ReaderScreen::onNotePopup(const Gesture& g, Nav& nav) {
     const NotePopup::Action act = notePopup_->onGesture(g, nav);
     if (act == NotePopup::Action::None) return;
+    if (act == NotePopup::Action::Tag) {  // as the bar's chips: at once, on the note
+        const std::string key = notePopup_->key();
+        const std::string tag = notePopup_->tags().chips()[static_cast<size_t>(notePopup_->tappedChip())];
+        const auto tags = setAnnotationTag(nav, key, tag, !notePopup_->tags().isOn(tag));
+        if (!tags) return closeNotePopup(nav);
+        if (auto now = nav.library().annotation(key)) notePopup_->setNote(*now);
+        notePopup_->tags().setOn(*tags);
+        nav.damage(notePopup_->tags().rect(), Waveform::Ui);
+        nav.sync().pushSoon();
+        return;
+    }
+    if (act == NotePopup::Action::AddTag) {
+        pickAnnotationTag(nav, [this, n = &nav, key = notePopup_->key()](const std::string& tag) {
+            const auto tags = setAnnotationTag(*n, key, tag, true);
+            if (tags) n->sync().pushSoon();
+            if (!notePopup_ || notePopup_->key() != key) return;  // closed meanwhile
+            if (!tags) {
+                notePopup_.reset();
+                return;
+            }
+            if (auto now = n->library().annotation(key)) notePopup_->setNote(*now);
+            notePopup_->tags().setChips(recentChips(n->library()));
+            notePopup_->tags().setOn(*tags);
+        });
+        return;
+    }
     const std::string key = notePopup_->key();
     const Rect icon = notePopup_->icon();
     nav.damage(notePopup_->rect(), Waveform::Quality);  // the page under it, without ghosts
@@ -1578,6 +1625,28 @@ void ReaderScreen::onNotePopup(const Gesture& g, Nav& nav) {
     editor_ = std::make_unique<AnnotationEditor>(*a, icon);
     if (act == NotePopup::Action::Edit) editor_->editComment(nav);
     else editor_->confirmDelete(nav);
+}
+
+void ReaderScreen::closeNotePopup(Nav& nav) {
+    if (!notePopup_) return;
+    nav.damage(notePopup_->rect(), Waveform::Quality);
+    notePopup_.reset();
+}
+
+// A new selection's chips: the recent tags, after any tag marked on it that isn't among them
+// (one + Tag chose), `first` leading.
+std::vector<std::string> ReaderScreen::selectionChips(Nav& nav, const std::string& first) const {
+    std::vector<std::string> out;
+    auto add = [&](const std::string& t) {
+        if (!t.empty() && std::find(out.begin(), out.end(), t) == out.end()) out.push_back(t);
+    };
+    add(first);
+    const std::vector<std::string> recent = nav.library().recentAnnotationTags();
+    for (const auto& t : selTags_)
+        if (std::find(recent.begin(), recent.end(), t) == recent.end()) add(t);
+    for (const auto& t : recent) add(t);
+    if (out.size() > TagRow::kChips) out.resize(TagRow::kChips);
+    return out;
 }
 
 // --- Handwriting -----------------------------------------------------------------------------

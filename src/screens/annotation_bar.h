@@ -1,13 +1,18 @@
 #pragma once
 // The bar over a selection or a tapped highlight (spec §6.3 state 3): Zotero's 8 colours as
-// gray dots with their names, then Highlight · Underline · Note (new) or Comment · Delete
-// (existing). Picking a colour only selects it; the buttons commit.
+// gray dots with their names, the tag row (0.7: the four tags put on annotations most recently
+// as chips, then + Tag), then Highlight · Underline · Note (new) or Comment · Delete (existing).
+// Picking a colour only selects it; the buttons commit. On a new selection a chip only marks the
+// tag for the highlight about to be made; on an existing annotation it adds or removes it at once.
 //
 // When some plugin has selection actions, the Create bar has a fourth button, More…: it turns
 // the bar into a short list of those actions (title, the plugin's name dimmed beside it). While
 // one runs, More… reads "Working…".
 
 #include <array>
+#include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,18 +31,61 @@ struct ZoteroColour {
 };
 const std::array<ZoteroColour, 8>& zoteroColours();
 
+class Library;
+class Nav;
+
+// The tag row (the annotation bar's, the sticky note pop-up's): a chip per recent tag (filled:
+// the annotation has it), then + Tag. Chips are at least 9 mm tall; each is as wide as its tag,
+// up to an equal share of the row (a long tag is cut with "…"), so the row fits any Kindle.
+class TagRow {
+public:
+    static constexpr int kChips = 4;
+    static constexpr int kH = 110;  // 9.3 mm
+    static constexpr int kAdd = 1000;  // hit(): + Tag
+
+    TagRow() = default;
+    TagRow(std::vector<std::string> chips, std::vector<std::string> on);
+    void place(Rect row);
+    Rect rect() const { return rect_; }
+    const std::vector<std::string>& chips() const { return chips_; }
+    const std::vector<std::string>& on() const { return on_; }
+    bool isOn(const std::string& tag) const;
+    void setOn(std::vector<std::string> on) { on_ = std::move(on); }
+    // The chips as now (after + Tag chose a tag, which leads them then).
+    void setChips(std::vector<std::string> chips);
+    Rect chipRect(int i) const { return chipRects_[static_cast<size_t>(i)]; }
+    Rect addRect() const { return addRect_; }
+    void draw(cairo_t*) const;
+    int hit(Point) const;  // a chip's index, kAdd, or -1
+
+private:
+    std::vector<std::string> chips_, on_;
+    Rect rect_, addRect_;
+    std::vector<Rect> chipRects_;
+};
+
+// The chips' tags: the first TagRow::kChips of the tags put on annotations most recently here.
+std::vector<std::string> recentChips(Library&);
+// Adds `tag` to the annotation as it is now in the library (on), or takes it off; an added tag
+// becomes the most recent. Saved as an edit to be sent (plugins told). Returns the annotation's
+// tags afterwards; nullopt if it is gone (deleted, or a sync removed it).
+std::optional<std::vector<std::string>> setAnnotationTag(Nav&, const std::string& key, const std::string& tag, bool on);
+// + Tag: the tag picker over the screen (the library's tags, recent ones first, and "Add "xyz""
+// for a new one); `reading`: opened from the reader or its panels (it turns with them).
+void pickAnnotationTag(Nav&, std::function<void(const std::string& tag)> chosen, bool reading = true);
+
 class AnnotationBar {
 public:
     enum class Mode { Create, Edit };
-    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin };
+    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Tag, AddTag };
     struct Hit {
         Action action = Action::None;
-        int colour = -1;  // Colour: the dot; Plugin: the action's index
+        int colour = -1;  // Colour: the dot; Plugin: the action's index; Tag: the chip's
     };
 
     // `anchor`: the selection or highlight; the bar sits above it, or below if there's no room.
-    // `more`: the More… button (Create only; some plugin has selection actions).
-    AnnotationBar(Mode, Rect anchor, std::string colour, bool more = false);
+    // `more`: the More… button (Create only; some plugin has selection actions). `tags`: its tag row.
+    AnnotationBar(Mode, Rect anchor, std::string colour, bool more = false, TagRow tags = {});
 
     Mode mode() const { return mode_; }
     Rect rect() const { return rect_; }
@@ -52,11 +100,15 @@ public:
     Rect actionRect(int i) const;  // a listed action's row
     void setWorking(bool w) { working_ = w; }
     bool working() const { return working_; }
+    const TagRow& tags() const { return tags_; }
+    TagRow& tags() { return tags_; }
+    // A new selection's: a chip tapped marks or unmarks its tag (Create).
+    void toggleTag(const std::string& tag);
 
     void draw(cairo_t*) const;
     Hit hit(Point) const;
 
-    static constexpr int kH = 250;
+    static constexpr int kH = 250 + 12 + TagRow::kH;
 
 private:
     int buttons() const { return mode_ == Mode::Create ? 3 + more_ : 2; }
@@ -67,9 +119,8 @@ private:
     std::string colour_;
     bool more_ = false, working_ = false;
     std::vector<PluginAction> actions_;
+    TagRow tags_;
 };
-
-class Nav;
 
 // Editing an existing annotation (spec §6.3 "tapping an existing highlight"): the Edit bar
 // (a colour recolours at once), its comment in a field over the keyboard, and "Delete this
@@ -79,10 +130,13 @@ class AnnotationEditor {
 public:
     enum class Result { Open, Closed };
 
-    AnnotationEditor(AnnotationRecord, Rect anchor);
+    // `chips`: the tag row's (recentChips()).
+    AnnotationEditor(AnnotationRecord, Rect anchor, std::vector<std::string> chips = {});
+    ~AnnotationEditor();
 
     const std::string& key() const { return annotation_.key; }
     const AnnotationBar& bar() const { return bar_; }
+    const AnnotationRecord& annotation() const { return annotation_; }
     bool confirming() const { return state_ == State::Confirm; }
     bool commenting() const { return state_ == State::Comment; }
     bool wantsKeyboard() const { return commenting(); }
@@ -114,6 +168,7 @@ private:
     Rect commentBox_;  // placed when the comment opens, above the keyboard as it is then
     bool changed_ = false;
     bool direct_ = false;  // opened at the comment or the confirmation: no bar to go back to
+    std::shared_ptr<AnnotationEditor*> self_;  // + Tag's picker: this editor, or null once it is gone
 };
 
 }  // namespace zk

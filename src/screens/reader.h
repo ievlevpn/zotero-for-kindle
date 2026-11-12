@@ -220,6 +220,8 @@ private:
     void saveNote(const std::string& text, Nav&);  // Return in it (empty: nothing)
     bool openNoteAt(Point, Nav&);                   // a note near the tap: its pop-up
     void onNotePopup(const Gesture&, Nav&);
+    void closeNotePopup(Nav&);
+    std::vector<std::string> selectionChips(Nav&, const std::string& first = "") const;
 
     ItemRow row_;
     std::string path_;
@@ -249,6 +251,7 @@ private:
     uint64_t selPending_ = 0;
     std::optional<Selection> selection_;
     std::unique_ptr<AnnotationBar> bar_;
+    std::vector<std::string> selTags_;  // the tags marked on a new selection's bar (kept for its Note)
     std::optional<TextField> note_;
     Rect noteBox_;
     std::string colour_ = "#ffd400";  // the colour used last
