@@ -293,3 +293,123 @@ TEST_CASE("update install: the old second launcher, Zotero (no plugins), is remo
         CHECK_FALSE(fs::exists(k.root / "documents/Zotero-no-plugins.sh"));
     }
 }
+
+// 0.7 fixes: a failed update's leftovers (storage audit, finding 5).
+
+TEST_CASE("update leftovers: a failure before the swap removes the unpacked release and the zip") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    writeFile(k.app("update/zotero-for-kindle.zip"), "zip");
+    writeFile(k.root / "zotero/zotero.db", "not a database");  // the library backup fails
+    UserError err;
+    CHECK_FALSE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, &err));
+    CHECK(readFile(k.app("bin/zotero")) == "zotero 0.2.0");
+    CHECK_FALSE(fs::exists(k.app("update/state")));
+    CHECK_FALSE(fs::exists(k.app("update/old")));
+    CHECK_FALSE(fs::exists(k.app("update/new")));
+    CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));
+    CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+}
+
+TEST_CASE("update leftovers: a refusal while an update is pending drops the download, never the backup") {
+    Kindle k;
+    const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+    writeFile(k.app("update/zotero-for-kindle.zip"), "zip");
+    writeFile(k.app("update/state"), "tried 0.1.0 0.2.0\n");
+    writeFile(k.app("update/old/bin/zotero"), "zotero 0.1.0");
+    writeFile(k.root / "var/config.json.old", "account 0.1.0");
+    CHECK_FALSE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+    CHECK_FALSE(fs::exists(k.app("update/new")));
+    CHECK_FALSE(fs::exists(k.app("update/zotero-for-kindle.zip")));
+    CHECK(readFile(k.app("update/state")) == "tried 0.1.0 0.2.0\n");
+    CHECK(readFile(k.app("update/old/bin/zotero")) == "zotero 0.1.0");
+    CHECK(readFile(k.root / "var/config.json.old") == "account 0.1.0");
+}
+
+TEST_CASE("update leftovers: a stale state is cleared with its backup only once another version has confirmed") {
+    for (const char* word : {"installing", "installed", "tried"}) {
+        CAPTURE(word);
+        Kindle k;
+        const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+        REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+        writeFile(k.app("update/state"), std::string(word) + " 0.2.0 0.3.0\n");
+        writeFile(k.app("update/trash/bin/zotero"), "zotero 0.2.0");
+        // 0.4.0 copied over USB. Until it has drawn its first screen (confirmStartup), all stays.
+        for (const auto& [name, text] : releaseFiles("0.4.0")) writeFile(k.root / name, text);
+        REQUIRE(fs::exists(k.app("update/old/zotero.db")));
+        REQUIRE(fs::exists(k.root / "var/config.json.old"));
+        CHECK(confirmStartup(k.paths, {0, 4, 0}).note == StartupNote::None);
+        CHECK_FALSE(fs::exists(k.app("update/state")));
+        CHECK_FALSE(fs::exists(k.app("update/old")));
+        CHECK_FALSE(fs::exists(k.app("update/trash")));
+        CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+        CHECK(readFile(k.app("bin/zotero")) == "zotero 0.4.0");
+        CHECK(rowCount(k.root / "zotero/zotero.db") == 3);  // the library itself is untouched
+        // and the next update isn't blocked
+        const std::string next = k.unpackNew(releaseFiles("0.5.0"));
+        CHECK(installRelease(k.paths, next, {0, 4, 0}, {0, 5, 0}, nullptr, nullptr));
+    }
+}
+
+TEST_CASE("update leftovers: a rollback the launcher hasn't finished keeps its backup") {
+    for (const char* word : {"installing", "installed", "tried"}) {
+        CAPTURE(word);
+        Kindle k;
+        const std::string newDir = k.unpackNew(releaseFiles("0.3.0"));
+        REQUIRE(installRelease(k.paths, newDir, {0, 2, 0}, {0, 3, 0}, nullptr, nullptr));
+        writeFile(k.app("update/state"), std::string(word) + " 0.2.0 0.3.0\n");
+        // The launcher put 0.2.0's programs back, then failed (on the library, say): 0.2.0 runs.
+        CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
+        CHECK(readFile(k.app("update/state")) == std::string(word) + " 0.2.0 0.3.0\n");
+        CHECK(fs::exists(k.app("update/old/bin/zotero")));
+        CHECK(fs::exists(k.app("update/old/zotero.db")));
+        CHECK(fs::exists(k.root / "var/config.json.old"));
+    }
+    {  // an interrupted swap that left the new version running: the launcher still rolls it back
+        Kindle k;
+        writeFile(k.app("update/state"), "installing 0.2.0 0.3.0\n");
+        writeFile(k.app("update/old/bin/zotero"), "zotero 0.2.0");
+        CHECK(confirmStartup(k.paths, {0, 3, 0}).note == StartupNote::None);
+        CHECK(fs::exists(k.app("update/state")));
+        CHECK(fs::exists(k.app("update/old/bin/zotero")));
+    }
+    {  // a state the launcher acts on, with versions the app can't read: the launcher's to settle
+        Kindle k;
+        writeFile(k.app("update/state"), "tried ? 0.3.0\n");
+        writeFile(k.app("update/old/zotero.db"), "db");
+        CHECK(confirmStartup(k.paths, {0, 4, 0}).note == StartupNote::None);
+        CHECK(fs::exists(k.app("update/state")));
+        CHECK(fs::exists(k.app("update/old/zotero.db")));
+    }
+}
+
+TEST_CASE("update leftovers: an unreadable state is cleared only when the launcher has nothing to restore") {
+    {
+        Kindle k;
+        writeFile(k.app("update/state"), "insta");  // torn by a power cut
+        writeFile(k.app("update/old/zotero.db"), "db");
+        CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
+        CHECK_FALSE(fs::exists(k.app("update/state")));
+        CHECK_FALSE(fs::exists(k.app("update/old")));
+    }
+    {
+        Kindle k;
+        writeFile(k.app("update/state"), "insta");
+        writeFile(k.app("update/old/bin/zotero"), "zotero 0.1.0");  // the launcher rolls this back
+        CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
+        CHECK(fs::exists(k.app("update/state")));
+        CHECK(fs::exists(k.app("update/old/bin/zotero")));
+    }
+}
+
+TEST_CASE("update leftovers: a backup left without its state (a clean-up cut short) goes at the next start") {
+    Kindle k;
+    writeFile(k.app("update/old/bin/zotero"), "zotero 0.1.0");
+    writeFile(k.app("update/trash/bin/zotero"), "zotero 0.1.0");
+    writeFile(k.root / "var/config.json.old", "account");
+    CHECK(confirmStartup(k.paths, {0, 2, 0}).note == StartupNote::None);
+    CHECK_FALSE(fs::exists(k.app("update/old")));
+    CHECK_FALSE(fs::exists(k.app("update/trash")));
+    CHECK_FALSE(fs::exists(k.root / "var/config.json.old"));
+    CHECK(readFile(k.app("bin/zotero")) == "zotero 0.2.0");
+}

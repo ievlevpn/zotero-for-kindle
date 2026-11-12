@@ -378,6 +378,20 @@ TEST_CASE("updater fix: a cancel at the end of the download goes back to Availab
     CHECK_FALSE(fs::exists(rig.root / "zotero/update/new"));
 }
 
+TEST_CASE("update leftovers: the zip goes once it is unpacked") {
+    Rig rig;
+    rig.updater->check();
+    rig.updater->wait();
+    rig.updater->download();
+    rig.updater->wait();
+    CHECK(rig.phase() == Rig::Phase::Downloaded);
+    CHECK(fs::exists(rig.root / "zotero/update/new/bin/zotero"));
+    CHECK_FALSE(fs::exists(rig.root / "zotero/update/zotero-for-kindle.zip"));
+    rig.updater->install();
+    rig.updater->wait();
+    CHECK(rig.phase() == Rig::Phase::ReadyToRestart);
+}
+
 TEST_CASE("updater fix: after a failed swap only a restart is offered") {
     Rig rig(true, "missing-folder");  // the launcher can't be replaced: the swap fails half way
     auto s = rig.availableScreen();
