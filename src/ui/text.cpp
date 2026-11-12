@@ -128,11 +128,11 @@ TextResult measureText(std::string_view utf8, const TextStyle& style, int width,
     return resultOf(l.layout, utf8);
 }
 
-std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int width) {
+namespace {
+
+std::vector<int> topsOf(PangoLayout* layout) {
     std::vector<int> tops;
-    if (utf8.empty()) return {0};
-    Layout l = makeLayout(nullptr, utf8, style, width, 0, Align::Left);
-    PangoLayoutIter* it = pango_layout_get_iter(l.layout);
+    PangoLayoutIter* it = pango_layout_get_iter(layout);
     int bottom = 0;
     do {
         PangoRectangle logical;
@@ -145,12 +145,9 @@ std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int wid
     return tops;
 }
 
-void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int first, int count,
-                   Align align) {
-    if (utf8.empty() || count <= 0) return;
-    Layout l = makeLayout(cr, utf8, style, box.w, 0, align);
-    PangoLayoutIter* it = pango_layout_get_iter(l.layout);
-    double g = style.gray / 255.0;
+void showLines(cairo_t* cr, PangoLayout* layout, uint8_t gray, Rect box, int first, int count) {
+    PangoLayoutIter* it = pango_layout_get_iter(layout);
+    double g = gray / 255.0;
     cairo_save(cr);
     cairo_set_source_rgb(cr, g, g, g);
     int top = 0;
@@ -168,6 +165,46 @@ void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, R
     pango_layout_iter_free(it);
     cairo_restore(cr);
     cairo_new_path(cr);
+}
+
+}  // namespace
+
+std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int width) {
+    if (utf8.empty()) return {0};
+    Layout l = makeLayout(nullptr, utf8, style, width, 0, Align::Left);
+    return topsOf(l.layout);
+}
+
+void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int first, int count,
+                   Align align) {
+    if (utf8.empty() || count <= 0) return;
+    Layout l = makeLayout(cr, utf8, style, box.w, 0, align);
+    showLines(cr, l.layout, style.gray, box, first, count);
+}
+
+KeptText::KeptText(std::string_view utf8, const TextStyle& style, int width, int max_lines) : gray_(style.gray) {
+    if (utf8.empty()) {
+        tops_ = {0};
+        return;
+    }
+    // Laid out without a cairo context, as lineTops and measureText are: the plugin screens draw
+    // untransformed, so the lines come out as a layout made for the canvas would.
+    Layout l = makeLayout(nullptr, utf8, style, width, max_lines, Align::Left);
+    tops_ = topsOf(l.layout);
+    layout_ = l.layout;
+    ctx_ = l.ctx;
+    l.layout = nullptr;
+    l.ctx = nullptr;
+}
+
+KeptText::~KeptText() {
+    if (layout_) g_object_unref(layout_);
+    if (ctx_) g_object_unref(ctx_);
+}
+
+void KeptText::drawLines(cairo_t* cr, Rect box, int first, int count) const {
+    if (!layout_ || count <= 0) return;
+    showLines(cr, static_cast<PangoLayout*>(layout_), gray_, box, first, count);
 }
 
 std::string markupEscape(std::string_view s) {

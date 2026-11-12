@@ -262,3 +262,68 @@ TEST_CASE("plugin blocks: a row of wide buttons leaves its text room to read") {
     CHECK(row.children[0].rect.w >= std::min(240, blocksArea().w / 6));
     for (const auto& c : row.children) CHECK(c.rect.x + c.rect.w <= blocksArea().x + blocksArea().w);
 }
+
+// ---- 0.7 fix: a text block is laid out once, not on every draw ----------------------------------
+
+namespace {
+
+json longText(const std::string& word, const char* style = "body") {
+    std::string text;
+    for (int i = 0; i < 3000; ++i) text += word + " " + std::to_string(i) + (i % 40 == 39 ? "\n\n" : " ");
+    return json{{"kind", "column"},
+                {"children", json::array({{{"kind", "text"}, {"text", text}, {"style", style}},
+                                          {{"kind", "button"}, {"id", "ok"}, {"title", "OK"}}})}};
+}
+
+
+}  // namespace
+
+TEST_CASE("plugin blocks fix: a long text block is laid out once; redraws, page turns and an unchanged new tree reuse it") {
+    fonts();
+    const Rect area = blocksArea();
+    const Block t1 = tree(longText("alpha"));
+    const int64_t start = textBlockLayouts();
+    const Laid a = layoutTree(t1, area, 0);
+    CHECK(textBlockLayouts() - start == 1);  // measured several times while laying out, laid out once
+    REQUIRE(a.pages > 2);
+    Canvas c(metrics().width, metrics().height);
+    drawTree(c.cr(), a, {});
+    drawTree(c.cr(), a, {});
+    CHECK(textBlockLayouts() - start == 1);  // drawing doesn't lay it out again
+    const Laid p2 = layoutTree(t1, area, 2);
+    drawTree(c.cr(), p2, {});
+    CHECK(textBlockLayouts() - start == 1);  // nor does a page turn
+    const Block same = tree(longText("alpha"));  // the plugin rendered again, nothing changed
+    const Laid b = layoutTree(same, area, 0);
+    drawTree(c.cr(), b, {});
+    CHECK(textBlockLayouts() - start == 1);
+
+    const Block changed = tree(longText("beta"));
+    const Laid d = layoutTree(changed, area, 0);
+    CHECK(textBlockLayouts() - start == 2);  // the text changed
+    const Block restyled = tree(longText("beta", "meta"));
+    const Laid e = layoutTree(restyled, area, 0);
+    CHECK(textBlockLayouts() - start == 3);  // the style changed
+    const Laid f = layoutTree(restyled, {area.x, area.y, area.w - 100, area.h}, 0);
+    CHECK(textBlockLayouts() - start == 4);  // the width changed
+    drawTree(c.cr(), d, {});
+    drawTree(c.cr(), e, {});
+    drawTree(c.cr(), f, {});
+    CHECK(textBlockLayouts() - start == 4);
+}
+
+TEST_CASE("plugin blocks fix: kept text draws exactly as text laid out for the canvas") {
+    if (!fonts()) return;
+    const TextStyle st{"Bookerly", 9, 400, false, 0, true};
+    const std::string text = "Gaussian <i>random</i> fields <b>on manifolds</b>, " + std::string(kSummary);
+    const Rect box{40, 60, 900, 1200};
+    Canvas want(1000, 1400), got(1000, 1400);
+    drawTextLines(want.cr(), text, st, box, 2, 5);
+    KeptText(text, st, box.w).drawLines(got.cr(), box, 2, 5);
+    CHECK(grayOf(want) == grayOf(got));
+    Canvas want3(1000, 1400), got3(1000, 1400);  // a block with `lines`: ellipsized
+    drawText(want3.cr(), text, st, box, 3);
+    KeptText(text, st, box.w, 3).drawLines(got3.cr(), box, 0, 3);
+    CHECK(grayOf(want3) == grayOf(got3));
+    CHECK(KeptText(text, st, box.w).tops() == lineTops(text, st, box.w));
+}

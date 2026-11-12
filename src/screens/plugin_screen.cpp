@@ -126,6 +126,8 @@ void PluginScreen::receive(const PluginHostEvent& ev, Nav& nav) {
             nav.redrawAll(Waveform::Quality);
             break;
         case PluginHostEvent::Kind::ScreenActionError:
+            // The pop-up sits at the bottom, where the keyboard is: the keyboard goes, so Close shows.
+            setFocus("", nav);
             if (popup_) nav.damage(popup_->rect(), Waveform::Quality);
             popup_ = std::make_unique<PluginResult>(pluginName_ + " · " + title_, ev.text, Rect{0, 0, W(), H()});
             nav.damage(popup_->rect(), Waveform::Ui);

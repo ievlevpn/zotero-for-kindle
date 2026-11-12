@@ -46,6 +46,26 @@ std::vector<int> lineTops(std::string_view utf8, const TextStyle& style, int wid
 // Draws lines [first, first + count) of `utf8` laid out box.w wide, line `first` at box.y.
 void drawTextLines(cairo_t* cr, std::string_view utf8, const TextStyle& style, Rect box, int first, int count,
                    Align align = Align::Left);
+// Text laid out once and kept, for long text drawn again and again (a plugin screen's text block):
+// its line tops as lineTops gives them, and its lines drawn without laying the text out again.
+// `max_lines` > 0 ellipsizes at that many lines, as drawText does.
+class KeptText {
+public:
+    KeptText(std::string_view utf8, const TextStyle& style, int width, int max_lines = 0);
+    ~KeptText();
+    KeptText(const KeptText&) = delete;
+    KeptText& operator=(const KeptText&) = delete;
+    const std::vector<int>& tops() const { return tops_; }
+    // As drawTextLines: lines [first, first + count) with line `first` at box.y.
+    void drawLines(cairo_t* cr, Rect box, int first, int count) const;
+
+private:
+    void* layout_ = nullptr;  // PangoLayout
+    void* ctx_ = nullptr;     // its PangoContext
+    std::vector<int> tops_;
+    uint8_t gray_ = 0;
+};
+
 // `s` with &, <, >, " and ' escaped for Pango markup.
 std::string markupEscape(std::string_view s);
 
