@@ -23,8 +23,9 @@ bool isZoteroKey(const std::string&);
 
 // Recent and Added: newest added first (Added comes in months, Recent without sections).
 enum class SortBy { Recent, Title, Author, Year, Added };
-// WithFile: an EPUB or PDF the Kindle can open (Any: metadata-only items too).
-enum class TypeFilter { Any, WithFile, Pdf, Epub };
+// WithFile: an EPUB, PDF or web snapshot the Kindle can open (Any: metadata-only items too). Pdf,
+// Epub, Web: the file the item opens (ItemRow::badge) is one.
+enum class TypeFilter { Any, WithFile, Pdf, Epub, Web };
 // Unread / Read: as ItemRow::read.
 enum class ReadFilter { Any, Unread, Read };
 
@@ -53,14 +54,14 @@ struct SectionCount {
 // folded (case, accents). Leading punctuation is skipped; Ё goes with Е, Œ with O.
 std::string listSortKey(const std::string& text);
 
-// One line in a list: an item and the file it opens (EPUB preferred over PDF).
+// One line in a list: an item and the file it opens (EPUB preferred over PDF, PDF over a web snapshot).
 struct ItemRow {
-    std::string key, title, byline, badge /* "EPUB" | "PDF" | "" */, attachmentKey;
+    std::string key, title, byline, badge /* "EPUB" | "PDF" | "WEB" | "" */, attachmentKey;
     AttachmentRecord::State fileState = AttachmentRecord::State::Remote;
     double progress = -1;  // -1: never opened
     std::string itemType;  // Zotero's: "book", "journalArticle", "preprint", … ("attachment": a lone file)
     bool read = false;     // has the read tag (or was marked read on the Kindle, not sent yet)
-    int files = 0;         // its readable files (EPUB, PDF): with more than one, opening asks which
+    int files = 0;         // its readable files (EPUB, PDF, web snapshot): with more than one, opening asks which
     bool exactFile = false;  // attachmentKey is a file chosen (rowFor with a file): open it without asking
     bool operator==(const ItemRow&) const = default;
 };
@@ -77,7 +78,7 @@ struct ItemDetails {
         int highlights = 0;     // annotations shown in the reader (not deleted here)
         double progress = -1;   // how far this file was read on the Kindle; -1 if never
     };
-    std::vector<File> files;  // readable files first (EPUB, then PDF), as rows pick them
+    std::vector<File> files;  // readable files first (EPUB, then PDF, then web snapshot), as rows pick them
     double progress = -1;     // how far the item was read; -1 if never opened
     bool read = false;        // as ItemRow::read
 };
@@ -234,7 +235,7 @@ public:
     // Puts a conflict copy's content back as a change to send: onto the annotation it was an
     // edit of if that still exists, otherwise as a new annotation. Returns the key it now lives under.
     std::string reapplyConflict(const std::string& key);
-    std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB/PDF files only
+    std::vector<AttachmentRecord> readableAttachments(const std::string& itemKey);  // stored EPUB, PDF and web snapshot files only
 
     LibraryStats stats();
 
@@ -381,6 +382,7 @@ private:
     friend class Transaction;
     template <class F> auto guarded(F&& f) -> decltype(f());
     void migrate();
+    void readSnapshots();  // once: web snapshots became readable (0.7)
     void touch(const std::string& itemKey);  // reindex now, or at commit inside a transaction
     void reindex(const std::string& itemKey);
     std::string itemOfAttachment(const std::string& attachmentKey);

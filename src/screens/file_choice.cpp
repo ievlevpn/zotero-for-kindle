@@ -44,7 +44,7 @@ std::vector<Rect> FileChoiceScreen::fileRects() const {
 }
 
 std::string FileChoiceScreen::fileMeta(const FileChoice& f) {
-    std::string s = f.attachment.contentType == "application/pdf" ? "PDF" : "EPUB";
+    std::string s = isWebSnapshot(f.attachment.contentType) ? "Web page" : fileLabel(f.attachment.contentType);
     if (f.onKindle) s += " · On Kindle";
     if (f.progress > 0) s += " · " + std::to_string(static_cast<int>(f.progress * 100 + 0.5)) + "%";
     return s;
@@ -85,7 +85,7 @@ void FileChoiceScreen::onGesture(const Gesture& g, Nav& nav) {
         ItemRow r = row_;
         const AttachmentRecord& a = files_[i].attachment;
         r.attachmentKey = a.key;
-        r.badge = a.contentType == "application/pdf" ? "PDF" : "EPUB";
+        r.badge = fileLabel(a.contentType);
         r.fileState = a.state;
         r.exactFile = true;
         const Choose choose = choose_;  // this screen goes with the pop

@@ -102,7 +102,7 @@ TEST_CASE("library nav ui: the Filter sheet sets Type, Read and Tag; Done applie
     REQUIRE(screen.filterSheet());
     const Rect area = LibraryScreen::sheetArea();
     auto type = screen.filterSheet()->typeRects(area);
-    REQUIRE(type.size() == 4);  // Any · With a file · PDF · EPUB
+    REQUIRE(type.size() == 5);  // Any · With a file · PDF · EPUB · Web
     tap(screen, type[2], rig.nav);
     auto read = screen.filterSheet()->readRects(area);
     REQUIRE(read.size() == 3);  // Any · Unread · Read

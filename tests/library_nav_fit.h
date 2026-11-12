@@ -59,7 +59,7 @@ inline void checkLibraryNavFits(LibraryScreen& library) {
     FilterSheet filter(v);
     const Rect fs = filter.sheetRect(area);
     CHECK(within(fs, area));
-    CHECK(filter.typeRects(area).size() == 4);
+    CHECK(filter.typeRects(area).size() == 5);  // Any · With a file · PDF · EPUB · Web
     CHECK(filter.readRects(area).size() == 3);
     CHECK(filter.tagRects(area).size() == 2);
     for (const auto& rects : {filter.typeRects(area), filter.readRects(area), filter.tagRects(area)})

@@ -11,6 +11,7 @@
 #include "app/settings_store.h"
 #include "core/log.h"
 #include "screens/annotation_bar.h"
+#include "screens/book_search.h"
 #include "screens/note_popup.h"
 #include "plugins/events.h"
 #include "plugins/identifiers.h"
@@ -306,7 +307,7 @@ std::vector<AnnotationRecord> pageAnnotations(Library& lib, const std::string& a
 
 ReaderScreen::ReaderScreen(ItemRow row, std::string path, DocType type, WorkerFactory makeWorker, int flashEvery,
                            Lipc* lipc)
-    : row_(std::move(row)), path_(std::move(path)), type_(type), makeWorker_(std::move(makeWorker)),
+    : row_(std::move(row)), path_(std::move(path)), type_(type), web_(row_.badge == "WEB"), makeWorker_(std::move(makeWorker)),
       flashEvery_(flashEvery > 0 ? flashEvery : 6), lipc_(lipc) {}
 
 ReaderScreen::~ReaderScreen() = default;
@@ -333,7 +334,8 @@ void ReaderScreen::onShow(Nav& nav) {
     // computer moved on since this Kindle last agreed with it.
     // Held (nothing sent) until it has been compared with the page the book opens on.
     std::string zoteroStart;
-    if (auto rp = nav.library().readingPosition(row_.attachmentKey);
+    // A web snapshot's isn't used: Zotero keeps it as a scroll percentage, which doesn't map onto pages.
+    if (auto rp = web_ ? std::nullopt : nav.library().readingPosition(row_.attachmentKey);
         rp && !rp->remote.empty() && (start.value.empty() || rp->local.empty() || rp->remoteNew)) {
         nav.library().holdRemotePosition(row_.attachmentKey);
         if (start.value.empty()) zoteroStart = rp->remote;
@@ -502,7 +504,7 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     if (!back_.empty() && back_.back().page == page_) back_.pop_back();
                 }
                 // On Zotero's page, Zotero's exact place (not this page's start) stays the Kindle's.
-                if (!e.zoteroPosition.empty())
+                if (!e.zoteroPosition.empty() && !web_)
                     nav.library().setLocalPosition(row_.attachmentKey,
                                                    page_ / views_ == remotePage_ ? remoteValue_ : e.zoteroPosition);
                 if (!placeAfterFirstPage_.empty()) {
@@ -921,8 +923,10 @@ void ReaderScreen::showBar(Nav& nav) {
     if (!selection_) return;
     PluginEntries* e = nav.pluginEntries();
     const bool more = e && !e->actions("selectionAction").empty();
-    bar_ = std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
-                                           TagRow(selectionChips(nav), selTags_));
+    // A web snapshot: nothing is highlighted, so no colours and no tag row (Search and More… only).
+    bar_ = web_ ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
+                : std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
+                                                  TagRow(selectionChips(nav), selTags_));
     bar_->setWorking(result_ && result_->running());
     nav.damage(bar_->rect(), Waveform::Ui);
 }
@@ -958,6 +962,12 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
         case AnnotationBar::Action::Underline:
             saveSelection("underline", "", nav);
             break;
+        case AnnotationBar::Action::Search: {
+            const std::string query = selection_ ? selection_->text : std::string{};
+            closeSelection(nav);
+            if (!query.empty()) nav.push(std::make_unique<BookSearchScreen>(*this, query));
+            break;
+        }
         case AnnotationBar::Action::More: {
             PluginEntries* e = nav.pluginEntries();
             if (result_) {  // "Working…" tapped: the run stops

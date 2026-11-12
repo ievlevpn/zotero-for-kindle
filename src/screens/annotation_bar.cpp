@@ -151,8 +151,8 @@ const std::array<ZoteroColour, 8>& zoteroColours() {
 }
 
 AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more, TagRow tags)
-    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode == Mode::Create), tags_(std::move(tags)) {
-    place(kH);
+    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode != Mode::Edit), tags_(std::move(tags)) {
+    place(height());
 }
 
 void AnnotationBar::toggleTag(const std::string& tag) {
@@ -173,7 +173,7 @@ void AnnotationBar::place(int h) {
     if (y + h > page.y + page.h - kGap) y = page.y + page.h - kGap - h;  // never off the page
     if (y < page.y + kGap) y = page.y + kGap;
     rect_ = {page.x + kSide, y, w, h};
-    tags_.place({rect_.x + kPad, rect_.y + kPad + kDotRowH + 6, rect_.w - 2 * kPad, TagRow::kH});
+    if (hasColours()) tags_.place({rect_.x + kPad, rect_.y + kPad + kDotRowH + 6, rect_.w - 2 * kPad, TagRow::kH});
 }
 
 constexpr int kActionRowH = 96;
@@ -182,7 +182,7 @@ void AnnotationBar::showActions(std::vector<PluginAction> actions) {
     actions_ = std::move(actions);
     const int fit = (ReaderScreen::pageArea().h - 2 * kGap - 2 * kPad) / kActionRowH;
     if (static_cast<int>(actions_.size()) > fit) actions_.resize(static_cast<size_t>(std::max(fit, 0)));
-    place(actions_.empty() ? kH : 2 * kPad + static_cast<int>(actions_.size()) * kActionRowH);
+    place(actions_.empty() ? height() : 2 * kPad + static_cast<int>(actions_.size()) * kActionRowH);
 }
 
 Rect AnnotationBar::actionRect(int i) const {
@@ -190,6 +190,7 @@ Rect AnnotationBar::actionRect(int i) const {
 }
 
 Rect AnnotationBar::dotRect(int i) const {
+    if (!hasColours()) return {};
     const int w = (rect_.w - 2 * kPad) / 8;
     return {rect_.x + kPad + i * w, rect_.y + kPad, w, kDotRowH};
 }
@@ -197,7 +198,8 @@ Rect AnnotationBar::dotRect(int i) const {
 Rect AnnotationBar::buttonRect(int i) const {
     const int n = buttons();
     const int w = (rect_.w - 2 * kPad - (n - 1) * kGap) / n;
-    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + kDotRowH + 6 + TagRow::kH + kTagGap, w, kButtonH};
+    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + (hasColours() ? kDotRowH + 6 + TagRow::kH + kTagGap : 0), w,
+            kButtonH};
 }
 
 void AnnotationBar::draw(cairo_t* cr) const {
@@ -218,7 +220,7 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         return;
     }
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < (hasColours() ? 8 : 0); ++i) {
         const Rect d = dotRect(i);
         const auto& c = zoteroColours()[i];
         const double cx = d.x + d.w / 2.0, cy = d.y + 38;
@@ -236,11 +238,15 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         centredText(cr, c.name, {kSans, 6, colour_ == c.hex ? 700 : 400, false, kSecondary}, {d.x, d.y + 84, d.w, 40});
     }
-    tags_.draw(cr);
+    if (hasColours()) tags_.draw(cr);  // Text: no tag row
     static const char* create[] = {"Highlight", "Underline", "Note", "More…"};
     static const char* edit[] = {"Comment", "Delete"};
-    for (int i = 0; i < buttons(); ++i)
-        drawButton(cr, buttonRect(i), mode_ == Mode::Create ? (i == 3 && working_ ? "Working…" : create[i]) : edit[i], false);
+    static const char* text[] = {"Search", "More…"};
+    for (int i = 0; i < buttons(); ++i) {
+        const char* label = mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i];
+        const bool more = mode_ != Mode::Edit && i == buttons() - 1 && more_;
+        drawButton(cr, buttonRect(i), more && working_ ? "Working…" : label, false);
+    }
 }
 
 AnnotationBar::Hit AnnotationBar::hit(Point p) const {
@@ -249,14 +255,16 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
             if (actionRect(i).contains(p)) return {Action::Plugin, i};
         return {};
     }
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < (hasColours() ? 8 : 0); ++i)
         if (dotRect(i).contains(p)) return {Action::Colour, i};
-    if (const int t = tags_.hit(p); t == TagRow::kAdd) return {Action::AddTag, -1};
+    if (const int t = hasColours() ? tags_.hit(p) : -1; t == TagRow::kAdd) return {Action::AddTag, -1};
     else if (t >= 0) return {Action::Tag, t};
     static const Action create[] = {Action::Highlight, Action::Underline, Action::Note, Action::More};
     static const Action edit[] = {Action::Comment, Action::Delete};
+    static const Action text[] = {Action::Search, Action::More};
     for (int i = 0; i < buttons(); ++i)
-        if (buttonRect(i).contains(p)) return {mode_ == Mode::Create ? create[i] : edit[i], -1};
+        if (buttonRect(i).contains(p))
+            return {mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i], -1};
     return {};
 }
 

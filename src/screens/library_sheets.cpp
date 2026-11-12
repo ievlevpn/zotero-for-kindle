@@ -27,7 +27,7 @@ constexpr int kCellH = 100, kCellMinH = 80, kCellGap = 14, kCellMinW = 110, kJum
 const TextStyle kSheetTitle{kSans, 11, 700}, kGroupLabel{kSans, 7.5, 400, false, kSecondary}, kCell{kSans, 9.5, 700};
 
 const SortBy kSorts[] = {SortBy::Recent, SortBy::Added, SortBy::Title, SortBy::Author, SortBy::Year};
-const TypeFilter kTypes[] = {TypeFilter::Any, TypeFilter::WithFile, TypeFilter::Pdf, TypeFilter::Epub};
+const TypeFilter kTypes[] = {TypeFilter::Any, TypeFilter::WithFile, TypeFilter::Pdf, TypeFilter::Epub, TypeFilter::Web};
 const ReadFilter kReads[] = {ReadFilter::Any, ReadFilter::Unread, ReadFilter::Read};
 const char* const kMonths[] = {"January", "February", "March",     "April",   "May",      "June",
                                "July",    "August",   "September", "October", "November", "December"};
@@ -37,6 +37,7 @@ const char* typeName(TypeFilter t) {
         case TypeFilter::Any: return "any";
         case TypeFilter::Pdf: return "pdf";
         case TypeFilter::Epub: return "epub";
+        case TypeFilter::Web: return "web";
         case TypeFilter::WithFile: break;
     }
     return "file";
@@ -145,6 +146,7 @@ std::string filterLine(const LibraryView& v, int64_t count) {
         case TypeFilter::Any: add("All types"); break;
         case TypeFilter::Pdf: add("PDF"); break;
         case TypeFilter::Epub: add("EPUB"); break;
+        case TypeFilter::Web: add("Web"); break;
         case TypeFilter::WithFile: break;
     }
     if (v.read == ReadFilter::Unread) add("Unread");
@@ -225,7 +227,7 @@ std::vector<std::string> FilterSheet::tagLabels() const {
 }
 
 std::vector<Rect> FilterSheet::typeRects(Rect area) const {
-    return chipRects(chipsArea(area, 0), {"Any", "With a file", "PDF", "EPUB"});
+    return chipRects(chipsArea(area, 0), {"Any", "With a file", "PDF", "EPUB", "Web"});
 }
 std::vector<Rect> FilterSheet::readRects(Rect area) const { return chipRects(chipsArea(area, 1), {"Any", "Unread", "Read"}); }
 std::vector<Rect> FilterSheet::tagRects(Rect area) const { return chipRects(chipsArea(area, 2), tagLabels()); }
@@ -250,7 +252,7 @@ void FilterSheet::draw(cairo_t* cr, Rect area) const {
     }
     const int type = static_cast<int>(std::find(std::begin(kTypes), std::end(kTypes), draft_.type) - std::begin(kTypes));
     const int read = static_cast<int>(std::find(std::begin(kReads), std::end(kReads), draft_.read) - std::begin(kReads));
-    drawChips(cr, chipsArea(area, 0), {"Any", "With a file", "PDF", "EPUB"}, type);
+    drawChips(cr, chipsArea(area, 0), {"Any", "With a file", "PDF", "EPUB", "Web"}, type);
     drawChips(cr, chipsArea(area, 1), {"Any", "Unread", "Read"}, read);
     drawChips(cr, chipsArea(area, 2), tagLabels(), draft_.tag.empty() ? 0 : 1);
     drawButton(cr, resetRect(area), "Reset", false);

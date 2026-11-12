@@ -8,6 +8,9 @@
 // When some plugin has selection actions, the Create bar has a fourth button, More…: it turns
 // the bar into a short list of those actions (title, the plugin's name dimmed beside it). While
 // one runs, More… reads "Working…".
+//
+// Text (a web snapshot, where nothing is highlighted): no colours, only Search, and More… when
+// some plugin has selection actions.
 
 #include <array>
 #include <functional>
@@ -76,21 +79,23 @@ void pickAnnotationTag(Nav&, std::function<void(const std::string& tag)> chosen,
 
 class AnnotationBar {
 public:
-    enum class Mode { Create, Edit };
-    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Tag, AddTag };
+    enum class Mode { Create, Edit, Text };
+    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Tag, AddTag, Search };
     struct Hit {
         Action action = Action::None;
         int colour = -1;  // Colour: the dot; Plugin: the action's index; Tag: the chip's
     };
 
     // `anchor`: the selection or highlight; the bar sits above it, or below if there's no room.
-    // `more`: the More… button (Create only; some plugin has selection actions). `tags`: its tag row.
+    // `more`: the More… button (Create and Text; some plugin has selection actions). `tags`: its tag
+    // row (none in Text: nothing is highlighted there).
     AnnotationBar(Mode, Rect anchor, std::string colour, bool more = false, TagRow tags = {});
 
     Mode mode() const { return mode_; }
     Rect rect() const { return rect_; }
-    Rect dotRect(int i) const;     // 0..7, Zotero's order
-    Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete
+    Rect dotRect(int i) const;     // 0..7, Zotero's order (none in Text)
+    Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete; Text: 0 Search
+    bool hasColours() const { return mode_ != Mode::Text; }
     const std::string& colour() const { return colour_; }
     void setColour(std::string c) { colour_ = std::move(c); }
     // More… tapped: the bar lists these instead (empty: back to the buttons).
@@ -109,9 +114,11 @@ public:
     Hit hit(Point) const;
 
     static constexpr int kH = 250 + 12 + TagRow::kH;
+    static constexpr int kTextH = 124;  // Text: the buttons' row alone
 
 private:
-    int buttons() const { return mode_ == Mode::Create ? 3 + more_ : 2; }
+    int buttons() const { return mode_ == Mode::Create ? 3 + more_ : mode_ == Mode::Text ? 1 + more_ : 2; }
+    int height() const { return mode_ == Mode::Text ? kTextH : kH; }
     void place(int h);
 
     Mode mode_;

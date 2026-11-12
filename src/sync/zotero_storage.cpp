@@ -2,6 +2,7 @@
 
 #include "core/free_space.h"
 #include "sync/config.h"
+#include "sync/snapshot_zip.h"
 #include "sync/webdav.h"  // localFileName, md5OfFile
 
 #include <utime.h>
@@ -13,6 +14,14 @@ namespace zk {
 namespace fs = std::filesystem;
 
 namespace {
+
+struct Cleanup {
+    fs::path p;
+    ~Cleanup() {
+        std::error_code e;
+        fs::remove_all(p, e);
+    }
+};
 
 bool fail(UserError* err, UserError e) {
     if (err) *err = std::move(e);
@@ -49,13 +58,7 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
     std::error_code ec;
     fs::create_directories(destDir, ec);
     const fs::path stage = fs::path(destDir) / ("." + a.key + ".part");
-    struct Cleanup {
-        fs::path p;
-        ~Cleanup() {
-            std::error_code e;
-            fs::remove_all(p, e);
-        }
-    } cleanup{stage};
+    Cleanup cleanup{stage};
     fs::create_directories(stage, ec);
     const fs::path staged = stage / name;
     HttpRequest get;
@@ -72,6 +75,16 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
         const auto size = static_cast<int64_t>(fs::file_size(staged, ec));
         progress_(size, size);
     }
+    // A file Zotero holds zipped (a web snapshot of several files, say): the zip comes, marked
+    // Zotero-File-Compressed. A snapshot's page itself never starts as a zip does.
+    const auto compressed = r.headers.find("zotero-file-compressed");
+    if ((compressed != r.headers.end() && compressed->second == "Yes") || (isWebSnapshot(a.contentType) && startsAsZip(staged))) {
+        const fs::path zip = fs::path(destDir) / ("." + a.key + ".zip.part");
+        Cleanup zipCleanup{zip};
+        fs::rename(staged, zip, ec);
+        if (ec) return fail(err, {ErrorKind::Other, "Can't save " + name + ": " + ec.message() + ".", ec.message()});
+        return installSnapshot(a, zip.string(), destDir, a.mtime, [&] { return freeSpace_(destDir); }, err);
+    }
     const std::string md5 = md5OfFile(staged.string());
     if (md5.empty() || md5 != a.md5)
         return fail(err, {ErrorKind::Checksum,
@@ -83,6 +96,7 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
         ::utime(staged.c_str(), &t);
     }
     const fs::path finalDir = fs::path(destDir) / a.key;
+    if (isWebSnapshot(a.contentType)) fs::remove_all(finalDir, ec);  // an older copy and its files
     fs::create_directories(finalDir, ec);
     fs::rename(staged, finalDir / name, ec);
     if (ec) return fail(err, {ErrorKind::Other, "Can't save " + name + ": " + ec.message() + ".", ec.message()});

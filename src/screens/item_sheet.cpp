@@ -59,10 +59,10 @@ std::string peopleLine(const ItemRecord& item, int max) {
 
 std::string fileLine(const ItemDetails::File& f, double progress) {
     const auto& a = f.attachment;
-    std::string s = a.contentType == "application/epub+zip" ? "EPUB"
-                    : a.contentType == "application/pdf"    ? "PDF"
-                    : a.filename.empty()                     ? "File"
-                                                             : a.filename;
+    std::string s = isWebSnapshot(a.contentType) && a.linkMode != "linked_url" ? "Web page"
+                    : *fileLabel(a.contentType)                             ? fileLabel(a.contentType)
+                    : a.filename.empty()                                    ? "File"
+                                                                            : a.filename;
     if (a.linkMode == "linked_file") return s + " · linked file (not synced)";
     if (f.onKindle) s += " · " + megabytes(f.bytes) + " · on this Kindle";
     else s += " · in Zotero";

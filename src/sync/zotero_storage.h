@@ -1,7 +1,8 @@
 #pragma once
 // Zotero's own file storage, through the Web API: GET /users/<id>/items/<key>/file answers with
 // a redirect to a short-lived storage link, which is fetched without the API key. The file comes
-// as it is (not zipped); its MD5 is checked against the attachment's. Downloads only.
+// as it is, or zipped when Zotero holds it so (a web snapshot with its files: unpacked whole, see
+// installSnapshot); its MD5 is checked against the attachment's. Downloads only.
 
 #include "net/http.h"
 #include "sync/file_store.h"
