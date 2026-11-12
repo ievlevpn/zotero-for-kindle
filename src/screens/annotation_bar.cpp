@@ -4,8 +4,10 @@
 #include "ui/metrics.h"
 
 #include <algorithm>
+#include <set>
 
 #include "docs/document.h"
+#include "screens/read_tag.h"
 #include "screens/reader.h"
 #include "screens/screen.h"
 #include "ui/text.h"
@@ -20,9 +22,121 @@ using namespace theme;
 
 namespace {
 
-constexpr int kSide = 40, kGap = 24, kPad = 20, kDotRowH = 130, kButtonH = 84;
+constexpr int kSide = 40, kGap = 24, kPad = 20, kDotRowH = 130, kButtonH = 84, kTagGap = 12;
+constexpr int kChipGap = 16, kChipPad = 30, kAddW = 190;
+const TextStyle kChipText{kSans, 7.5, 500};
+
+bool has(const std::vector<std::string>& v, const std::string& s) { return std::find(v.begin(), v.end(), s) != v.end(); }
 
 }  // namespace
+
+// ---- the tag row ------------------------------------------------------------------------------
+
+TagRow::TagRow(std::vector<std::string> chips, std::vector<std::string> on) : on_(std::move(on)) { setChips(std::move(chips)); }
+
+void TagRow::setChips(std::vector<std::string> chips) {
+    chips_ = std::move(chips);
+    if (chips_.size() > kChips) chips_.resize(kChips);
+    if (!rect_.empty()) place(rect_);
+}
+
+bool TagRow::isOn(const std::string& tag) const { return has(on_, tag); }
+
+void TagRow::place(Rect row) {
+    rect_ = row;
+    chipRects_.clear();
+    const int n = static_cast<int>(chips_.size());
+    const int addW = std::min(kAddW, row.w);
+    // + Tag on the right; the chips from the left, each up to an equal share of what is left.
+    addRect_ = {row.x + row.w - addW, row.y, addW, row.h};
+    if (n == 0) {
+        addRect_.x = row.x;
+        return;
+    }
+    const int room = row.w - addW - kChipGap;
+    const int share = (room - (n - 1) * kChipGap) / n;
+    int x = row.x;
+    for (const auto& c : chips_) {
+        const int w = std::clamp(measureText("#" + c, kChipText, 4000, 1).width + 2 * kChipPad, std::min(150, share), share);
+        chipRects_.push_back({x, row.y, w, row.h});
+        x += w + kChipGap;
+    }
+    addRect_.x = x;  // right after the chips
+}
+
+void TagRow::draw(cairo_t* cr) const {
+    auto chip = [&](Rect r, const std::string& label, bool filled, int weight) {
+        roundedRect(cr, r.x + 1.5, r.y + 1.5, r.w - 3, r.h - 3, r.h / 2.0);
+        gray(cr, kInk);
+        if (filled) {
+            cairo_fill(cr);
+        } else {
+            cairo_set_line_width(cr, 3);
+            cairo_stroke(cr);
+        }
+        TextStyle st = kChipText;
+        st.weight = weight;
+        st.gray = filled ? 255 : kInk;
+        centredText(cr, label, st, {r.x + kChipPad / 2, r.y, r.w - kChipPad, r.h});
+    };
+    for (size_t i = 0; i < chipRects_.size(); ++i) chip(chipRects_[i], "#" + chips_[i], isOn(chips_[i]), 500);
+    chip(addRect_, "+ Tag", false, 700);
+}
+
+int TagRow::hit(Point p) const {
+    for (size_t i = 0; i < chipRects_.size(); ++i)
+        if (chipRects_[i].contains(p)) return static_cast<int>(i);
+    return addRect_.contains(p) ? kAdd : -1;
+}
+
+std::vector<std::string> recentChips(Library& lib) {
+    std::vector<std::string> out = lib.recentAnnotationTags();
+    if (out.size() > TagRow::kChips) out.resize(TagRow::kChips);
+    return out;
+}
+
+std::optional<std::vector<std::string>> setAnnotationTag(Nav& nav, const std::string& key, const std::string& tag, bool on) {
+    auto now = nav.library().annotation(key);
+    if (!now || now->deletedHere) return std::nullopt;
+    AnnotationRecord a = *now;  // only the tags change, on the annotation as it is now
+    if (on) nav.library().rememberAnnotationTag(tag);
+    if (on == has(a.tags, tag)) return a.tags;
+    if (on) a.tags.push_back(tag);
+    else a.tags.erase(std::remove(a.tags.begin(), a.tags.end(), tag), a.tags.end());
+    nav.library().editAnnotation(a);
+    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", a.key);
+    return a.tags;
+}
+
+void pickAnnotationTag(Nav& nav, std::function<void(const std::string&)> chosen, bool reading) {
+    TagPickerScreen::Options o;
+    o.source = [](Library& lib) {
+        // The recent ones first, then those on annotations (most used), then the items' tags.
+        TagPickerScreen::Tags out;
+        std::set<std::string> seen;
+        const auto used = lib.annotationTags();
+        auto countOf = [&](const std::string& t) -> int64_t {
+            for (const auto& u : used)
+                if (u.first == t) return u.second;
+            return 0;
+        };
+        for (const auto& t : lib.recentAnnotationTags())
+            if (seen.insert(t).second) out.emplace_back(t, countOf(t));
+        for (const auto& u : used)
+            if (seen.insert(u.first).second) out.push_back(u);
+        for (const auto& t : lib.topTags(1 << 20))
+            if (seen.insert(t.first).second) out.emplace_back(t.first, 0);
+        return out;
+    };
+    o.placeholder = "Search or add a tag";
+    o.note = "Put a tag on this highlight. Tags you use here come first.";
+    o.unit = "note";
+    o.addNew = true;
+    o.reading = reading;
+    nav.push(std::make_unique<TagPickerScreen>(std::move(chosen), std::move(o)));
+}
+
+// ---- the bar ----------------------------------------------------------------------------------
 
 const std::array<ZoteroColour, 8>& zoteroColours() {
     static const std::array<ZoteroColour, 8> colours = {{{"#ffd400", "Yellow"},
@@ -36,18 +150,30 @@ const std::array<ZoteroColour, 8>& zoteroColours() {
     return colours;
 }
 
-AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more)
-    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode == Mode::Create) {
+AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more, TagRow tags)
+    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode == Mode::Create), tags_(std::move(tags)) {
     place(kH);
+}
+
+void AnnotationBar::toggleTag(const std::string& tag) {
+    std::vector<std::string> on = tags_.on();
+    if (has(on, tag)) on.erase(std::remove(on.begin(), on.end(), tag), on.end());
+    else on.push_back(tag);
+    tags_.setOn(std::move(on));
 }
 
 void AnnotationBar::place(int h) {
     const Rect page = ReaderScreen::pageArea();
     const int w = page.w - 2 * kSide;
+    // Above the selection, else below it; if neither has room (a tall selection or area), at the
+    // page's edge on the side with more room, covering as little of it as can be.
+    const int above = anchor_.y - kGap - (page.y + kGap), below = page.y + page.h - kGap - (anchor_.y + anchor_.h + kGap);
     int y = anchor_.y - h - kGap;
-    if (y < page.y + kGap) y = anchor_.y + anchor_.h + kGap;      // no room above: below
-    if (y + h > page.y + page.h - kGap) y = page.y + page.h - kGap - h;  // and never off the page
+    if (h > above) y = h <= below || below > above ? anchor_.y + anchor_.h + kGap : page.y + kGap;
+    if (y + h > page.y + page.h - kGap) y = page.y + page.h - kGap - h;  // never off the page
+    if (y < page.y + kGap) y = page.y + kGap;
     rect_ = {page.x + kSide, y, w, h};
+    tags_.place({rect_.x + kPad, rect_.y + kPad + kDotRowH + 6, rect_.w - 2 * kPad, TagRow::kH});
 }
 
 constexpr int kActionRowH = 96;
@@ -71,7 +197,7 @@ Rect AnnotationBar::dotRect(int i) const {
 Rect AnnotationBar::buttonRect(int i) const {
     const int n = buttons();
     const int w = (rect_.w - 2 * kPad - (n - 1) * kGap) / n;
-    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + kDotRowH + 6, w, kButtonH};
+    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + kDotRowH + 6 + TagRow::kH + kTagGap, w, kButtonH};
 }
 
 void AnnotationBar::draw(cairo_t* cr) const {
@@ -110,6 +236,7 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         centredText(cr, c.name, {kSans, 6, colour_ == c.hex ? 700 : 400, false, kSecondary}, {d.x, d.y + 84, d.w, 40});
     }
+    tags_.draw(cr);
     static const char* create[] = {"Highlight", "Underline", "Note", "More…"};
     static const char* edit[] = {"Comment", "Delete"};
     for (int i = 0; i < buttons(); ++i)
@@ -124,6 +251,8 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
     }
     for (int i = 0; i < 8; ++i)
         if (dotRect(i).contains(p)) return {Action::Colour, i};
+    if (const int t = tags_.hit(p); t == TagRow::kAdd) return {Action::AddTag, -1};
+    else if (t >= 0) return {Action::Tag, t};
     static const Action create[] = {Action::Highlight, Action::Underline, Action::Note, Action::More};
     static const Action edit[] = {Action::Comment, Action::Delete};
     for (int i = 0; i < buttons(); ++i)
@@ -131,8 +260,12 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
     return {};
 }
 
-AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor)
-    : annotation_(std::move(a)), bar_(AnnotationBar::Mode::Edit, anchor, annotation_.color) {}
+AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<std::string> chips)
+    : annotation_(std::move(a)),
+      bar_(AnnotationBar::Mode::Edit, anchor, annotation_.color, false, TagRow(std::move(chips), annotation_.tags)),
+      self_(std::make_shared<AnnotationEditor*>(this)) {}
+
+AnnotationEditor::~AnnotationEditor() { *self_ = nullptr; }
 
 // Just above the device's keyboard (on the PW5: {40, 690, 1156, 260}).
 Rect AnnotationEditor::commentRect() {
@@ -245,6 +378,33 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
         }
         bar_.setColour(colour);
         nav.damage(bar_.rect(), Waveform::Ui);
+    } else if (hit.action == AnnotationBar::Action::Tag) {
+        const std::string tag = bar_.tags().chips()[static_cast<size_t>(hit.colour)];
+        auto tags = setAnnotationTag(nav, annotation_.key, tag, !bar_.tags().isOn(tag));
+        if (!tags) return Result::Closed;
+        if (auto now = nav.library().annotation(annotation_.key)) annotation_ = *now;
+        changed_ = changed_ || *tags != bar_.tags().on();
+        bar_.tags().setOn(*tags);
+        nav.damage(bar_.tags().rect(), Waveform::Ui);
+    } else if (hit.action == AnnotationBar::Action::AddTag) {
+        // The choice lands on the annotation even if this editor has gone meanwhile (a page turn).
+        std::weak_ptr<AnnotationEditor*> self = self_;
+        Nav* n = &nav;
+        const std::string key = annotation_.key;
+        pickAnnotationTag(nav, [self, n, key](const std::string& tag) {
+            auto tags = setAnnotationTag(*n, key, tag, true);
+            auto alive = self.lock();
+            AnnotationEditor* e = alive ? *alive : nullptr;
+            if (!e) {
+                if (tags) n->sync().pushSoon();
+                return;
+            }
+            if (!tags) return;
+            if (auto now = n->library().annotation(key)) e->annotation_ = *now;
+            e->changed_ = true;
+            e->bar_.tags().setChips(recentChips(n->library()));
+            e->bar_.tags().setOn(*tags);
+        });
     } else if (hit.action == AnnotationBar::Action::Comment) {
         enter(State::Comment, nav);
     } else if (hit.action == AnnotationBar::Action::Delete) {

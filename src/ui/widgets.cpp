@@ -295,6 +295,12 @@ int drawInkPreview(cairo_t* cr, Rect box, const std::string& position) {
 
 }  // namespace
 
+std::string noteRowTags(const AnnotationRecord& a) {
+    std::string out;
+    for (const auto& t : a.tags) out += (out.empty() ? "#" : " · #") + t;
+    return out;
+}
+
 std::string noteRowLabel(const AnnotationRecord& a) {
     const char* kind = a.type == "image" ? "Area" : a.type == "note" ? "Note" : nullptr;
     if (!kind) return "";
@@ -305,11 +311,15 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
     fillRect(cr, r, 255);
     fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
     const std::string mark = noteSyncMark(a);
+    const std::string tags = noteRowTags(a);
+    constexpr int kTagsH = 44;
     const int tx = r.x + 34, tw = r.w - 34 - 120;
-    const int bottom = r.y + r.h - (mark.empty() ? 14 : 70);  // room for the mark (and a conflict's buttons)
+    // Room for the mark (and a conflict's buttons), and the tags' line under the comment.
+    const int bottom = r.y + r.h - (mark.empty() ? 14 : 70) - (tags.empty() ? 0 : kTagsH);
     int y = r.y + 18;
     if (!a.text.empty()) {
-        const int lines = mark.empty() ? 3 : a.comment.empty() ? 2 : 1;  // a marked row keeps room for its comment
+        int lines = mark.empty() ? 3 : a.comment.empty() ? 2 : 1;  // a marked row keeps room for its comment
+        if (!tags.empty() && !a.comment.empty()) lines = std::max(1, lines - 1);
         TextResult t = drawText(cr, a.text, {kSerif, 8.5, 400}, {tx, y, tw, std::min(132, bottom - y)}, lines);
         y += t.height + 8;
     } else if (a.type == "ink") {  // handwriting: the strokes themselves, small
@@ -322,7 +332,10 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
         y += drawText(cr, noteRowLabel(a), {kSans, 8, 400, true, kSecondary}, {tx, y, tw, 50}, 1).height + 8;
     }
     if (!a.comment.empty() && bottom - y >= 36)
-        drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, bottom - y}, mark.empty() ? 2 : 1);
+        y += drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, bottom - y}, mark.empty() && tags.empty() ? 2 : 1)
+                 .height + 6;
+    if (!tags.empty())  // a quiet line: "#method · #to-cite"
+        drawText(cr, tags, {kSans, 6.5, 400, false, kTertiary}, {tx, std::min(y, bottom), tw, kTagsH}, 1);
     if (!a.pageLabel.empty())
         drawText(cr, "p. " + a.pageLabel, {kSans, 6.5, 400, false, kTertiary}, {r.x + r.w - 110, r.y + 20, 110, 40}, 1,
                  Align::Right);
