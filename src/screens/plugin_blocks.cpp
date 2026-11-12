@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <utility>
 
 #include "ui/metrics.h"
 #include "ui/paint.h"
@@ -63,6 +64,39 @@ std::string markupOf(const Block& b) {
         m += t;
     }
     return m;
+}
+
+// ── Text blocks, laid out once ──
+//
+// Every tree still held keeps its text blocks' layouts (Laid::kept); a layout is found again by its
+// text, style, line limit and width. While layoutTree runs, the ones it has used are pinned here.
+int64_t gTextLayouts = 0;
+std::map<std::string, std::weak_ptr<const KeptText>>& keptTexts() {
+    static std::map<std::string, std::weak_ptr<const KeptText>> m;
+    return m;
+}
+std::vector<std::shared_ptr<const KeptText>>* gPins = nullptr;
+
+TextStyle textStyle(Block::Style s);
+std::string markupOf(const Block& b);
+
+std::shared_ptr<const KeptText> keptText(const Block& b, int w) {
+    std::string m = markupOf(b);
+    std::string key = std::to_string(static_cast<int>(b.style)) + ' ' + std::to_string(b.lines) + ' ' +
+                      std::to_string(w) + ' ' + m;
+    auto& cache = keptTexts();
+    if (auto it = cache.find(key); it != cache.end())
+        if (auto t = it->second.lock()) {
+            if (gPins) gPins->push_back(t);
+            return t;
+        }
+    for (auto it = cache.begin(); it != cache.end();)  // the layouts no tree holds any more
+        it = it->second.expired() ? cache.erase(it) : std::next(it);
+    ++gTextLayouts;
+    auto t = std::make_shared<const KeptText>(m, textStyle(b.style), std::max(1, w), std::max(0, b.lines));
+    cache[std::move(key)] = t;
+    if (gPins) gPins->push_back(t);
+    return t;
 }
 
 int textH(const std::string& s, const TextStyle& st, int w, int lines) {
@@ -155,7 +189,7 @@ Units unitsOf(const Block& b, int w) {
     Units u;
     switch (b.kind) {
         case K::Text: {
-            const auto tops = lineTops(markupOf(b), textStyle(b.style), w);
+            const auto& tops = keptText(b, w)->tops();
             if (b.lines > 0) u.head = tops[std::min<size_t>(b.lines, tops.size() - 1)];
             else u.h = diffs(tops);
             break;
@@ -252,6 +286,7 @@ Laid place(const Block& b, Rect r, int first, int count) {
     l.count = count;
     switch (b.kind) {
         case K::Column: l.children = stack(b.children, r, gapPx(b.gap)); break;
+        case K::Text: l.text = keptText(b, r.w); break;
         case K::Row: {
             const auto ws = rowWidths(b, r.w);
             const int gap = gapPx(b.gap);
@@ -399,9 +434,12 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             for (const auto& c : l.children) drawLaid(cr, c, f);
             break;
         case K::Text: {
-            const std::string m = markupOf(b);
-            if (b.lines > 0) drawText(cr, m, textStyle(b.style), r, b.lines);
-            else drawTextLines(cr, m, textStyle(b.style), r, l.first, l.count);
+            const auto text = l.text ? l.text : keptText(b, r.w);
+            const auto& tops = text->tops();
+            if (b.lines > 0 && tops[std::min<size_t>(b.lines, tops.size() - 1)] > r.h)  // cut short: ellipsized to fit
+                drawText(cr, markupOf(b), textStyle(b.style), r, b.lines);
+            else if (b.lines > 0) text->drawLines(cr, r, 0, b.lines);
+            else text->drawLines(cr, r, l.first, l.count);
             break;
         }
         case K::Card: drawCard(cr, b, r, l.first, l.count, false); break;
@@ -471,7 +509,7 @@ Rect blocksArea() {
     return {kMargin, kHeaderH + 12, m.width - 2 * kMargin, m.height - kHeaderH - 12 - 24};
 }
 
-Laid layoutTree(const Block& root, Rect area, int page) {
+static Laid layOut(const Block& root, Rect area, int page) {
     std::vector<const Block*> kids;
     int gap = 0;
     if (root.kind == K::Column) {
@@ -586,6 +624,19 @@ Laid layoutTree(const Block& root, Rect area, int page) {
         out.children.push_back(place(*kids[s.kid], {area.x, area.y + s.y, area.w, s.h}, s.first, s.count));
     return out;
 }
+
+Laid layoutTree(const Block& root, Rect area, int page) {
+    std::vector<std::shared_ptr<const KeptText>> pins;
+    auto* outer = std::exchange(gPins, &pins);
+    Laid out = layOut(root, area, page);
+    gPins = outer;
+    std::sort(pins.begin(), pins.end());
+    pins.erase(std::unique(pins.begin(), pins.end()), pins.end());
+    out.kept = std::move(pins);
+    return out;
+}
+
+int64_t textBlockLayouts() { return gTextLayouts; }
 
 Rect pageIndicatorRect(const Laid& root) {
     if (root.pages <= 1) return {};

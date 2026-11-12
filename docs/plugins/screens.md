@@ -119,7 +119,8 @@ closes the screen whose `onEvent` is running; the screen below gets a `result` e
 child screen also delivers `result`, with no `value`: always check it, as the snippet does.
 `open` and `close` are dropped when `onEvent` throws, and during `back`.
 `zk.ui.refresh()` redraws the showing screen after work outside `onEvent`, such as the background
-task. Inside `render` it does nothing.
+task. Inside `render` it does nothing. Outside what the user does, refreshes are merged into at
+most one render a second (each is a redraw on e-ink).
 
 ### Time
 

@@ -8,6 +8,7 @@
 // page indicator ("2 / 5") sits at the bottom and nothing is drawn outside the area.
 
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -16,6 +17,7 @@
 
 #include "core/geometry.h"
 #include "plugins/ui_tree.h"
+#include "ui/text.h"
 
 namespace zk {
 
@@ -38,6 +40,8 @@ struct Laid {
     std::vector<Part> parts;
     int first = 0, count = 0;    // the units shown: text lines, list rows, chip lines, card body lines
     int pages = 1, page = 0;     // on the root: the screen's pages and the one laid out (clamped)
+    std::shared_ptr<const KeptText> text;               // a text block's lines, laid out once
+    std::vector<std::shared_ptr<const KeptText>> kept;  // on the root: every text block's, on any page
 };
 
 // Where a plugin screen's blocks go: under the header, inside the margins.
@@ -45,7 +49,14 @@ Rect blocksArea();
 
 // Lays `root` out in `area` on `page` (clamped to the pages there are; see Laid::pages). The
 // returned tree points into `root`, which must outlive it.
+//
+// A text block's text is laid out once and kept with the tree: drawing it again, turning a page or
+// laying out a new tree in which the block's text, style and width are the same (while the earlier
+// tree is still held) reuses that layout.
 Laid layoutTree(const Block& root, Rect area, int page);
+
+// How many times a text block's text has been laid out (for tests).
+int64_t textBlockLayouts();
 
 // The root's page indicator ("2 / 5"), empty when there is one page.
 Rect pageIndicatorRect(const Laid& root);

@@ -101,16 +101,13 @@ void Updater::download() {
         };
         if (ok && cancelled()) ok = false;
         if (ok) ok = unpackRelease(zip, work + "/new", &err);
-        if (ok && cancelled()) ok = false;
         std::error_code ec;
-        if (!ok) {
-            std::filesystem::remove(work + "/zotero-for-kindle.zip", ec);
-            std::filesystem::remove_all(work + "/new", ec);
-        }
+        std::filesystem::remove(work + "/zotero-for-kindle.zip", ec);  // unpacked or not, the install doesn't use it
+        if (ok && cancelled()) ok = false;
+        if (!ok) std::filesystem::remove_all(work + "/new", ec);
         set([&](Status& s) {
             if (ok) {
                 s.phase = Phase::Downloaded;
-                zipPath_ = zip;
             } else if (err.kind == ErrorKind::Cancelled) {
                 s.phase = Phase::Available;
             } else {

@@ -18,6 +18,7 @@ namespace fs = std::filesystem;
 namespace {
 
 const char* const kSwapped[] = {"bin", "lib", "share"};
+const char* const kDownloadFiles[] = {"zotero-for-kindle.zip", "zotero-for-kindle.zip.part"};
 const char* const kRequiredFiles[] = {"bin/zotero", "bin/zk-sync", "lib/libzk-epub.so", "lib/libzk-pdf.so",
                                       "share/cacert.pem", "Zotero.sh"};
 
@@ -160,9 +161,17 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
     };
     if (!hooks.flush) hooks.flush = [] { ::sync(); };
     std::error_code ec;
+    // The unpacked release and its zip are of no use after a failure: the next try downloads again.
+    auto dropDownload = [&] {
+        if (p.appDir.empty()) return;  // the desktop: nothing was downloaded
+        std::error_code ignored;
+        fs::remove_all(fresh, ignored);
+        for (const char* zip : kDownloadFiles) fs::remove(update / zip, ignored);
+    };
     if (fs::exists(update / "state")) {  // an earlier update the launcher hasn't settled: its backup stays
         log(LogLevel::Warn, "update: %s not installed: an earlier update is pending", to.str().c_str());
         if (err) *err = {ErrorKind::Other, "Restart Zotero before updating.", "update/state exists"};
+        dropDownload();
         return false;
     }
     const std::string configBackup = p.configFile + ".old";
@@ -170,6 +179,7 @@ bool installRelease(const InstallPaths& p, const std::string& newDir, Version fr
         std::error_code ignored;
         fs::remove_all(old, ignored);
         if (!p.configFile.empty()) fs::remove(configBackup, ignored);
+        dropDownload();
         log(LogLevel::Warn, "update: install of %s failed before the swap: %s", to.str().c_str(), details.c_str());
         if (err) *err = {ErrorKind::Other, "Couldn't install the update. Nothing was changed.", details};
         return false;
@@ -263,17 +273,45 @@ Confirmed confirmStartup(const InstallPaths& p, Version running) {
         }
         return c;
     }
-    Version from, to;
-    if (!fs::exists(update / "state", ec)) {  // a download that was never installed
-        for (const char* leftover : {"new", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
+    // Everything an update leaves in update/ and beside the account. The state goes first: without it
+    // the launcher never rolls back, so a clean-up cut short is finished at a later start.
+    // FAT orders nothing by itself: the state's removal reaches the disk before old/ starts going, or a
+    // power cut could leave a "tried" state over a half-deleted backup for the launcher to restore.
+    auto clearAll = [&] {
+        fs::remove(update / "state", ec);
+        ::sync();
+        for (const char* leftover : {"state.tmp", "old", "new", "trash", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
             fs::remove_all(update / leftover, ec);
+        if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
+    };
+    Version from, to;
+    if (!fs::exists(update / "state", ec)) {  // a download never installed, or a clean-up cut short
+        clearAll();
         return c;
     }
-    if (!parseState(readLine(update / "state"), &word, &from, &to)) return c;
+    // Here the running version has drawn its first screen: it has confirmed its start. A state the
+    // launcher acts on that names the running version (as either end) stays: from = a rollback the
+    // launcher hasn't finished (it tries again at the next start), to = the confirmation below.
+    const std::string line = readLine(update / "state");
+    std::istringstream(line) >> word;
+    if (word != "installing" && word != "installed" && word != "tried") {
+        // Unreadable (a torn write): the launcher rolls it back only if there is an old/bin to go back to.
+        if (fs::exists(update / "old/bin", ec)) return c;
+        log(LogLevel::Warn, "update: unreadable state \"%s\" with nothing to roll back: cleared", line.c_str());
+        clearAll();
+        return c;
+    }
+    if (!parseState(line, &word, &from, &to)) return c;  // the launcher's to settle
+    if (running != from && running != to) {
+        // Another version was put in place (over USB, say) and has started: going back to `from`
+        // would undo it, and the backup guards an update that is no longer here.
+        log(LogLevel::Warn, "update: stale state \"%s\" while %s runs: cleared with its backup", line.c_str(),
+            running.str().c_str());
+        clearAll();
+        return c;
+    }
     if ((word != "installed" && word != "tried") || to != running) return c;
-    for (const char* leftover : {"state", "old", "new", "trash", "zotero-for-kindle.zip", "zotero-for-kindle.zip.part"})
-        fs::remove_all(update / leftover, ec);
-    if (!p.configFile.empty()) fs::remove(p.configFile + ".old", ec);
+    clearAll();
     log(LogLevel::Info, "update: %s confirmed", to.str().c_str());
     return {StartupNote::Updated, from, to};
 }

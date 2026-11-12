@@ -70,7 +70,6 @@ private:
     Status status_;
     std::thread worker_;
     std::shared_ptr<std::atomic<bool>> cancel_ = std::make_shared<std::atomic<bool>>(false);
-    std::string zipPath_;
 };
 
 }  // namespace zk

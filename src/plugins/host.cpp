@@ -204,6 +204,9 @@ struct PluginRun {
         bool closed = false;      // left or closed by the plugin: no more renders; gone once its queue is empty
         bool failed = false;      // ScreenError sent: nothing more runs for it
         bool refreshDue = false;  // zk.ui.refresh while busy
+        bool refreshByUser = false;     // ... asked for by a user-caused call
+        int64_t lastQuietRefreshMs = 0;  // when a render for a quiet zk.ui.refresh last started
+        int64_t refreshAtMs = 0;         // quiet refreshes merged, due then (0: none)
         uint64_t received = 0, handled = 0;
     };
     std::map<uint64_t, OpenScreen> screens;
@@ -518,6 +521,8 @@ struct PluginHost::Impl {
             for (const auto& [tid, t] : p->run->timers)
                 if (!timerPaused(*p, t)) earliest(t.dueMs);
             for (const auto& w : p->run->waiting) earliest(w.dueMs);
+            for (const auto& [instance, sc] : p->run->screens)
+                if (sc.refreshAtMs) earliest(sc.refreshAtMs);
             for (const auto& [cid, c] : p->run->calls)
                 if (!c.pauses) earliest(c.deadline(now) + 1);
         }
@@ -1046,6 +1051,15 @@ struct PluginHost::Impl {
                               [&] { return p.cx.call(timer.callback, {}); });
                 }
             }
+            // Quiet refreshes merged into one, now due.
+            std::vector<uint64_t> refreshes;
+            for (auto& [instance, sc] : p.run->screens)
+                if (sc.refreshAtMs && sc.refreshAtMs <= now) {
+                    sc.refreshAtMs = 0;
+                    sc.refreshDue = true;
+                    refreshes.push_back(instance);
+                }
+            for (uint64_t instance : refreshes) pumpScreen(p, instance);
             // Continuations of ended calls that waited for quiet run time, in order.
             while (!p.run->waiting.empty() && p.run->waiting.front().dueMs <= steadyMs()) {
                 if (stopping || turnOffs.count(id)) break;
@@ -1237,7 +1251,8 @@ struct PluginHost::Impl {
         if (sc->closed) pumpScreen(p, instance);
         else {
             sc->busy = true;
-            sc->refreshDue = false;
+            sc->refreshDue = sc->refreshByUser = false;
+            sc->refreshAtMs = 0;  // this render shows what a waiting refresh would have
             renderScreen(p, instance);
         }
         applyTurnOffs();
@@ -1322,9 +1337,12 @@ struct PluginHost::Impl {
         if (sc->queue.empty()) {
             if (sc->closed) finishScreen(p, instance, std::nullopt);
             else if (sc->refreshDue) {
-                sc->refreshDue = false;
+                const bool user = sc->refreshByUser;
+                sc->refreshDue = sc->refreshByUser = false;
+                sc->refreshAtMs = 0;
+                if (!user) sc->lastQuietRefreshMs = steadyMs();
                 sc->busy = true;
-                renderScreen(p, instance, false);
+                renderScreen(p, instance, user);
             }
             return;
         }
@@ -1365,12 +1383,26 @@ struct PluginHost::Impl {
     }
 
     // zk.ui.refresh: the plugin's showing screen (the last opened that is still open) renders again.
-    void refreshScreen(uint64_t serial) {
+    // From a user-caused call at once; otherwise (a timer, say) at most once every quietRefreshMs,
+    // the refreshes asked for meanwhile merged into one.
+    void refreshScreen(uint64_t serial, bool user) {
         PluginCtx* p = bySerial(serial);
         if (!p) return;
         for (auto it = p->run->screens.rbegin(); it != p->run->screens.rend(); ++it) {
-            if (it->second.closed || it->second.failed) continue;
-            it->second.refreshDue = true;
+            PluginRun::OpenScreen& sc = it->second;
+            if (sc.closed || sc.failed) continue;
+            const int64_t allowedAt = sc.lastQuietRefreshMs ? sc.lastQuietRefreshMs + deps.quietRefreshMs : 0;
+            if (user) {
+                sc.refreshDue = sc.refreshByUser = true;
+                sc.refreshAtMs = 0;
+            } else if (sc.refreshDue || sc.refreshAtMs) {
+                break;  // one is coming: this one is merged into it
+            } else if (allowedAt > steadyMs()) {
+                sc.refreshAtMs = allowedAt;
+                break;
+            } else {
+                sc.refreshDue = true;
+            }
             pumpScreen(*p, it->first);
             break;
         }
@@ -1832,8 +1864,10 @@ std::string uiClose(PluginCtx& p, std::optional<nlohmann::json> result) {
 }
 
 void uiRefresh(PluginCtx& p) {
-    if (Call* c = p.host.findCall(p, p.run->current); c && c->kind == CallKind::Render) return;  // render asking for render
-    p.host.post([serial = p.run->serial](PluginHost::Impl& h) { h.refreshScreen(serial); });
+    Call* c = p.host.findCall(p, p.run->current);
+    if (c && c->kind == CallKind::Render) return;  // render asking for render
+    const bool user = c && c->userCaused;
+    p.host.post([serial = p.run->serial, user](PluginHost::Impl& h) { h.refreshScreen(serial, user); });
 }
 
 void setBackgroundTask(PluginCtx& p, js::Value task) {

@@ -357,6 +357,30 @@ TEST_CASE("plugin screen: the error state, with Back; Back always closes and tel
     }
 }
 
+TEST_CASE("plugin screen fix: the onEvent error pop-up hides the keyboard, so its Close is never under it") {
+    for (const Metrics* dev : {&kPw5, &kKt4}) {
+        ScopedMetrics m(*dev);
+        INFO(dev->device);
+        Rig r;
+        r.nav.keyboardFake.fixed = keyboardFallback(metrics(), profileFor(metrics().device, 300));
+        r.give(treeEvent(formScreen()));
+        REQUIRE(r.nav.keyboardFake.shown);
+        r.type("p");
+        r.give(PluginHostEvent{Kind::ScreenActionError, "riffle", "Feed Riffle", "Feed Riffle couldn't do that: boom", {}, 0, ""});
+        REQUIRE(r.screen.errorPopup());
+        CHECK_FALSE(r.nav.keyboardFake.shown);
+        CHECK(r.screen.focus().focused.empty());
+        const Rect close = r.screen.errorPopup()->closeRect();
+        CHECK(close.y + close.h <= metrics().height);
+        r.tap(r.centre(close));
+        CHECK_FALSE(r.screen.errorPopup());
+        bool changeSent = false;  // what was typed still reaches the plugin
+        for (int i = 0; i < 4; ++i) r.tick();
+        for (const auto& e : r.link.sent) changeSent |= e["kind"] == "change" && e["text"] == "p";
+        CHECK(changeSent);
+    }
+}
+
 // ---- End to end: the app, the host and PluginEvents ----------------------------------------------
 
 namespace {
