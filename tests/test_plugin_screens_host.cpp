@@ -394,3 +394,53 @@ console.log(JSON.stringify([zk.ui.text("Hi"), zk.ui.space(), zk.ui.buttons([{ id
     for (const char* m : {"`title`", "`render`", "`onEvent`", "`main`", "zk.ui.open: the screen id"}) CHECK(log.find(m) != std::string::npos);
     CHECK(log.find(R"([{"kind":"text","text":"Hi"},{"kind":"space"},{"kind":"buttons","buttons":[{"id":"a","title":"A"}]},{"kind":"column","children":[],"gap":"large"}])") != std::string::npos);
 }
+
+TEST_CASE("screens host fix: refreshes from a timer are merged into at most one render a second") {
+    Host h(R"JS(
+let n = 0;
+const tick = () => { n++; zk.ui.refresh(); setTimeout(tick, 100); };
+zk.screen("s", {
+  title: "S",
+  render: () => zk.ui.text(`n=${n}`),
+  onEvent(e) { if (e.kind === "open") setTimeout(tick, 0); },
+});
+)JS");
+    const uint64_t s = h.host->openScreen("p", "s");
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    std::vector<std::chrono::steady_clock::time_point> at;
+    const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(3200);
+    while (std::chrono::steady_clock::now() < end)
+        if (h.next(Kind::ScreenTree, s, 50)) at.push_back(std::chrono::steady_clock::now());
+    // About 30 refreshes in 3.2 s: the first at once, then one a second.
+    CHECK(at.size() >= 2);
+    CHECK(at.size() <= 4);
+    for (size_t i = 1; i < at.size(); ++i)
+        CHECK(std::chrono::duration_cast<std::chrono::milliseconds>(at[i] - at[i - 1]).count() >= 900);
+}
+
+TEST_CASE("screens host fix: a refresh from the user's own action renders at once, even while timer refreshes wait") {
+    Host h(R"JS(
+let n = 0, u = 0;
+zk.on("syncFinished", () => { u = 1; zk.ui.refresh(); });
+zk.screen("s", {
+  title: "S",
+  render: () => zk.ui.text(`n=${n} u=${u}`),
+  onEvent(e) {
+    if (e.kind !== "open") return;
+    setTimeout(() => { n = 1; zk.ui.refresh(); }, 0);    // quiet: at once (the first)
+    setTimeout(() => { n = 2; zk.ui.refresh(); }, 300);  // quiet: waits for the next 3 s
+  },
+});
+)JS", {}, 300, 600, [](PluginHostDeps& d) { d.quietRefreshMs = 3000; });
+    const uint64_t s = h.host->openScreen("p", "s");
+    REQUIRE(h.next(Kind::ScreenTree, s));
+    auto t = h.next(Kind::ScreenTree, s);
+    REQUIRE(t);
+    CHECK(Host::firstText(*t) == "n=1 u=0");
+    CHECK_FALSE(h.next(Kind::ScreenTree, s, 600));  // n=2's refresh waits
+    h.host->dispatch({"syncFinished", {}, true});    // user-caused
+    t = h.next(Kind::ScreenTree, s, 1000);
+    REQUIRE(t);
+    CHECK(Host::firstText(*t) == "n=2 u=1");
+    CHECK_FALSE(h.next(Kind::ScreenTree, s, 300));
+}

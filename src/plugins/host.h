@@ -63,6 +63,9 @@ struct PluginHostDeps {
     int quietRunMs = 2000, quietWindowMs = 60000;
     // setTimeout's floor: a shorter delay is raised to it (each wake costs battery).
     int minTimerMs = 100;
+    // zk.ui.refresh outside user-caused calls (a timer, a fetch that came back): merged into at most
+    // one render of the screen this often, each a redraw on e-ink. One from a user-caused call renders at once.
+    int quietRefreshMs = 1000;
     // Free bytes on the partition holding a path (statvfs; tests inject their own): plugin writes
     // (zk.files, zk.storage) are refused when it is under 50 MB.
     std::function<uint64_t(const std::string& path)> freeSpace;
