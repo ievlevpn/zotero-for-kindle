@@ -113,7 +113,7 @@ void AnnotationBar::draw(cairo_t* cr) const {
     }
     static const char* create[] = {"Highlight", "Underline", "Note", "More…"};
     static const char* edit[] = {"Comment", "Delete"};
-    static const char* text[] = {"Copy", "Search", "More…"};
+    static const char* text[] = {"Search", "More…"};
     for (int i = 0; i < buttons(); ++i) {
         const char* label = mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i];
         const bool more = mode_ != Mode::Edit && i == buttons() - 1 && more_;
@@ -131,7 +131,7 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
         if (dotRect(i).contains(p)) return {Action::Colour, i};
     static const Action create[] = {Action::Highlight, Action::Underline, Action::Note, Action::More};
     static const Action edit[] = {Action::Comment, Action::Delete};
-    static const Action text[] = {Action::Copy, Action::Search, Action::More};
+    static const Action text[] = {Action::Search, Action::More};
     for (int i = 0; i < buttons(); ++i)
         if (buttonRect(i).contains(p))
             return {mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i], -1};

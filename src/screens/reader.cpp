@@ -9,7 +9,6 @@
 #include <nlohmann/json.hpp>
 
 #include "app/settings_store.h"
-#include "core/clipboard.h"
 #include "core/log.h"
 #include "screens/annotation_bar.h"
 #include "screens/book_search.h"
@@ -942,11 +941,6 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             break;
         case AnnotationBar::Action::Underline:
             saveSelection("underline", "", nav);
-            break;
-        case AnnotationBar::Action::Copy:
-            if (selection_) clipboardText() = selection_->text;
-            closeSelection(nav);
-            nav.toast("Copied.");
             break;
         case AnnotationBar::Action::Search: {
             const std::string query = selection_ ? selection_->text : std::string{};

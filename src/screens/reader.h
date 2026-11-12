@@ -103,7 +103,7 @@ public:
     const ItemRow& row() const { return row_; }
     DocType type() const { return type_; }
     // A web snapshot (ItemRow::badge "WEB"), read in the EPUB engine: no highlights (the selection
-    // bar offers Copy and Search), and its place is kept on this Kindle only (not sent to Zotero).
+    // bar offers Search), and its place is kept on this Kindle only (not sent to Zotero).
     bool webPage() const { return web_; }
     int pageCount() const { return pageCount_; }
     const std::vector<TocEntry>& toc() const { return toc_; }

@@ -7,8 +7,8 @@
 // the bar into a short list of those actions (title, the plugin's name dimmed beside it). While
 // one runs, More… reads "Working…".
 //
-// Text (a web snapshot, where nothing is highlighted): no colours, only Copy · Search, and More…
-// when some plugin has selection actions.
+// Text (a web snapshot, where nothing is highlighted): no colours, only Search, and More… when
+// some plugin has selection actions.
 
 #include <array>
 #include <string>
@@ -32,7 +32,7 @@ const std::array<ZoteroColour, 8>& zoteroColours();
 class AnnotationBar {
 public:
     enum class Mode { Create, Edit, Text };
-    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Copy, Search };
+    enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Search };
     struct Hit {
         Action action = Action::None;
         int colour = -1;  // Colour: the dot; Plugin: the action's index
@@ -45,7 +45,7 @@ public:
     Mode mode() const { return mode_; }
     Rect rect() const { return rect_; }
     Rect dotRect(int i) const;     // 0..7, Zotero's order (none in Text)
-    Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete; Text: 0 Copy, 1 Search
+    Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete; Text: 0 Search
     bool hasColours() const { return mode_ != Mode::Text; }
     const std::string& colour() const { return colour_; }
     void setColour(std::string c) { colour_ = std::move(c); }
@@ -64,7 +64,7 @@ public:
     static constexpr int kTextH = 124;  // Text: the buttons' row alone
 
 private:
-    int buttons() const { return mode_ == Mode::Create ? 3 + more_ : 2 + (mode_ == Mode::Text && more_); }
+    int buttons() const { return mode_ == Mode::Create ? 3 + more_ : mode_ == Mode::Text ? 1 + more_ : 2; }
     int height() const { return mode_ == Mode::Text ? kTextH : kH; }
     void place(int h);
 

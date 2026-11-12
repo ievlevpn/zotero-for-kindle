@@ -224,7 +224,7 @@ bool EpubEngine::load(const std::string& path, UserError* err, bool textOnly) {
     settle();
     if (view_->getPageCount() <= 0) return fail(damaged, "no pages");
     // A web page has no CFIs (Zotero places its annotations with CSS selectors): no dom_, so no
-    // highlights and no Zotero position; select() still finds the words for Copy and Search.
+    // highlights and no Zotero position; select() still finds the words for Search and plugins.
     if (!html_) dom_ = std::make_unique<EpubDom>(view_->getDocument(), path);
     return true;
 }

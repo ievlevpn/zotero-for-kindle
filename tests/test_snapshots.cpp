@@ -1,5 +1,5 @@
 // Web snapshots (0.7 spec B): Zotero's saved web pages download (a zip of the page and its files),
-// unpack into files/<key>/ and open in the EPUB engine; "Web" in lists; no highlights, only Copy and
+// unpack into files/<key>/ and open in the EPUB engine; "Web" in lists; no highlights, only Search and
 // Search on a selection; the place kept on the Kindle only.
 //
 // The real page is a SingleFile snapshot from Pavel's library (Verbitsky's "Антикопирайт", its
@@ -7,7 +7,6 @@
 
 #include <doctest/doctest.h>
 
-#include "core/clipboard.h"
 #include "docs/engine_factory.h"
 #include "docs/render_worker.h"
 #include "fake_http.h"
@@ -602,7 +601,7 @@ struct ReaderRig {
 
 }  // namespace
 
-TEST_CASE("snapshots: the reader opens a web page; the selection bar has no colours, only Copy and Search") {
+TEST_CASE("snapshots: the reader opens a web page; the selection bar has no colours, only Search") {
     ReaderRig rig;
     CHECK(rig.reader->webPage());
     CHECK(rig.reader->pageCount() >= 2);
@@ -611,24 +610,15 @@ TEST_CASE("snapshots: the reader opens a web page; the selection bar has no colo
     CHECK(bar->mode() == AnnotationBar::Mode::Text);
     CHECK_FALSE(bar->hasColours());
     CHECK(bar->rect().h == AnnotationBar::kTextH);
-    CHECK(bar->hit(bar->buttonRect(0).center()).action == AnnotationBar::Action::Copy);
-    CHECK(bar->hit(bar->buttonRect(1).center()).action == AnnotationBar::Action::Search);
-    CHECK(bar->buttonRect(2).x + bar->buttonRect(2).w > bar->rect().x + bar->rect().w);  // no third button
-    const std::string words = rig.reader->selection()->text;
-    CHECK_FALSE(words.empty());
+    CHECK(bar->hit(bar->buttonRect(0).center()).action == AnnotationBar::Action::Search);
+    CHECK(bar->buttonRect(0).w == bar->rect().w - 40);  // the one button, the bar's width
+    CHECK(bar->hit(bar->buttonRect(1).center()).action == AnnotationBar::Action::None);
 
-    // Copy: the words to the app's clipboard; nothing saved.
-    clipboardText().clear();
-    rig.reader->onGesture(tapAt(bar->buttonRect(0).center()), rig.nav);
-    CHECK(clipboardText() == words);
-    CHECK(rig.nav.toasts.back() == "Copied.");
-    CHECK_FALSE(rig.reader->annotationBar());
-    CHECK(rig.lib.lib.annotationsFor("YNIQCXPZ").empty());
-
-    // Search: this page's search, for those words, at once.
-    REQUIRE(rig.select());
+    // Search: this page's search, for those words, at once; nothing saved.
     const std::string again = rig.reader->selection()->text;
-    rig.reader->onGesture(tapAt(rig.reader->annotationBar()->buttonRect(1).center()), rig.nav);
+    CHECK_FALSE(again.empty());
+    rig.reader->onGesture(tapAt(bar->buttonRect(0).center()), rig.nav);
+    CHECK_FALSE(rig.reader->annotationBar());
     REQUIRE(rig.nav.pushed.size() == 1);
     auto* search = dynamic_cast<BookSearchScreen*>(rig.nav.pushed[0].get());
     REQUIRE(search);
@@ -662,8 +652,9 @@ TEST_CASE("snapshots: the Text bar offers a plugin's selection actions under Mor
     rig.nav.entries = &entries;
     REQUIRE(rig.select());
     AnnotationBar* bar = rig.reader->annotationBar();
-    CHECK(bar->hit(bar->buttonRect(2).center()).action == AnnotationBar::Action::More);
-    rig.reader->onGesture(tapAt(bar->buttonRect(2).center()), rig.nav);
+    CHECK(bar->hit(bar->buttonRect(0).center()).action == AnnotationBar::Action::Search);
+    CHECK(bar->hit(bar->buttonRect(1).center()).action == AnnotationBar::Action::More);
+    rig.reader->onGesture(tapAt(bar->buttonRect(1).center()), rig.nav);
     REQUIRE(bar->listing());
     CHECK(bar->listed()[0].title == "Explain");
     rig.nav.entries = nullptr;
@@ -720,12 +711,12 @@ TEST_CASE("snapshots: the Text bar and Web rows fit on the KT4 and the Scribe") 
                 AnnotationBar bar(AnnotationBar::Mode::Text, anchor, "#ffd400", more);
                 CHECK(within(bar.rect(), page));
                 CHECK(bar.rect().intersected(anchor).empty());
-                for (int i = 0; i < 2 + more; ++i) {
+                for (int i = 0; i < 1 + more; ++i) {
                     CHECK(within(bar.buttonRect(i), bar.rect()));
                     if (i) CHECK(apart(bar.buttonRect(i - 1), bar.buttonRect(i)));
                 }
                 const int labelW = measureText("Search", {theme::kSans, 8, 500}, 1000, 1).width;
-                CHECK(bar.buttonRect(1).w > labelW + 20);
+                CHECK(bar.buttonRect(0).w > labelW + 20);
             }
         // The Filter sheet's five Type chips (Web among them) fit.
         LibraryView v;
