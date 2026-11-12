@@ -29,7 +29,8 @@ public:
     // Called while the .zip downloads (bytes done, total; total 0 = unknown).
     void setProgress(std::function<void(int64_t done, int64_t total)> f) override { progress_ = std::move(f); }
     // .prop -> .zip into a temp file -> extract `filename` -> MD5 must equal the attachment's md5
-    // -> move to destDir/<key>/<filename> with the file's mtime. On failure nothing is left behind.
+    // -> move to destDir/<key>/<filename> with the file's mtime. A web snapshot's zip is unpacked
+    // whole (installSnapshot). On failure nothing is left behind.
     bool download(const AttachmentRecord&, const std::string& destDir, UserError*) override;
     // Free bytes at a path (statvfs by default); tests inject their own.
     void setFreeSpaceProbe(std::function<uint64_t(const std::string& path)>);

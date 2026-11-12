@@ -37,8 +37,8 @@ const std::array<ZoteroColour, 8>& zoteroColours() {
 }
 
 AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more)
-    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode == Mode::Create) {
-    place(kH);
+    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode != Mode::Edit) {
+    place(height());
 }
 
 void AnnotationBar::place(int h) {
@@ -56,7 +56,7 @@ void AnnotationBar::showActions(std::vector<PluginAction> actions) {
     actions_ = std::move(actions);
     const int fit = (ReaderScreen::pageArea().h - 2 * kGap - 2 * kPad) / kActionRowH;
     if (static_cast<int>(actions_.size()) > fit) actions_.resize(static_cast<size_t>(std::max(fit, 0)));
-    place(actions_.empty() ? kH : 2 * kPad + static_cast<int>(actions_.size()) * kActionRowH);
+    place(actions_.empty() ? height() : 2 * kPad + static_cast<int>(actions_.size()) * kActionRowH);
 }
 
 Rect AnnotationBar::actionRect(int i) const {
@@ -64,6 +64,7 @@ Rect AnnotationBar::actionRect(int i) const {
 }
 
 Rect AnnotationBar::dotRect(int i) const {
+    if (!hasColours()) return {};
     const int w = (rect_.w - 2 * kPad) / 8;
     return {rect_.x + kPad + i * w, rect_.y + kPad, w, kDotRowH};
 }
@@ -71,7 +72,7 @@ Rect AnnotationBar::dotRect(int i) const {
 Rect AnnotationBar::buttonRect(int i) const {
     const int n = buttons();
     const int w = (rect_.w - 2 * kPad - (n - 1) * kGap) / n;
-    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + kDotRowH + 6, w, kButtonH};
+    return {rect_.x + kPad + i * (w + kGap), rect_.y + kPad + (hasColours() ? kDotRowH + 6 : 0), w, kButtonH};
 }
 
 void AnnotationBar::draw(cairo_t* cr) const {
@@ -92,7 +93,7 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         return;
     }
-    for (int i = 0; i < 8; ++i) {
+    for (int i = 0; i < (hasColours() ? 8 : 0); ++i) {
         const Rect d = dotRect(i);
         const auto& c = zoteroColours()[i];
         const double cx = d.x + d.w / 2.0, cy = d.y + 38;
@@ -112,8 +113,12 @@ void AnnotationBar::draw(cairo_t* cr) const {
     }
     static const char* create[] = {"Highlight", "Underline", "Note", "More…"};
     static const char* edit[] = {"Comment", "Delete"};
-    for (int i = 0; i < buttons(); ++i)
-        drawButton(cr, buttonRect(i), mode_ == Mode::Create ? (i == 3 && working_ ? "Working…" : create[i]) : edit[i], false);
+    static const char* text[] = {"Copy", "Search", "More…"};
+    for (int i = 0; i < buttons(); ++i) {
+        const char* label = mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i];
+        const bool more = mode_ != Mode::Edit && i == buttons() - 1 && more_;
+        drawButton(cr, buttonRect(i), more && working_ ? "Working…" : label, false);
+    }
 }
 
 AnnotationBar::Hit AnnotationBar::hit(Point p) const {
@@ -122,12 +127,14 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
             if (actionRect(i).contains(p)) return {Action::Plugin, i};
         return {};
     }
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < (hasColours() ? 8 : 0); ++i)
         if (dotRect(i).contains(p)) return {Action::Colour, i};
     static const Action create[] = {Action::Highlight, Action::Underline, Action::Note, Action::More};
     static const Action edit[] = {Action::Comment, Action::Delete};
+    static const Action text[] = {Action::Copy, Action::Search, Action::More};
     for (int i = 0; i < buttons(); ++i)
-        if (buttonRect(i).contains(p)) return {mode_ == Mode::Create ? create[i] : edit[i], -1};
+        if (buttonRect(i).contains(p))
+            return {mode_ == Mode::Create ? create[i] : mode_ == Mode::Edit ? edit[i] : text[i], -1};
     return {};
 }
 

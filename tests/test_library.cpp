@@ -169,7 +169,7 @@ TEST_CASE("library: collections, membership, attachments and annotations") {
     rig.lib.upsertAttachment(html);
     rig.lib.upsertAttachment(pdf);
     auto readable = rig.lib.readableAttachments("ITEM0001");
-    REQUIRE(readable.size() == 2);
+    REQUIRE(readable.size() == 3);  // the web snapshot too (0.7)
 
     AnnotationRecord second;
     second.key = "ANNOT002";

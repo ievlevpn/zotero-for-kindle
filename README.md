@@ -32,8 +32,9 @@
 or one collection, pin collections, mark books read (a Zotero tag of your choice). Books download on demand from Zotero
 storage or WebDAV — or keep a whole collection downloaded, and new papers in it arrive by themselves.
 
-**A reader made for e-ink.** EPUB and PDF, with fonts, sizes and margins, PDF margin trimming, landscape with two
-columns on big screens, footnotes in a pop-up, bookmarks, *Go to page*, and Fast reading fonts for EPUBs.
+**A reader made for e-ink.** EPUB, PDF and the web pages Zotero saved (snapshots), with fonts, sizes and margins,
+PDF margin trimming, landscape with two columns on big screens, footnotes in a pop-up, bookmarks, *Go to page*, and
+Fast reading fonts for EPUBs.
 
 **Annotations that go both ways.** Highlights, underlines and comments; on PDFs also **areas** (a box around a figure,
 a formula or a table) and **sticky notes** in the margin. They appear in Zotero desktop, and Zotero's appear here.

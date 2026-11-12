@@ -45,8 +45,8 @@ void OpenFlow::start(const ItemRow& row, Nav& nav, std::optional<AnnotationRecor
         bool linked = false;
         for (const auto& a : nav.library().attachmentsOf(row.key))
             linked |= a.linkMode == "linked_file" &&
-                      (a.contentType == "application/epub+zip" || a.contentType == "application/pdf");
-        nav.toast(linked ? "This file is only on your computer." : "No EPUB or PDF for this item.");
+                      isReadableType(a.contentType);
+        nav.toast(linked ? "This file is only on your computer." : "No EPUB, PDF or saved web page for this item.");
         return;
     }
     auto it = pending_.find(row.attachmentKey);

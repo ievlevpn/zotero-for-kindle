@@ -7,6 +7,7 @@
 
 class LVDocView;
 class ldomNode;
+class ldomXPointer;
 
 namespace zk {
 
@@ -45,8 +46,10 @@ private:
     int crPage(int spread) const { return spread * cols(); }
     int spreadOf(int crPage) const { return crPage < 0 ? crPage : crPage / cols(); }
     void settle();
+    std::vector<Rect> windowRects(const ldomXPointer& start, const ldomXPointer& end);
     bool load(const std::string& path, UserError*, bool textOnly);
-    bool textOnly_ = false;  // opened with openForText: crengine's document cache is never used
+    bool textOnly_ = false;
+    bool html_ = false;  // a saved web page, not an EPUB  // opened with openForText: crengine's document cache is never used
     // The current page's <a> links (cached for one page): their element, href, text and boxes.
     struct PageLink {
         ldomNode* anchor = nullptr;

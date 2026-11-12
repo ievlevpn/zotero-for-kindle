@@ -120,8 +120,7 @@ void ItemDetailsScreen::draw(Canvas& canvas) {
         drawText(cr, details_.files.size() == 1 ? "File" : "Files", label, {x, y, w, 40}, 1);
         y += 50;
         auto readable = [](const AttachmentRecord& a) {
-            return (a.contentType == "application/epub+zip" || a.contentType == "application/pdf") &&
-                   a.linkMode != "linked_file" && a.linkMode != "linked_url";
+            return isReadableType(a.contentType) && a.linkMode != "linked_file" && a.linkMode != "linked_url";
         };
         const auto readables = std::count_if(details_.files.begin(), details_.files.end(),
                                              [&](const ItemDetails::File& f) { return readable(f.attachment); });

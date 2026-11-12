@@ -365,6 +365,9 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
         }
         case ObjectKind::Annotation: {
             AnnotationRecord incoming = parseAnnotation(obj);
+            // On a web snapshot: not kept (Zotero places these with CSS selectors, which the Kindle
+            // doesn't read); its version is, so it isn't fetched again.
+            if (auto att = lib_.attachment(incoming.parentKey); att && isWebSnapshot(att->contentType)) break;
             if (auto local = lib_.annotation(key)) {
                 incoming.createdHere = local->createdHere;
                 if (local->deletedHere && local->createdHere && local->version == 0) {

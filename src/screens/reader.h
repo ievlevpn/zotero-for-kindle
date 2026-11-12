@@ -102,6 +102,9 @@ public:
     RenderWorker* worker() { return worker_.get(); }
     const ItemRow& row() const { return row_; }
     DocType type() const { return type_; }
+    // A web snapshot (ItemRow::badge "WEB"), read in the EPUB engine: no highlights (the selection
+    // bar offers Copy and Search), and its place is kept on this Kindle only (not sent to Zotero).
+    bool webPage() const { return web_; }
     int pageCount() const { return pageCount_; }
     const std::vector<TocEntry>& toc() const { return toc_; }
     const std::string& chapter() const { return chapter_; }
@@ -224,6 +227,7 @@ private:
     ItemRow row_;
     std::string path_;
     DocType type_;
+    bool web_ = false;
     WorkerFactory makeWorker_;
     int flashEvery_;
     Lipc* lipc_;

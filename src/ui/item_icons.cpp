@@ -105,7 +105,9 @@ void globe(cairo_t* cr, double cx, double cy, double r) {
 
 }  // namespace
 
-void itemTypeIcon(cairo_t* cr, Rect box, const std::string& t, const std::string& format) {
+void itemTypeIcon(cairo_t* cr, Rect box, const std::string& itemType, const std::string& format) {
+    // What opens is a saved web page (a Zotero snapshot): the globe, whatever Zotero calls the item.
+    const std::string& t = format == "WEB" ? std::string("webpage") : itemType;
     cairo_save(cr);
     cairo_rectangle(cr, box.x, box.y, box.w, box.h);
     cairo_clip(cr);

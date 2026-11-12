@@ -168,7 +168,7 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
             parts.push_back(screen.substr(at, next - at));
         }
         auto att = lib.attachment(parts.size() > 1 ? parts[1] : "");
-        auto row = att ? lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey) : std::nullopt;
+        auto row = att ? lib.rowFor(att->parentKey.empty() ? att->key : att->parentKey, att->key) : std::nullopt;
         if (!att || att->localPath.empty() || !row) {
             log(LogLevel::Error, "%s: not a downloaded attachment", screen.c_str());
             return 2;

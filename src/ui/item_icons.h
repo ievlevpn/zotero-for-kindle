@@ -1,6 +1,7 @@
 #pragma once
 // Monochrome icons for Zotero item types in list rows (book, article, preprint, web page…), drawn
-// as line art for e-ink; the item's file format ("EPUB", "PDF") goes under the icon when it has one.
+// as line art for e-ink; the item's file format ("EPUB", "PDF", "WEB") goes under the icon when it has
+// one. An item that opens a web snapshot ("WEB") shows the globe, whatever its type.
 
 #include <string>
 

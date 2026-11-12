@@ -31,6 +31,20 @@ struct AttachmentRecord {
     std::string title;  // Zotero's ("Full Text PDF"), "" if none
 };
 
+// The files the Kindle reads: EPUB, PDF and web snapshots (Zotero's saved pages, text/html, a zip of
+// the page and its files in Zotero storage or on WebDAV). Snapshots open in the EPUB engine.
+inline bool isWebSnapshot(const std::string& contentType) { return contentType == "text/html"; }
+inline bool isReadableType(const std::string& contentType) {
+    return contentType == "application/epub+zip" || contentType == "application/pdf" || isWebSnapshot(contentType);
+}
+// The label lists put under a file's icon: "EPUB", "PDF", "WEB" ("" for other files).
+inline const char* fileLabel(const std::string& contentType) {
+    return contentType == "application/epub+zip" ? "EPUB"
+           : contentType == "application/pdf"    ? "PDF"
+           : isWebSnapshot(contentType)          ? "WEB"
+                                                 : "";
+}
+
 struct AnnotationRecord {
     std::string key, parentKey /* attachment */, type, text, comment, color, pageLabel, sortIndex,
         position /* JSON string */;

@@ -1,6 +1,7 @@
 #include "sync/webdav.h"
 
 #include "core/log.h"
+#include "sync/snapshot_zip.h"
 
 extern "C" {
 #include <md5.h>
@@ -54,6 +55,7 @@ std::string localFileName(const AttachmentRecord& a) {
     if (name.empty() || name == "." || name == "..") {
         const std::string ext = a.contentType == "application/pdf"        ? ".pdf"
                                 : a.contentType == "application/epub+zip" ? ".epub"
+                                : isWebSnapshot(a.contentType)            ? ".html"
                                                                           : "";
         name = a.key + ext;
     }
@@ -154,6 +156,9 @@ bool WebDav::download(const AttachmentRecord& a, const std::string& destDir, Use
     if (r.curlCode == 23 /* CURLE_WRITE_ERROR */ && freeSpace_(destDir) < (1u << 20))
         return setError(err, noSpace("curl 23: " + r.curlError)), false;
     if (r.curlCode || r.status != 200) return setError(err, fail(r)), false;
+    if (isWebSnapshot(a.contentType))  // the page and its files, all of them
+        return installSnapshot(a, zipPath.string(), destDir, info->mtime ? info->mtime : a.mtime,
+                               [&] { return freeSpace_(destDir); }, err);
 
     mz_zip_archive zip{};
     if (!mz_zip_reader_init_file(&zip, zipPath.c_str(), 0))

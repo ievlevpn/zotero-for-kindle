@@ -132,7 +132,7 @@ TEST_CASE("open flow: items without a readable file say why") {
     ItemRow none = *rig.lib.rowFor("IT000005");
     rig.flow.open(none, rig.nav);
     REQUIRE(rig.nav.toasts.size() == 1);
-    CHECK(rig.nav.toasts[0] == "No EPUB or PDF for this item.");
+    CHECK(rig.nav.toasts[0] == "No EPUB, PDF or saved web page for this item.");
     ItemRow linked = *rig.lib.rowFor("IT000002");
     rig.flow.open(linked, rig.nav);
     CHECK(rig.nav.toasts.back() == "This file is only on your computer.");

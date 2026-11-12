@@ -24,6 +24,28 @@ namespace {
 
 constexpr int64_t kSchemaVersion = 11;
 
+// The files the Kindle reads (isReadableType), kept in Zotero (not linked), as SQL over attachments
+// (`a` the table's alias with its dot, or "").
+std::string readableFile(const std::string& a = "") {
+    return a + "contentType IN ('application/epub+zip', 'application/pdf', 'text/html') AND " + a +
+           "linkMode NOT IN ('linked_file', 'linked_url')";
+}
+// Sets items' readableKey/readableType (reindex(), and once over the whole library for snapshots).
+const char* const kReadableUpdate =
+    "UPDATE items SET (readableKey, readableType) = (SELECT coalesce(a.key, ''), coalesce(CASE a.contentType "
+    "  WHEN 'application/epub+zip' THEN 'EPUB' WHEN 'application/pdf' THEN 'PDF' WHEN 'text/html' THEN 'WEB' END, '') "
+    "  FROM (SELECT 1) LEFT JOIN (SELECT key, contentType FROM attachments "
+    "    WHERE (parentKey = items.key OR (key = items.key AND parentKey = '')) "
+    "      AND contentType IN ('application/epub+zip', 'application/pdf', 'text/html') "
+    "      AND linkMode NOT IN ('linked_file', 'linked_url') "
+    "    ORDER BY CASE contentType WHEN 'application/epub+zip' THEN 0 WHEN 'application/pdf' THEN 1 ELSE 2 END, key "
+    "    LIMIT 1) a) ";
+
+// An item's files in the order rows pick them: EPUB, then PDF, then a web snapshot.
+int readableRank(const std::string& contentType) {
+    return contentType == "application/epub+zip" ? 0 : contentType == "application/pdf" ? 1 : isWebSnapshot(contentType) ? 2 : 3;
+}
+
 // Deletes an attachment's downloaded copy: the file, and its <files>/<attachmentKey>/ folder.
 void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& localPath) {
     if (attachmentKey.empty() || localPath.empty()) return;
@@ -35,7 +57,8 @@ void deleteDownloadedCopy(const std::string& attachmentKey, const std::string& l
 
 // The current schema (PRAGMA user_version = kSchemaVersion). Text-heavy columns default to '' so reads never see NULL.
 // items.id is the stable rowid the FTS index points at (a VACUUM can't renumber it).
-// readableKey/readableType: the item's file to open (EPUB preferred), kept by reindex().
+// readableKey/readableType: the item's file to open (EPUB, else PDF, else a web snapshot: 'EPUB', 'PDF',
+// 'WEB'), kept by reindex().
 // titleKey/authorKey: listSortKey() of the title and of sortCreator, kept by upsertItem().
 const char* kSchema = R"sql(
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -423,7 +446,37 @@ std::string listSortKey(const std::string& text) {
     return initialOf(g_utf8_get_char(p)) + "\x1f" + numbersInOrder(folded(p));
 }
 
-Library::Library(Db& db) : db_(db) { guarded([&] { migrate(); }); }
+Library::Library(Db& db) : db_(db) {
+    guarded([&] {
+        migrate();
+        readSnapshots();
+    });
+}
+
+// 0.7: web snapshots became readable. Once per library, items pick their file again (a lone
+// snapshot is now one), and Zotero's snapshot annotations go: the Kindle doesn't show them (Zotero
+// places them with CSS selectors), and the sync no longer keeps them.
+void Library::readSnapshots() {
+    if (meta("webSnapshots") == "1") return;
+    for (const char* table : {"items", "attachments", "annotations"}) {  // a test's partial schema
+        Stmt st = db_.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+        st.bind(1, std::string(table));
+        if (!st.step()) return;
+    }
+    db_.exec("BEGIN");
+    try {
+        db_.exec(kReadableUpdate);
+        db_.exec("DELETE FROM annotations WHERE parentKey IN (SELECT key FROM attachments WHERE contentType = 'text/html')");
+        setMeta("webSnapshots", "1");
+        db_.exec("COMMIT");
+    } catch (...) {
+        try {
+            db_.exec("ROLLBACK");
+        } catch (const DbError&) {
+        }
+        throw;
+    }
+}
 
 template <class F> auto Library::guarded(F&& f) -> decltype(f()) {
     try {
@@ -560,15 +613,7 @@ void Library::reindex(const std::string& itemKey) {
         "INSERT INTO item_fts(rowid, title, creators, publication, tags) "
         "SELECT i.rowid, i.title, i.creatorsText, i.publication, i.tagsText FROM items i WHERE i.key = ?");
     ins.bind(1, itemKey).step();
-    Stmt readable = db_.prepare(
-        "UPDATE items SET (readableKey, readableType) = (SELECT coalesce(a.key, ''), coalesce(CASE a.contentType "
-        "  WHEN 'application/epub+zip' THEN 'EPUB' WHEN 'application/pdf' THEN 'PDF' END, '') "
-        "  FROM (SELECT 1) LEFT JOIN (SELECT key, contentType FROM attachments "
-        "    WHERE (parentKey = ?1 OR (key = ?1 AND parentKey = '')) "
-        "      AND contentType IN ('application/epub+zip', 'application/pdf') "
-        "      AND linkMode NOT IN ('linked_file', 'linked_url') "
-        "    ORDER BY contentType = 'application/epub+zip' DESC, key LIMIT 1) a) "
-        "WHERE key = ?1");
+    Stmt readable = db_.prepare(kReadableUpdate + std::string("WHERE key = ?1"));
     readable.bind(1, itemKey).step();
 }
 
@@ -995,8 +1040,8 @@ std::vector<AnnotationRecord> Library::dirtyAnnotations() {
 std::vector<AttachmentRecord> Library::readableAttachments(const std::string& itemKey) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kAttachmentColumns +
-                              " FROM attachments WHERE (parentKey = ? OR (key = ? AND parentKey = '')) AND contentType IN ('application/epub+zip', "
-                              "'application/pdf') AND linkMode NOT IN ('linked_file', 'linked_url') ORDER BY key");
+                              " FROM attachments WHERE (parentKey = ? OR (key = ? AND parentKey = '')) AND " + readableFile() +
+                              " ORDER BY key");
         st.bind(1, itemKey).bind(2, itemKey);
         return readAttachments(st);
     });
@@ -1058,7 +1103,7 @@ const char* kRowColumns =
     "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
     "coalesce(rs.progress, -1), i.itemType, i.tags, coalesce(m.read, -1), coalesce(m.tag, ''), "
     "(SELECT count(*) FROM attachments f WHERE f.parentKey = i.key AND f.contentType IN ('application/epub+zip', "
-    "'application/pdf') AND f.linkMode NOT IN ('linked_file', 'linked_url'))";
+    "'application/pdf', 'text/html') AND f.linkMode NOT IN ('linked_file', 'linked_url'))";
 const char* kRowJoins =
     " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key "
     "LEFT JOIN read_marks m ON m.itemKey = i.key ";
@@ -1107,6 +1152,7 @@ Where whereOf(const ListQuery& q, const std::string& readTag) {
         case TypeFilter::WithFile: w.sql += " AND i.readableType != ''"; break;
         case TypeFilter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
         case TypeFilter::Pdf: w.sql += " AND i.readableType = 'PDF'"; break;
+        case TypeFilter::Web: w.sql += " AND i.readableType = 'WEB'"; break;
         case TypeFilter::Any: break;
     }
     if (q.read != ReadFilter::Any) {  // as isReadNow()
@@ -1119,8 +1165,7 @@ Where whereOf(const ListQuery& q, const std::string& readTag) {
     if (q.downloaded)  // any of its files
         w.sql += " AND EXISTS (SELECT 1 FROM attachments d WHERE (d.parentKey = i.key OR d.key = i.key) AND d.state = " +
                  std::to_string(static_cast<int>(AttachmentRecord::State::Local)) +
-                 " AND d.contentType IN ('application/epub+zip', 'application/pdf') AND d.linkMode NOT IN ('linked_file', "
-                 "'linked_url'))";
+                 " AND " + readableFile("d.") + ")";
     if (!q.tag.empty()) {
         w.sql += " AND EXISTS (SELECT 1 FROM json_each(i.tags) WHERE value = ?)";
         w.args.push_back(q.tag);
@@ -1261,7 +1306,7 @@ std::optional<ItemRow> Library::rowFor(const std::string& itemKey, const std::st
     for (const auto& a : readableAttachments(itemKey))
         if (a.key == attachmentKey) {
             row->attachmentKey = a.key;
-            row->badge = a.contentType == "application/pdf" ? "PDF" : "EPUB";
+            row->badge = fileLabel(a.contentType);
             row->fileState = a.state;
             row->exactFile = true;
         }
@@ -1284,10 +1329,10 @@ std::vector<FileChoice> Library::fileChoices(const std::string& itemKey) {
         c.attachment = std::move(a);
         out.push_back(std::move(c));
     }
-    // The one read last, then EPUB before PDF (as rows pick their file), then by key.
+    // The one read last, then EPUB, PDF, web snapshot (as rows pick their file), then by key.
     std::stable_sort(out.begin(), out.end(), [](const FileChoice& a, const FileChoice& b) {
         if (a.lastRead != b.lastRead) return a.lastRead;
-        return (a.attachment.contentType == "application/epub+zip") > (b.attachment.contentType == "application/epub+zip");
+        return readableRank(a.attachment.contentType) < readableRank(b.attachment.contentType);
     });
     return out;
 }
@@ -1316,8 +1361,8 @@ std::optional<ItemDetails> Library::details(const std::string& itemKey) {
     std::vector<AttachmentRecord> atts = attachmentsOf(itemKey);
     if (auto self = attachment(itemKey)) atts.insert(atts.begin(), *self);
     auto rank = [](const AttachmentRecord& a) {
-        if (a.linkMode == "linked_file") return 3;
-        return a.contentType == "application/epub+zip" ? 0 : a.contentType == "application/pdf" ? 1 : 2;
+        if (a.linkMode == "linked_file") return 4;
+        return readableRank(a.contentType);
     };
     std::stable_sort(atts.begin(), atts.end(), [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
     for (auto& a : atts) {
@@ -1325,7 +1370,13 @@ std::optional<ItemDetails> Library::details(const std::string& itemKey) {
         std::error_code ec;
         f.onKindle = a.state == AttachmentRecord::State::Local && !a.localPath.empty() &&
                      std::filesystem::exists(a.localPath, ec);
-        if (f.onKindle) f.bytes = static_cast<int64_t>(std::filesystem::file_size(a.localPath, ec));
+        if (f.onKindle && isWebSnapshot(a.contentType)) {  // the page and its files
+            for (auto it = std::filesystem::recursive_directory_iterator(std::filesystem::path(a.localPath).parent_path(), ec);
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+                if (it->is_regular_file(ec)) f.bytes += static_cast<int64_t>(it->file_size(ec));
+        } else if (f.onKindle) {
+            f.bytes = static_cast<int64_t>(std::filesystem::file_size(a.localPath, ec));
+        }
         f.highlights = static_cast<int>(annotationsFor(a.key).size());
         f.progress = guarded([&] {
             Stmt st = db_.prepare("SELECT progress FROM file_reading WHERE attachmentKey = ?");
@@ -1580,7 +1631,7 @@ std::vector<ItemRow> Library::collectionFiles(const std::string& collectionKey) 
                 if (a.key != row.attachmentKey) {
                     ItemRow other = row;
                     other.attachmentKey = a.key;
-                    other.badge = a.contentType == "application/pdf" ? "PDF" : "EPUB";
+                    other.badge = fileLabel(a.contentType);
                     other.fileState = a.state;
                     out.push_back(std::move(other));
                 }
@@ -1836,8 +1887,7 @@ void Library::setFileState(const std::string& attachmentKey, AttachmentRecord::S
 
 std::vector<std::string> Library::filesOfManyFileItems() {
     return guarded([&] {
-        const std::string readable =
-            "contentType IN ('application/epub+zip', 'application/pdf') AND linkMode NOT IN ('linked_file', 'linked_url')";
+        const std::string readable = readableFile();
         Stmt st = db_.prepare("SELECT key FROM attachments WHERE " + readable + " AND parentKey IN (SELECT parentKey FROM "
                               "attachments WHERE parentKey != '' AND " + readable + " GROUP BY parentKey HAVING count(*) > 1) ORDER BY key");
         std::vector<std::string> out;

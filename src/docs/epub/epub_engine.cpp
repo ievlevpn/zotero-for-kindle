@@ -128,6 +128,18 @@ bool looksLikeZip(const std::string& path) {
     return in.gcount() == 4 && sig[0] == 'P' && sig[1] == 'K';
 }
 
+// A saved web page (a Zotero snapshot): markup from the start, after any byte order mark and
+// white space. crengine reads it as HTML, its images relative to the file's folder.
+bool looksLikeHtml(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    char head[512] = {0};
+    in.read(head, sizeof head);
+    const std::string s(head, static_cast<size_t>(in.gcount()));
+    size_t i = s.compare(0, 3, "\xEF\xBB\xBF") == 0 ? 3 : 0;
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t' || s[i] == '\r' || s[i] == '\n')) ++i;
+    return i < s.size() && s[i] == '<';
+}
+
 }  // namespace
 
 EpubEngine::EpubEngine(const EngineEnv& env) : env_(env) {
@@ -195,8 +207,10 @@ bool EpubEngine::load(const std::string& path, UserError* err, bool textOnly) {
     };
     if (::access(path.c_str(), R_OK) != 0)
         return fail("This book's file is missing. Open it from the library to download it again.", path.c_str());
-    if (!looksLikeZip(path)) return fail("This EPUB is damaged and can't be opened.", "not a zip file");
-    if (hasDrm(path)) return fail("This EPUB is protected (DRM) and can't be opened.", "META-INF/encryption.xml");
+    html_ = !looksLikeZip(path) && looksLikeHtml(path);
+    const char* damaged = html_ ? "This web page is damaged and can't be opened." : "This EPUB is damaged and can't be opened.";
+    if (!html_ && !looksLikeZip(path)) return fail(damaged, "not a zip file");
+    if (!html_ && hasDrm(path)) return fail("This EPUB is protected (DRM) and can't be opened.", "META-INF/encryption.xml");
     view_ = std::make_unique<LVDocView>(8);
     std::ifstream css(env_.dataDir + "/epub.css");
     std::stringstream cssText;
@@ -204,12 +218,14 @@ bool EpubEngine::load(const std::string& path, UserError* err, bool textOnly) {
     baseCss_ = cssText.str();
     if (!textOnly) applyLayout();  // the style sheet, with the chosen font
     if (!view_->LoadDocument(path.c_str()) || !view_->getDocument())
-        return fail("This EPUB is damaged and can't be opened.", "crengine: LoadDocument failed");
+        return fail(damaged, "crengine: LoadDocument failed");
     if (textOnly) return true;
     view_->setViewMode(DVM_PAGES, cols());
     settle();
-    if (view_->getPageCount() <= 0) return fail("This EPUB is damaged and can't be opened.", "no pages");
-    dom_ = std::make_unique<EpubDom>(view_->getDocument(), path);
+    if (view_->getPageCount() <= 0) return fail(damaged, "no pages");
+    // A web page has no CFIs (Zotero places its annotations with CSS selectors): no dom_, so no
+    // highlights and no Zotero position; select() still finds the words for Copy and Search.
+    if (!html_) dom_ = std::make_unique<EpubDom>(view_->getDocument(), path);
     return true;
 }
 
@@ -592,16 +608,24 @@ std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<Ann
     for (const auto& a : anns) {
         auto r = dom_->resolve(cfiOf(a));
         if (!r) continue;
-        ldomXRange range(r->start, r->end);
-        LVArray<lvRect> rects;
-        range.getSegmentRects(rects);
-        for (int i = 0; i < rects.length(); ++i) {
-            lvPoint tl = rects[i].topLeft(), br = rects[i].bottomRight();
-            if (!view_->docToWindowPoint(tl) || !view_->docToWindowPoint(br, true)) continue;  // another page
-            Rect box{tl.x, tl.y, br.x - tl.x, br.y - tl.y};
-            if (box.empty() || box.y < 0 || box.y + box.h > layout_.height) continue;
+        for (const Rect& box : windowRects(r->start, r->end))
             out.push_back({a.key, box, shadeOf(a.color), a.type == "underline"});
-        }
+    }
+    return out;
+}
+
+// A range's lines on the current page, in device pixels (lines on other pages are left out).
+std::vector<Rect> EpubEngine::windowRects(const ldomXPointer& start, const ldomXPointer& end) {
+    std::vector<Rect> out;
+    ldomXRange range(start, end);
+    LVArray<lvRect> rects;
+    range.getSegmentRects(rects);
+    for (int i = 0; i < rects.length(); ++i) {
+        lvPoint tl = rects[i].topLeft(), br = rects[i].bottomRight();
+        if (!view_->docToWindowPoint(tl) || !view_->docToWindowPoint(br, true)) continue;  // another page
+        Rect box{tl.x, tl.y, br.x - tl.x, br.y - tl.y};
+        if (box.empty() || box.y < 0 || box.y + box.h > layout_.height) continue;
+        out.push_back(box);
     }
     return out;
 }
@@ -735,7 +759,7 @@ ldomXPointer wordEnd(ldomXPointer p) {
 
 std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
-    if (!view_ || !dom_ || page < 0 || page >= pageCount()) return std::nullopt;
+    if (!view_ || (!dom_ && !html_) || page < 0 || page >= pageCount()) return std::nullopt;
     view_->goToPage(crPage(page));
     // The drag stays on this page: a finger over the footer means the page's last line.
     to.y = std::clamp(to.y, 0, layout_.height - layout_.marginPx / 2 - 1);
@@ -763,7 +787,15 @@ std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
     if (!lastRange.isNull() && ldomXPointerEx(end).compare(ldomXPointerEx(lastRange->getEnd())) > 0) end = lastRange->getEnd();
     if (ldomXPointerEx(end).compare(ldomXPointerEx(start)) <= 0) return std::nullopt;
 
-    auto generated = dom_->generate(start, end);
+    if (html_) {  // a web page: the words and their lines, nothing to place an annotation with
+        Selection sel;
+        sel.text = utf8(ldomXRange(start, end).getRangeText(' '));
+        sel.roundTrips = false;
+        sel.rects = windowRects(start, end);
+        if (sel.text.empty() || sel.rects.empty()) return std::nullopt;
+        return sel;
+    }
+    auto generated = dom_ ? dom_->generate(start, end) : std::nullopt;
     if (!generated || generated->text.empty()) return std::nullopt;
     Selection sel;
     sel.text = generated->text;

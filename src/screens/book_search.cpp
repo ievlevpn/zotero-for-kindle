@@ -18,7 +18,7 @@ constexpr int kHitH = 170;
 Rect field() { return {kMargin + 70, 30, W() - 2 * kMargin - 70, 92}; }
 }  // namespace
 
-BookSearchScreen::BookSearchScreen(ReaderScreen& r) : reader_(r) {
+BookSearchScreen::BookSearchScreen(ReaderScreen& r, std::string query) : reader_(r), pending_(std::move(query)) {
     reader_.setSearchListener([this](uint64_t id, const std::vector<SearchHit>& hits) {
         if (id != requestId_) return;
         hits_ = hits;
@@ -29,10 +29,31 @@ BookSearchScreen::BookSearchScreen(ReaderScreen& r) : reader_(r) {
 
 BookSearchScreen::~BookSearchScreen() { reader_.setSearchListener(nullptr); }
 
+std::string BookSearchScreen::emptyMessage() const {
+    if (!searched_ || !hits_.empty()) return "";
+    return reader_.webPage() ? "Not found on this page." : "Not found in this book.";
+}
+
 void BookSearchScreen::onShow(Nav& nav) {
+    if (!pending_.empty()) {  // the selection's words: their hits, the whole screen for them
+        field_.setText(std::move(pending_));
+        pending_.clear();
+        areaBottom_ = H();
+        run(nav);
+        return;
+    }
     nav.keyboard().show();
     const Rect kb = nav.keyboard().bounds();
     areaBottom_ = kb.empty() ? H() : kb.y;
+}
+
+void BookSearchScreen::run(Nav& nav) {
+    if (field_.text().empty() || !reader_.worker()) return;
+    searching_ = true;
+    searched_ = true;
+    hits_.clear();
+    requestId_ = reader_.worker()->search(field_.text());
+    nav.damage({0, kHeaderH, W(), areaBottom_ - kHeaderH}, Waveform::Quality);
 }
 
 void BookSearchScreen::onTick(Nav& nav) {
@@ -63,7 +84,7 @@ void BookSearchScreen::draw(Canvas& canvas) {
     cairo_stroke(cr);
     searchIcon(cr, field().x + 54, field().y + field().h / 2.0 - 4, kTertiary);
     const bool empty = field_.text().empty();
-    centredText(cr, empty ? "Search in this book…" : field_.text() + "|", {kSans, 9, 400, false, empty ? kTertiary : kInk},
+    centredText(cr, empty ? (reader_.webPage() ? "Search in this page…" : "Search in this book…") : field_.text() + "|", {kSans, 9, 400, false, empty ? kTertiary : kInk},
                 {field().x + 96, field().y, field().w - 120, field().h}, Align::Left);
     if (searching_) {
         drawText(cr, "Searching…", {kSerif, 10, 400, false, kSecondary}, {kMargin, kHeaderH + 120, W() - 2 * kMargin, 80}, 1,
@@ -95,14 +116,7 @@ void BookSearchScreen::onKey(const KeyEvent& k, Nav& nav) {
         return;
     }
     field_.apply(k);
-    if (k.code == KeyEvent::Code::Return && !field_.text().empty() && reader_.worker()) {
-        searching_ = true;
-        searched_ = true;
-        hits_.clear();
-        requestId_ = reader_.worker()->search(field_.text());
-        nav.damage({0, kHeaderH, W(), areaBottom_ - kHeaderH}, Waveform::Quality);
-        return;
-    }
+    if (k.code == KeyEvent::Code::Return && !field_.text().empty() && reader_.worker()) return run(nav);
     nav.damage(field(), Waveform::Fast);
 }
 
@@ -114,6 +128,11 @@ void BookSearchScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (field().contains(g.pos)) {
         nav.keyboard().show();
+        const Rect kb = nav.keyboard().bounds();
+        if (!kb.empty() && kb.y != areaBottom_) {  // opened without it (a selection's Search): hits above it now
+            areaBottom_ = kb.y;
+            nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
+        }
         return;
     }
     auto rects = hitRects();
