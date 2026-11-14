@@ -207,7 +207,8 @@ void HomeScreen::draw(Canvas& canvas) {
         std::string msg = "Your library is empty here. Tap ⟳ to sync.";
         if (status_.syncing()) {
             const std::string prefix = "Syncing…";
-            msg = "Syncing your library…" + status_.line(nowMs_).substr(prefix.size());
+            const std::string now = status_.line(nowMs_);  // a group's pass: "Syncing Lab group… 12 of 40"
+            msg = now.rfind(prefix, 0) == 0 ? "Syncing your library…" + now.substr(prefix.size()) : now;
         }
         drawText(cr, msg, {kSerif, 11, 400, false, kSecondary}, {kMargin + 40, 560, contentW - 80, 200}, 3, Align::Center);
     } else if (card_) {

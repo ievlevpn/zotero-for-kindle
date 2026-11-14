@@ -4,6 +4,7 @@
 // "tag: method · 12 notes" under the header, with Clear.
 
 #include <functional>
+#include <map>
 #include <memory>
 
 #include "screens/screen.h"
@@ -40,6 +41,7 @@ private:
     ItemRow row_;
     std::function<void(const AnnotationRecord&)> pick_;
     std::vector<AnnotationRecord> all_;
+    std::map<std::string, std::string> authors_;  // another member's name, by annotation key
     Pager pager_{0, 1};
     std::string tag_;
     std::unique_ptr<AnnotationEditor> editor_;

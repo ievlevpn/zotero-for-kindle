@@ -2,6 +2,7 @@
 
 #include <filesystem>
 
+#include "screens/annotation_bar.h"
 #include "ui/metrics.h"
 #include "ui/paint.h"
 #include "ui/text.h"
@@ -31,6 +32,8 @@ Rect BookScreen::listArea() const { return {0, kTopH, W(), H() - kTabBarH - kTop
 
 void BookScreen::load(Library& lib) {
     all_ = lib.annotationsFor(row_.attachmentKey);
+    authors_.clear();
+    for (const auto& a : all_) authors_.push_back(annotationAuthor(lib, a));
     loading_ = all_.empty() && !lib.isTracked(row_.attachmentKey) && !lib.allAnnotationsOffline();
     fileLine_ = row_.badge;
     if (auto a = lib.attachment(row_.attachmentKey)) {
@@ -42,6 +45,7 @@ void BookScreen::load(Library& lib) {
             fileLine_ += " · not downloaded";
         }
     }
+    library_ = row_.lib != kMyLibrary ? lib.libraryName(row_.lib) : "";
     const int perPage = (listArea().h - kPageIndicatorH) / kNoteRowH;
     const int64_t offset = pager_.offset();
     pager_ = Pager(static_cast<int64_t>(all_.size()), perPage);
@@ -63,6 +67,8 @@ void BookScreen::draw(Canvas& canvas) {
     TextResult t = drawText(cr, row_.title.empty() ? "Untitled" : row_.title, {kSerif, 12, 700}, {x, 116, w, 150}, 3);
     drawText(cr, row_.byline, {kSans, 8, 400, false, kSecondary}, {x, 116 + t.height + 12, w, 50}, 1);
     drawText(cr, fileLine_, {kSans, 7, 400, false, kTertiary}, {x, 116 + t.height + 62, w, 46}, 1);
+    if (!library_.empty())  // a group's book
+        drawText(cr, "Library: " + library_, {kSans, 7, 400, false, kTertiary}, {x, 116 + t.height + 108, w, 46}, 1);
     hRule(cr, kTopH - 12, 0, W());
 
     const Rect area = listArea();
@@ -83,7 +89,7 @@ void BookScreen::draw(Canvas& canvas) {
     }
     for (int i = 0; i < pager_.perPage() && pager_.offset() + i < static_cast<int64_t>(all_.size()); ++i)
         drawNoteRow(cr, {kMargin, area.y + i * kNoteRowH, W() - 2 * kMargin, kNoteRowH},
-                    all_[static_cast<size_t>(pager_.offset() + i)]);
+                    all_[static_cast<size_t>(pager_.offset() + i)], false, authors_[static_cast<size_t>(pager_.offset() + i)]);
     drawPageIndicator(cr, {0, area.y + area.h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
 }
 

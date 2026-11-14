@@ -6,6 +6,16 @@ plugins whose API it runs; others are listed as *Incompatible*.
 **v0 is unstable.** Names and shapes may still change until v1. Every change is listed here, newest
 first, with what to do about it.
 
+## 0.8.0 (unreleased): group libraries
+
+- `zk.library.libraries()` — My Library and the group libraries that sync: `{ id, name, editable, items }`
+- `libraryId` (0 My Library, else the group's id) and `libraryName` on items, collections and annotations
+  (queries and events alike)
+- `zk.library.items({ library })` — only that library's items
+- `zk.library.collections()` lists My Library's collections first, then each group's
+- `zk.zotero.*` changes go to the library of what they change; a change to a read-only, switched-off
+  or gone group, or one mixing libraries, is refused with a message saying which
+
 ## 0.6.0
 
 - zk.library.feeds() — the user's Zotero feed subscriptions; needs app 0.6.0

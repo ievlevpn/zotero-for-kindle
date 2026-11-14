@@ -49,6 +49,9 @@ void BookNotesScreen::onShow(Nav& nav) { reload(nav); }
 
 void BookNotesScreen::reload(Nav& nav) {
     all_ = nav.library().annotationsFor(row_.attachmentKey);
+    authors_.clear();
+    for (const auto& a : all_)
+        if (auto who = annotationAuthor(nav.library(), a); !who.empty()) authors_[a.key] = who;
     if (!tag_.empty())
         all_.erase(std::remove_if(all_.begin(), all_.end(),
                                   [&](const AnnotationRecord& a) {
@@ -97,7 +100,10 @@ void BookNotesScreen::draw(Canvas& canvas) {
         return;
     }
     auto rects = rowRects();
-    for (size_t k = 0; k < rects.size(); ++k) drawNoteRow(cr, rects[k], all_[static_cast<size_t>(pager_.offset()) + k]);
+    for (size_t k = 0; k < rects.size(); ++k) {
+        const AnnotationRecord& a = all_[static_cast<size_t>(pager_.offset()) + k];
+        drawNoteRow(cr, rects[k], a, false, authors_.count(a.key) ? authors_.at(a.key) : "");
+    }
     drawPageIndicator(cr, {0, contentArea().y + contentArea().h - kPageIndicatorH, W(), kPageIndicatorH}, pager_.page(), pager_.pages());
     if (editor_) editor_->draw(cr);
 }
@@ -119,8 +125,9 @@ void BookNotesScreen::onGesture(const Gesture& g, Nav& nav) {
         auto rects = rowRects();
         for (size_t k = 0; k < rects.size(); ++k)
             if (rects[k].contains(g.pos)) {
-                editor_ = std::make_unique<AnnotationEditor>(all_[static_cast<size_t>(pager_.offset()) + k], rects[k],
-                                                             recentChips(nav.library()));
+                const AnnotationRecord& a = all_[static_cast<size_t>(pager_.offset()) + k];
+                editor_ = std::make_unique<AnnotationEditor>(a, rects[k], recentChips(nav.library()),
+                                                             annotationReadOnly(nav.library(), a));
                 nav.damage(editor_->rect(), Waveform::Ui);
                 return;
             }

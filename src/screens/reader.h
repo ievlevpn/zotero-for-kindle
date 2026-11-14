@@ -105,6 +105,11 @@ public:
     // A web snapshot (ItemRow::badge "WEB"), read in the EPUB engine: no highlights (the selection
     // bar offers Search), and its place is kept on this Kindle only (not sent to Zotero).
     bool webPage() const { return web_; }
+    // A book of a group library the Kindle may not change (read-only, or switched off meanwhile):
+    // as a web snapshot, the selection bar offers Search and plugin actions only, and the first try
+    // at marking anything (a selection, an area, a note, the pen) says "This group library is
+    // read-only". Annotations there, and other members' anywhere, open as a "by Anna" line.
+    bool readOnlyLibrary() const { return readOnly_; }
     int pageCount() const { return pageCount_; }
     const std::vector<TocEntry>& toc() const { return toc_; }
     const std::string& chapter() const { return chapter_; }
@@ -230,6 +235,10 @@ private:
     std::string path_;
     DocType type_;
     bool web_ = false;
+    bool readOnly_ = false, readOnlyTold_ = false;  // a read-only group's book; its toast was shown
+    // readOnly_: says so (always, or only the first time) and returns true.
+    bool refuseReadOnly(Nav&, bool always);
+    void readLibrary(Nav&);  // readOnly_, as the library says now
     WorkerFactory makeWorker_;
     int flashEvery_;
     Lipc* lipc_;

@@ -6,7 +6,8 @@
 function collections(): Promise<Collection[]>;
 ```
 
-All collections, each with its full path, sorted by path.
+All collections, each with its full path: My Library's first, then each group library's
+(see [libraries](libraries.md)), each sorted by path.
 
 **Permission**: `library:read`.
 
@@ -17,5 +18,5 @@ All collections, each with its full path, sorted by path.
 ## Example
 
 ```ts
-const inbox = (await zk.library.collections()).find((c) => c.path.join("/") === "Reading/Inbox");
+const inbox = (await zk.library.collections()).find((c) => c.libraryId === 0 && c.path.join("/") === "Reading/Inbox");
 ```

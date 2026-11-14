@@ -39,6 +39,7 @@ private:
     ItemRow row_;
     std::function<void(const ItemRow&)> open_;
     ItemDetails details_;
+    std::string library_;  // a group item's library ("Library" section)
     std::string confirming_;  // attachment key whose Remove was tapped once
     mutable std::vector<std::pair<std::string, Rect>> removeTargets_, openTargets_;  // laid out by draw
     std::vector<PluginAction> actions_;

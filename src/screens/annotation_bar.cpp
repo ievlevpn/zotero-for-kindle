@@ -150,8 +150,20 @@ const std::array<ZoteroColour, 8>& zoteroColours() {
     return colours;
 }
 
+std::string annotationAuthor(Library& lib, const AnnotationRecord& a) {
+    if (a.lib == kMyLibrary || a.createdHere || a.authorName.empty()) return "";
+    if (a.authorId != 0 && a.authorId == lib.userId()) return "";
+    return a.authorName;
+}
+
+std::string annotationReadOnly(Library& lib, const AnnotationRecord& a) {
+    if (lib.annotationEditable(a)) return "";
+    const std::string author = annotationAuthor(lib, a);
+    return author.empty() ? kReadOnlyGroup : "by " + author;
+}
+
 AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more, TagRow tags)
-    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && mode != Mode::Edit), tags_(std::move(tags)) {
+    : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && (mode == Mode::Create || mode == Mode::Text)), tags_(std::move(tags)) {
     place(height());
 }
 
@@ -220,6 +232,10 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         return;
     }
+    if (mode_ == Mode::View) {  // "by Anna": nothing here can be changed
+        centredText(cr, label_, {kSans, 8, 500, false, kSecondary}, {rect_.x + 40, rect_.y, rect_.w - 80, rect_.h}, Align::Left);
+        return;
+    }
     for (int i = 0; i < (hasColours() ? 8 : 0); ++i) {
         const Rect d = dotRect(i);
         const auto& c = zoteroColours()[i];
@@ -268,10 +284,13 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
     return {};
 }
 
-AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<std::string> chips)
+AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<std::string> chips, std::string readOnly)
     : annotation_(std::move(a)),
-      bar_(AnnotationBar::Mode::Edit, anchor, annotation_.color, false, TagRow(std::move(chips), annotation_.tags)),
-      self_(std::make_shared<AnnotationEditor*>(this)) {}
+      bar_(readOnly.empty() ? AnnotationBar::Mode::Edit : AnnotationBar::Mode::View, anchor, annotation_.color, false,
+           readOnly.empty() ? TagRow(std::move(chips), annotation_.tags) : TagRow()),
+      self_(std::make_shared<AnnotationEditor*>(this)) {
+    bar_.setLabel(std::move(readOnly));
+}
 
 AnnotationEditor::~AnnotationEditor() { *self_ = nullptr; }
 
@@ -297,11 +316,13 @@ std::string AnnotationEditor::question() const {
 }
 
 void AnnotationEditor::editComment(Nav& nav) {
+    if (readOnly()) return;  // the bar says why
     direct_ = true;
     enter(State::Comment, nav);
 }
 
 void AnnotationEditor::confirmDelete(Nav& nav) {
+    if (readOnly()) return;
     direct_ = true;
     enter(State::Confirm, nav);
 }
@@ -371,6 +392,7 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             break;
     }
     if (!bar_.rect().contains(p)) return Result::Closed;
+    if (readOnly()) return Result::Open;  // its line only
     const AnnotationBar::Hit hit = bar_.hit(p);
     if (hit.action == AnnotationBar::Action::Colour) {
         const std::string colour = zoteroColours()[hit.colour].hex;

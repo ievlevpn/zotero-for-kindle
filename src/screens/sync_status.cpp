@@ -42,9 +42,11 @@ void SyncStatus::onEvent(const SyncEvent& e, int64_t nowMs) {
 
 std::string SyncStatus::line(int64_t nowMs) const {
     if (uploading_ > 0) return "Uploading " + thousands(uploading_) + (uploading_ == 1 ? " change…" : " changes…");
-    if (syncing_)
-        return progress_.total > 0 ? "Syncing… " + thousands(progress_.done) + " of " + thousands(progress_.total)
-                                   : "Syncing…";
+    if (syncing_) {
+        // A group's pass names it: "Syncing Lab group… 1,200 of 6,560".
+        const std::string what = progress_.library.empty() ? "Syncing…" : "Syncing " + progress_.library + "…";
+        return progress_.total > 0 ? what + " " + thousands(progress_.done) + " of " + thousands(progress_.total) : what;
+    }
     if (lastFinishedMs_ < 0 || hasError()) return {};
     const int64_t minutes = (nowMs - lastFinishedMs_) / 60'000;
     return minutes < 1 ? "Synced just now" : "Synced " + std::to_string(minutes) + " min ago";

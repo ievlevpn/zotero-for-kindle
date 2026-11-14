@@ -2721,9 +2721,14 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                     }
                 }
                 if (targetLib != kMyLibrary && !libraryEditable(targetLib)) {
-                    const std::string name = libraryName(targetLib);
-                    return refuse("the group library" + (name.empty() ? std::string() : " \"" + name + "\"") +
-                                  " is read-only here");
+                    // Why, in the plugin author's terms: switched off here, gone, or read-only for this key.
+                    const std::optional<LibraryInfo> info = libraryInfo(targetLib);
+                    const std::string name = info && !info->name.empty() ? " \"" + info->name + "\"" : std::string();
+                    if (info && info->gone) return refuse("the group library" + name + " is no longer available");
+                    if (info && !info->enabled)
+                        return refuse("the group library" + name +
+                                      " is switched off on this Kindle (Settings → Group libraries)");
+                    return refuse("the group library" + name + " is read-only (the API key or the group's settings don't allow edits)");
                 }
                 // Targets what a pending change creates: sent after it, withdrawn with it.
                 Stmt dep = db_.prepare(

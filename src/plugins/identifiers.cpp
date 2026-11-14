@@ -228,7 +228,7 @@ std::string doiOf(const ItemRecord& r) { return identifiersOf(r).doi; }
 std::string arxivIdOf(const ItemRecord& r) { return identifiersOf(r).arxiv; }
 std::string citationKeyOf(const ItemRecord& r) { return identifiersOf(r).citationKey; }
 
-nlohmann::ordered_json itemJson(const ItemRecord& r, bool read) {
+nlohmann::ordered_json itemJson(const ItemRecord& r, bool read, const std::string& libraryName) {
     using json = nlohmann::ordered_json;
     const nlohmann::json d = parseData(r);
     const Identifiers id = identifiersOf(r);
@@ -262,6 +262,8 @@ nlohmann::ordered_json itemJson(const ItemRecord& r, bool read) {
     j["read"] = read;
     j["extra"] = orNull(str(d, "extra"));
     j["citationKey"] = orNull(id.citationKey);
+    j["libraryId"] = r.lib;
+    j["libraryName"] = libraryName;
     return j;
 }
 

@@ -33,6 +33,7 @@
 - [ItemFields](zk/ItemFields.md)
 - [ItemsEvent](zk/ItemsEvent.md)
 - [ItemsQuery](zk/ItemsQuery.md)
+- [LibraryInfo](zk/LibraryInfo.md)
 - [Note](zk/Note.md)
 - [RequestInit](zk/RequestInit.md)
 - [Response](zk/Response.md)

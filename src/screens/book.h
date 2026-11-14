@@ -27,6 +27,8 @@ private:
 
     ItemRow row_;
     std::string fileLine_;
+    std::string library_;  // a group's name ("Library: …"); "" in My Library
+    std::vector<std::string> authors_;  // all_'s: another member's name, else ""
     std::vector<AnnotationRecord> all_;
     Pager pager_{0, 1};
     bool loading_ = false;

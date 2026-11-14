@@ -22,6 +22,11 @@ Every call changes one thing and resolves with a [Change](Change.md): the key of
   resolve `null` without asking (the log says so). Nothing is ever deleted for good except a note this plugin created:
   items go to Zotero's trash.
 - **Editing** existing data (a title, a note, an annotation) is not possible in API v0.
+- **Group libraries**: a change goes to the library of what it changes (a new item to its
+  collections' library; none means My Library). It is refused, with a message saying why, when
+  that group is read-only for the user, switched off on the Kindle or no longer available, and
+  when it mixes libraries (collections of two libraries, or an item filed into another
+  library's collection). See [zk.library.libraries](library/libraries.md) (`editable`).
 
 ## Functions
 

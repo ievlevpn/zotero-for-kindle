@@ -14,6 +14,8 @@ An annotation in a book or paper.
 | <a id="created"></a> `created` | `string` | ISO 8601. |
 | <a id="itemkey"></a> `itemKey` | `string` | The item that file belongs to. |
 | <a id="key"></a> `key` | `string` | - |
+| <a id="libraryid"></a> `libraryId` | `number` | Its library: 0 My Library, else the Zotero group's id. Needs app 0.8.0. |
+| <a id="libraryname"></a> `libraryName` | `string` | Its library's name: `"My Library"` or the group's name. Needs app 0.8.0. |
 | <a id="modified"></a> `modified` | `string` | ISO 8601. |
 | <a id="pagelabel"></a> `pageLabel` | `string` \| `null` | The page label shown in the document, e.g. `"12"` or `"xii"`. |
 | <a id="tags"></a> `tags` | `string`[] | - |

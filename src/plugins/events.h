@@ -65,7 +65,8 @@ constexpr size_t kMaxListed = 500;
 
 // zk.d.ts: Annotation, Attachment. The item an annotation belongs to is its attachment's parent
 // (a lone attachment is its own item).
-nlohmann::ordered_json annotationJson(const AnnotationRecord&, const std::string& itemKey);
+// libraryName: of the annotation's library (Library::libraryName(a.lib)), with libraryId.
+nlohmann::ordered_json annotationJson(const AnnotationRecord&, const std::string& itemKey, const std::string& libraryName);
 nlohmann::ordered_json attachmentJson(const AttachmentRecord&);
 std::string itemKeyOfAttachment(Library&, const std::string& attachmentKey);
 // "dateAdded" from a record's raw JSON, else `fallback`.
