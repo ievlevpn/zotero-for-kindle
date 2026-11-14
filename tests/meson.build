@@ -22,6 +22,7 @@ test_sources = files(
   'test_errors.cpp',
   'test_library.cpp',
   'test_group_libraries.cpp',
+  'test_group_ui.cpp',
   'test_parse.cpp',
   'test_api.cpp',
   'test_sync_engine.cpp',
