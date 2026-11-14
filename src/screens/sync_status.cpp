@@ -28,6 +28,18 @@ void SyncStatus::onEvent(const SyncEvent& e, int64_t nowMs) {
             syncing_ = false;
             lastFinishedMs_ = nowMs;
             error_ = e.error;
+            groupProblem_.clear();
+            if (!e.report.groupErrors.empty()) {
+                const auto& first = e.report.groupErrors.front();
+                size_t groups = 0;
+                for (size_t i = 0; i < e.report.groupErrors.size(); ++i) {
+                    bool seen = false;
+                    for (size_t j = 0; j < i; ++j) seen = seen || e.report.groupErrors[j].lib == e.report.groupErrors[i].lib;
+                    groups += !seen;
+                }
+                groupProblem_ = groups == 1 ? (first.name.empty() ? "A group" : first.name) + ": can't sync"
+                                            : std::to_string(groups) + " group libraries can't sync";
+            }
             break;
         case SyncEvent::Kind::PushStarted:
             uploading_ = e.total;
@@ -48,6 +60,7 @@ std::string SyncStatus::line(int64_t nowMs) const {
         return progress_.total > 0 ? what + " " + thousands(progress_.done) + " of " + thousands(progress_.total) : what;
     }
     if (lastFinishedMs_ < 0 || hasError()) return {};
+    if (!groupProblem_.empty()) return groupProblem_;
     const int64_t minutes = (nowMs - lastFinishedMs_) / 60'000;
     return minutes < 1 ? "Synced just now" : "Synced " + std::to_string(minutes) + " min ago";
 }

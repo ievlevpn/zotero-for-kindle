@@ -24,6 +24,9 @@ struct SyncEvent {
     std::string itemKey, attachmentKey;
     int64_t done = 0, total = 0;
     std::optional<UserError> error;
+    // SyncStarted / SyncFinished: the request (syncNowTracked()) this sync is; 0 for one nobody
+    // tracks, and for the SyncFinished that ends a removal.
+    uint64_t request = 0;
 };
 
 // A kept collection catching up (spec B): "Downloading <current> of <total>", or paused because
@@ -38,6 +41,13 @@ class SyncControl {
 public:
     virtual ~SyncControl() = default;
     virtual void syncNow() = 0;  // sends unsent changes, pulls, then sends again
+    // syncNow(), returning the id its SyncStarted and SyncFinished carry (SyncEvent::request), so the
+    // asker can tell its own sync's end from any other SyncFinished. A sync already waiting to run
+    // is that one (its id). 0: not tracked.
+    virtual uint64_t syncNowTracked() {
+        syncNow();
+        return 0;
+    }
     // Send the Kindle's annotation changes a little after the last one (debounced, spec §7.4).
     virtual void pushSoon() = 0;
     // Sync once Wi-Fi is up (after wake): the worker waits for it, the UI thread never probes it.

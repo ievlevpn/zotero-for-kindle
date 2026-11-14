@@ -1,6 +1,7 @@
 #pragma once
 // What the header shows about sync: spinning/idle, "Syncing… 1,200 of 6,560", "Synced 5 min
-// ago", and the last error (shown as a banner). Fed with every SyncEvent.
+// ago", "Lab: can't sync" (a group's pass failed, the rest synced; Settings → Group libraries says
+// why), and the last error (shown as a banner). Fed with every SyncEvent.
 
 #include <cstdint>
 #include <optional>
@@ -34,6 +35,7 @@ private:
     std::optional<UserError> error_;
     int64_t uploading_ = 0;                // changes going up now
     std::optional<UserError> pushError_;  // the last upload failed: its changes are still unsent
+    std::string groupProblem_;            // the last sync: "Lab: can't sync" (My Library fine)
 };
 
 // 6560 -> "6,560".

@@ -18,5 +18,5 @@ Every event [zk.on](on.md) can listen to, and what its handler receives.
 | <a id="itemmarkedread"></a> `itemMarkedRead` | [`ItemsEvent`](ItemsEvent.md) | Items were marked read. |
 | <a id="itemmarkedunread"></a> `itemMarkedUnread` | [`ItemsEvent`](ItemsEvent.md) | Items were marked unread. |
 | <a id="syncfinished"></a> `syncFinished` | `object` | A sync with Zotero finished successfully (fires after the other events of that sync). |
-| `syncFinished.initial` | `boolean` | `true` for the first full sync of a library, which fires no other events. |
+| `syncFinished.initial` | `boolean` | `true` when this sync was the first full sync of any library — My Library or a group — which fires no other events for that library. |
 | `syncFinished.origin` | `"zotero"` | - |

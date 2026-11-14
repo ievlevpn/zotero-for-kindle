@@ -728,3 +728,45 @@ TEST_CASE("pen ink: the pen's thickness: the saved ink, the system's line, kept 
     CHECK(other->penWidth() == 2);
     CHECK(rig.nav.systemInkWidth == 11);
 }
+
+TEST_CASE("pen ink: in a group the eraser leaves another member's ink alone, and still erases the user's own") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 400}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    rig.stroke({{300, 900}, {380, 900}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 2; }));
+    REQUIRE(rig.settle([&] {
+        int n = 0;
+        for (const auto& b : rig.reader->highlights()) n += b.kind == HighlightBox::Kind::Ink;
+        return n == 2;
+    }));
+    // Both now in an editable group; the first is another member's, synced from Zotero.
+    rig.lib.setUser(55, "pavel");
+    Library::GroupMeta g;
+    g.id = 4242;
+    g.version = 1;
+    g.name = "Lab";
+    g.libraryEditing = g.fileEditing = "members";
+    rig.lib.upsertGroup(g);
+    rig.lib.setGroupAccess(4242, true, true);
+    auto inks = rig.inks();
+    std::sort(inks.begin(), inks.end(), [](const auto& a, const auto& b) {
+        return nlohmann::json::parse(a.position)["paths"][0][1] < nlohmann::json::parse(b.position)["paths"][0][1];
+    });
+    const std::string theirs = inks[0].key, mine = inks[1].key;
+    rig.db.exec("UPDATE annotations SET lib = 4242, dirty = 0, version = 5, createdHere = 0, authorId = 99, "
+                "authorName = 'Anna' WHERE key = '" + theirs + "'");
+    rig.db.exec("UPDATE annotations SET lib = 4242 WHERE key = '" + mine + "'");
+    REQUIRE_FALSE(rig.lib.annotationEditable(theirs));
+    REQUIRE(rig.lib.annotationEditable(mine));
+    rig.stroke({{340, 380}, {340, 420}}, /*eraser*/ true);  // across theirs
+    auto still = rig.lib.annotation(theirs);
+    REQUIRE(still);
+    CHECK_FALSE(still->deletedHere);
+    CHECK_FALSE(still->dirty);
+    rig.stroke({{340, 880}, {340, 920}}, /*eraser*/ true);  // across the user's own
+    CHECK_FALSE(rig.lib.annotation(mine));
+    CHECK(rig.inks().size() == 1);
+}

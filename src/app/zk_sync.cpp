@@ -161,7 +161,8 @@ int main(int argc, char** argv) {
         },
         pluginChangeShapes(lib));  // plugin changes, each in its pending shape
     http.setLibraries([&](const std::string& key) { return lib.libraryOf(key); },
-                      [&](int64_t group) { return lib.libraryEditable(group); });
+                      [&](int64_t group) { return lib.libraryEditable(group); },
+                      [&](const std::string& key) { return lib.annotationEditable(key); });
     if (lib.userId() == 0) lib.setUser(cfg->userId, "");
     ZoteroApi api(http, cfg->userId, cfg->apiKey);
     auto nowMs = [] {
@@ -173,9 +174,16 @@ int main(int argc, char** argv) {
         if (cmd == "pull") {
             const auto t0 = std::chrono::steady_clock::now();
             UserError discovery;
-            if (!discoverGroups(api, lib, nowMs(), &discovery))
+            if (!discoverGroups(api, lib, nowMs(), &discovery)) {
+                if (unreachable(discovery)) {  // nothing else would get through either
+                    printError(discovery);
+                    return 1;
+                }
                 std::printf("groups: not listed (%s); My Library only\n", discovery.message.c_str());
+            }
             bool failed = false;
+            std::vector<int64_t> groups;
+            SyncReport all;
             for (int64_t l : librariesToSync(lib)) {
                 SyncEngine engine(api, lib, l);
                 std::string lastPhase;
@@ -191,12 +199,19 @@ int main(int argc, char** argv) {
                 std::printf("pull: version %lld -> %lld; items +%d ~%d -%d; annotations %d; conflicts %d; %.1f s; peak RSS %ld KB\n",
                             static_cast<long long>(rep.fromVersion), static_cast<long long>(rep.toVersion), rep.itemsAdded,
                             rep.itemsUpdated, rep.itemsRemoved, rep.annotations, rep.conflicts, secs, peakRssKb());
+                if (l != kMyLibrary) {
+                    groups.push_back(l);
+                    scopeGroupError(rep, l, lib);
+                    for (const auto& g : rep.groupErrors) std::printf("%s: can't sync: %s\n", g.name.c_str(), g.message.c_str());
+                    all.groupErrors.insert(all.groupErrors.end(), rep.groupErrors.begin(), rep.groupErrors.end());
+                }
                 if (rep.error) {
                     printError(*rep.error);
                     failed = true;
-                    if (l == kMyLibrary) break;
+                    break;  // My Library's: the groups wait for the next pull
                 }
             }
+            recordGroupErrors(lib, groups, all);
             if (failed) return 1;
         } else if (cmd == "groups") {
             const GroupAccess access = lib.keyGroupAccess();
@@ -207,7 +222,7 @@ int main(int argc, char** argv) {
             for (const auto& l : lib.libraries(true))
                 std::printf("%10lld  %-30s %5lld items  %s%s%s\n", static_cast<long long>(l.id), l.name.c_str(),
                             static_cast<long long>(l.items), l.canEdit ? "editable" : "read-only",
-                            l.enabled ? "" : ", switched off", l.gone ? ", no longer available" : "");
+                            l.enabled ? "" : ", switched off", l.gone ? ", no longer available" : l.unreadable ? ", not readable with this key" : "");
         } else if (cmd == "status") {
             LibraryStats s = lib.stats();
             std::printf("highlights: %s (%zu books opened)\n",
@@ -257,11 +272,22 @@ int main(int argc, char** argv) {
                         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
         } else if (cmd == "push") {
             bool failed = false;
+            // Plugin changes no group can take (read-only, switched off, gone): refused, as the app does.
+            if (const int refused = lib.refuseUnsendablePluginChanges(); refused > 0)
+                std::printf("refused %d plugin change(s) to group libraries the Kindle can't edit\n", refused);
+            std::vector<int64_t> groups;
+            SyncReport all;
             for (int64_t l : librariesToSync(lib)) {
                 SyncEngine engine(api, lib, l);
                 const int pending = engine.pendingChanges();
                 if (pending == 0 && l != kMyLibrary) continue;
                 SyncReport rep = engine.push();
+                if (l != kMyLibrary) {
+                    groups.push_back(l);
+                    scopeGroupError(rep, l, lib);
+                    for (const auto& g : rep.groupErrors) std::printf("%s: can't sync: %s\n", g.name.c_str(), g.message.c_str());
+                    all.groupErrors.insert(all.groupErrors.end(), rep.groupErrors.begin(), rep.groupErrors.end());
+                }
                 std::printf("push%s: %d change(s) pending, %d sent; conflicts %d; library version %lld\n",
                             l == kMyLibrary ? "" : (" (" + lib.libraryName(l) + ")").c_str(), pending, rep.annotations,
                             rep.conflicts, static_cast<long long>(rep.toVersion));
@@ -270,6 +296,7 @@ int main(int argc, char** argv) {
                     failed = true;
                 }
             }
+            recordGroupErrors(lib, groups, all);
             if (failed) return 1;
         } else if (cmd == "position-test" && args.size() == 2) {
             // Zotero's reading position for a fetched file -> its page here -> one page on -> sent back.

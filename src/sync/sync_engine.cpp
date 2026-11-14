@@ -179,14 +179,33 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     std::vector<Phase> phases = {{"collections", "collections", "", from}, {"items", "items", "-annotation", from}};
     if (allOffline) phases.push_back({"annotations", "items", "annotation", lib_.annotationsVersion(libId_)});
     else if (from > 0) phases.push_back({"annotations", "items", "annotation", from});
+    // A group already synced asks with If-Modified-Since-Version: an unchanged group costs that one
+    // request (a 304), nothing more, unless a catch-up of its own is due. (The groups listing carries
+    // each group's metadata version, not its library version, so it can't tell by itself.)
+    const bool conditional = libId_ != kMyLibrary && from > 0;
+    const std::map<std::string, int64_t> clashes = libId_ == kMyLibrary ? std::map<std::string, int64_t>{}
+                                                                        : lib_.clashVersions(libId_);
     for (const Phase& phase : phases) {
         const std::string kind = phase.kind;
-        auto listing = api_.versions(kind, phase.since, &err, phase.itemType);
+        const bool first = &phase == &phases.front();
+        auto listing = api_.versions(kind, phase.since, &err, phase.itemType, first && conditional ? from : 0);
         if (!listing) return void(rep.error = err);
+        if (listing->notModified) {
+            rep.toVersion = from;
+            const bool catchUp = lib_.backfillPending(libId_, "notes") || lib_.backfillPending(libId_, "attachmentTitles") ||
+                                 !refetch_.empty() || (allOffline && lib_.annotationsVersion(libId_) < from);
+            if (!catchUp) return;  // nothing changed: no further requests
+            // Something of its own to catch up on: the listings as usual (without the condition).
+            listing = api_.versions(kind, phase.since, &err, phase.itemType);
+            if (!listing) return void(rep.error = err);
+        }
         if (kind == "collections") rep.toVersion = listing->libraryVersion;
         std::vector<std::string> changed;
-        for (const auto& [key, version] : listing->versions)
+        for (const auto& [key, version] : listing->versions) {
+            // An object skipped for a key clash at this version: not fetched again.
+            if (auto c = clashes.find(key); c != clashes.end() && c->second >= version) continue;
             if (lib_.objectVersion(key) < version) changed.push_back(key);
+        }
         // Annotations that are only being caught up on (the "Keep all highlights offline" setting was
         // just switched on, or its full download is behind) are not news: no events for them.
         annotationEvents_ = !(std::string(phase.name) == "annotations" && allOffline && lib_.annotationsVersion(libId_) < from);
@@ -333,7 +352,10 @@ bool SyncEngine::fetchAndApply(const std::string& kind, const std::string& phase
             if (accept && !accept(obj)) continue;
             if (kind == "collections") {
                 CollectionRecord c = parseCollection(obj);
-                if (foreign(c.key)) continue;
+                if (foreign(c.key)) {
+                    lib_.setClashVersion(libId_, c.key, versionOf(obj));
+                    continue;
+                }
                 c.lib = libId_;
                 if (trashed(obj)) lib_.removeObject("collection", c.key);
                 else lib_.upsertCollection(c);
@@ -369,8 +391,11 @@ SyncReport SyncEngine::pullAnnotationsFor(const std::string& attachmentKey,
             rep.error = err;
         } else {
             std::vector<std::string> changed;
-            for (const auto& [key, version] : listing->versions)
+            const auto clashes = libId_ == kMyLibrary ? std::map<std::string, int64_t>{} : lib_.clashVersions(libId_);
+            for (const auto& [key, version] : listing->versions) {
+                if (auto c = clashes.find(key); c != clashes.end() && c->second >= version) continue;
                 if (lib_.objectVersion(key) < version) changed.push_back(key);
+            }
             // Tracked only once complete: regular pulls only bring later changes, so a book
             // tracked after a partial download would stay incomplete for good.
             if (fetchAndApply("items", "annotations", changed, rep, progress ? progress : [](const SyncProgress&) {}))
@@ -394,7 +419,11 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
     const ObjectKind kind = kindOf(obj);
     const std::string key = obj.value("key", "");
     const int64_t version = versionOf(obj);
-    if (key.empty() || foreign(key)) return;
+    if (key.empty()) return;
+    if (foreign(key)) {  // remembered at this version, so it isn't fetched again every sync
+        lib_.setClashVersion(libId_, key, version);
+        return;
+    }
     if (trashed(obj)) {
         removeKey(key, rep);
         lib_.setObjectVersion(key, version);
@@ -597,12 +626,10 @@ SyncReport SyncEngine::push() {
     try {
         scope();
         if (libId_ != kMyLibrary && !lib_.libraryEditable(libId_)) {
-            // A read-only group: nothing goes out. Read marks stay on the Kindle; plugin changes
-            // (queued while it was editable) can't be made.
-            for (const auto& c : lib_.pendingPluginChanges("", libId_))
-                if (auto now = lib_.pluginChange(c.id); now && now->state == PluginChange::State::Pending)
-                    lib_.markPluginChange(c.id, PluginChange::State::Refused,
-                                          "The group library \"" + lib_.libraryName(libId_) + "\" is read-only.");
+            // A read-only (switched-off, gone) group: nothing goes out. Read marks stay on the
+            // Kindle; plugin changes (queued while it was editable) can't be made. The sync refuses
+            // those for every such group before it pushes (Library::refuseUnsendablePluginChanges).
+            rep.pluginRefused += lib_.refuseUnsendablePluginChanges();
             rep.toVersion = rep.fromVersion;
             return rep;
         }
@@ -640,7 +667,8 @@ SyncReport SyncEngine::push() {
 
 int SyncEngine::pendingChanges() {
     if (libId_ != kMyLibrary && !lib_.libraryEditable(libId_)) return 0;  // a read-only group's stay here
-    int n = static_cast<int>(lib_.pendingDeletions(libId_).size());
+    int n = 0;
+    for (const auto& a : lib_.pendingDeletions(libId_)) n += lib_.annotationEditable(a);  // as pushDeletions sends them
     for (const auto& a : lib_.dirtyAnnotations(libId_)) n += !a.conflict && !a.localOnly && lib_.annotationEditable(a);
     return n + static_cast<int>(sendablePositions().size() + lib_.readMarks(libId_).size() +
                                 lib_.pendingPluginChanges("", libId_).size());

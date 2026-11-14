@@ -413,8 +413,14 @@ TEST_CASE("group UI: a group with unsent changes asks first and offers Sync firs
         rig.lib.upsertAnnotation(a);
     }
     REQUIRE(rig.lib.libraryRemovalCheck(kLab).unsent == 0);
+    SyncEvent other;  // another sync's end (one already running, or a removal's): not this one
+    other.kind = SyncEvent::Kind::SyncFinished;
+    s.onSyncEvent(other, rig.nav);
+    CHECK(rig.lib.libraryInfo(kLab)->enabled);
+    CHECK_FALSE(s.sheet());
     SyncEvent done;
     done.kind = SyncEvent::Kind::SyncFinished;
+    done.request = rig.nav.syncFake.lastRequest;
     s.onSyncEvent(done, rig.nav);
     CHECK_FALSE(rig.lib.libraryInfo(kLab)->enabled);
     REQUIRE(s.sheet());
@@ -643,4 +649,85 @@ TEST_CASE("group UI: a plugin change to a switched-off or gone group says so") {
     why.clear();
     CHECK(rig.lib.queuePluginChange(ch, &why).empty());
     CHECK(why.find("\"Readers\" is read-only") != std::string::npos);
+}
+
+TEST_CASE("group UI: Sync first that fails turns the group off, keeps its copy and says so") {
+    for (const bool offline : {true, false}) {
+        CAPTURE(offline);
+        Rig rig;
+        rig.lib.setLibraryEnabled(kLab, false);  // switched off earlier, its changes still here
+        AnnotationRecord mine;
+        mine.parentKey = "LABEPUB1";
+        mine.type = "highlight";
+        mine.text = "mine";
+        mine.color = "#ffd400";
+        rig.lib.setLibraryEnabled(kLab, true);
+        rig.lib.createAnnotation(mine);
+        rig.lib.setLibraryEnabled(kLab, false);
+        GroupLibrariesScreen s;
+        rig.nav.visible = &s;
+        s.onShow(rig.nav);
+        s.onGesture(tapAt(s.removeRect(0).center()), rig.nav);  // Remove from Kindle
+        REQUIRE(s.sheet());
+        REQUIRE(GroupSheet::label(s.sheet()->primary()) == "Sync first");
+        s.onGesture(tapAt(s.sheetButtonRect(0).center()), rig.nav);
+        CHECK(rig.lib.libraryInfo(kLab)->enabled);  // on, for that one sync
+        SyncEvent done;
+        done.kind = SyncEvent::Kind::SyncFinished;
+        done.request = rig.nav.syncFake.lastRequest;
+        if (offline) done.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", ""};
+        else rig.lib.setGroupSyncError(kLab, "Your API key can't sync this group.");  // the group's own pass failed
+        s.onSyncEvent(done, rig.nav);
+        CHECK_FALSE(rig.lib.libraryInfo(kLab)->enabled);  // back off
+        CHECK(rig.lib.libraryInfo(kLab)->items == 2);      // its copy kept
+        CHECK(rig.lib.libraryRemovalCheck(kLab).unsent == 1);
+        CHECK(rig.nav.syncFake.removedLibraries.empty());
+        CHECK_FALSE(s.sheet());
+        REQUIRE_FALSE(rig.nav.toasts.empty());
+        CHECK(rig.nav.toasts.back() == "Couldn't sync — the group was turned off and its copy kept");
+    }
+}
+
+TEST_CASE("group UI: a listed group the key can't read says so, with no switch and nothing to remove") {
+    Rig rig;
+    rig.lib.markGroupUnreadable(5150, 3, "Public seminar");
+    GroupLibrariesScreen s;
+    s.onShow(rig.nav);
+    size_t i = 0;
+    while (i < s.rows().size() && s.rows()[i].group.id != 5150) ++i;
+    REQUIRE(i < s.rows().size());
+    CHECK(s.note(s.rows()[i]) == "Your API key can't read this group");
+    CHECK(s.toggleRect(i).empty());
+    CHECK_FALSE(s.removeOffered(s.rows()[i]));
+    CHECK(groupLibrariesSummary(rig.lib.libraries(true), GroupAccess::Some).find("1 your key can't read") != std::string::npos);
+}
+
+TEST_CASE("group UI: a group whose last sync failed says so in Settings; the status line names it") {
+    Rig rig;
+    rig.lib.setGroupSyncError(kLab, "Your API key can't sync this group.");
+    GroupLibrariesScreen s;
+    s.onShow(rig.nav);
+    CHECK(s.note(s.rows()[0]) == "Can't sync: Your API key can't sync this group.");
+    SyncStatus status;
+    SyncEvent done;
+    done.kind = SyncEvent::Kind::SyncFinished;
+    SyncReport::GroupError g;
+    g.lib = kLab;
+    g.name = "Lab";
+    g.message = "Your API key can't sync this group.";
+    done.report.groupErrors.push_back(g);
+    status.onEvent(done, 1000);
+    CHECK_FALSE(status.hasError());
+    CHECK(status.line(2000) == "Lab: can't sync");
+    done.report.groupErrors.clear();
+    status.onEvent(done, 3000);
+    CHECK(status.line(4000) == "Synced just now");
+}
+
+TEST_CASE("group UI: a hidden group's kept collections aren't counted in Settings") {
+    Rig rig;
+    rig.lib.setCollectionKept("LABCOLL1", true);
+    CHECK(SettingsScreen::keptCountFor(rig.lib) == 1);
+    rig.lib.setLibraryEnabled(kLab, false);
+    CHECK(SettingsScreen::keptCountFor(rig.lib) == 0);
 }

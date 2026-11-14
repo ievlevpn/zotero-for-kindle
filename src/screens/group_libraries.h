@@ -12,7 +12,9 @@
 // changes not sent yet, the sheet says so and offers Sync first. A group that is gone (left,
 // deleted, out of the key's reach) offers Remove from Kindle. Nothing is deleted on its own, and the
 // deletion itself runs on the sync worker (SyncControl::removeLibrary). A key that can't read groups
-// gets one quiet line about making a new key.
+// gets one quiet line about making a new key; a listed group the key can't read says so, with no
+// switch (and Remove only if something of it is still here). A group whose last sync failed says
+// "Can't sync: …".
 
 #include <cstdint>
 #include <optional>
@@ -62,6 +64,7 @@ public:
         bool hasCopy = false;   // items or files of it on the Kindle
         bool removing = false;  // asked of the worker, not done yet
         bool syncing = false;   // Sync first: waiting for the sync before asking again
+        std::string error;      // its last sync problem ("" none): "Can't sync: …"
     };
     const std::vector<Row>& rows() const { return rows_; }
     std::string note(const Row&) const;   // the row's second line
@@ -83,7 +86,9 @@ private:
     void toggle(size_t i, Nav&);
     void askRemove(size_t i, Nav&);
     void choose(GroupSheet::Choice, Nav&);
-    void afterSync(Nav&);  // Sync first finished: ask again
+    // Sync first's own sync finished: off (as asked); on success the copy's removal is offered, on
+    // failure the user is told the group was turned off and its copy kept.
+    void afterSync(const SyncEvent&, Nav&);
     Rect content() const;
     size_t indexOf(int64_t lib) const;
 
@@ -96,6 +101,7 @@ private:
         int64_t lib = 0;
         GroupSheet::Kind kind = GroupSheet::Kind::TurnOff;
         bool reEnabled = false;  // switched on again to send its changes: off again afterwards
+        uint64_t request = 0;    // the sync asked for (SyncControl::syncNowTracked)
     };
     std::optional<Waiting> waiting_;  // Sync first
 };

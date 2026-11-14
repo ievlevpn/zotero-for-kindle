@@ -15,6 +15,11 @@ first, with what to do about it.
 - `zk.library.collections()` lists My Library's collections first, then each group's
 - `zk.zotero.*` changes go to the library of what they change; a change to a read-only, switched-off
   or gone group, or one mixing libraries, is refused with a message saying which
+- `syncFinished { initial: true }` also ends the sync in which a group library is first downloaded
+  (joined, or switched on again after its copy was removed), even if My Library synced before; that
+  sync fires no item events for the group. A plugin that rebuilds an index on `initial` needs no change.
+- Items, annotations, attachments and notes of a switched-off, gone or unreadable group are not
+  returned by `zk.library.item()`, `annotations()`, `attachments()` or `notes()`, as in lists
 
 ## 0.6.0
 

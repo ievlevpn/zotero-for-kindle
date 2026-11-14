@@ -103,7 +103,7 @@ std::optional<std::vector<std::string>> setAnnotationTag(Nav& nav, const std::st
     if (on == has(a.tags, tag)) return a.tags;
     if (on) a.tags.push_back(tag);
     else a.tags.erase(std::remove(a.tags.begin(), a.tags.end(), tag), a.tags.end());
-    nav.library().editAnnotation(a);
+    if (!nav.library().editAnnotation(a)) return std::nullopt;  // not the user's to change
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", a.key);
     return a.tags;
 }
@@ -393,9 +393,10 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             if (confirmRect(0).contains(p)) {
                 const bool told = nav.plugins().listening();
                 const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), annotation_) : plugins::AnnotationRef{};
-                nav.library().deleteAnnotation(annotation_.key);
-                if (told) plugins::annotationDeleted(nav.plugins(), ref);
-                changed_ = true;
+                if (nav.library().deleteAnnotation(annotation_.key)) {
+                    if (told) plugins::annotationDeleted(nav.plugins(), ref);
+                    changed_ = true;
+                }
                 return Result::Closed;
             }
             if (confirmRect(1).contains(p)) {
@@ -417,7 +418,7 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
         annotation_ = *now;
         if (colour != annotation_.color) {
             annotation_.color = colour;
-            nav.library().editAnnotation(annotation_);
+            if (!nav.library().editAnnotation(annotation_)) return Result::Closed;  // not the user's to change
             plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", annotation_.key);
             changed_ = true;
         }
@@ -474,7 +475,7 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
         if (!now || now->deletedHere) return Result::Closed;
         annotation_ = *now;
         annotation_.comment = comment_;
-        nav.library().editAnnotation(annotation_);
+        if (!nav.library().editAnnotation(annotation_)) return Result::Closed;  // not the user's to change
         plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", annotation_.key);
         changed_ = true;
         return Result::Closed;

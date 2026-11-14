@@ -102,15 +102,21 @@ Rect SettingsScreen::storageTextRect() const {
 
 Rect SettingsScreen::removeRect() const { return {W() - kMargin - 420, rows().storage + 10, 420, 80}; }
 
+int SettingsScreen::keptCountFor(Library& lib) {
+    int n = 0;
+    for (const auto& key : lib.keptCollections()) n += lib.libraryShown(lib.libraryOf(key).value_or(kMyLibrary));
+    return n;
+}
+
 void SettingsScreen::load(Library& lib) {
     interval_ = loadSettings(lib).syncIntervalMinutes;
     flashEvery_ = loadSettings(lib).flashEvery;
     allOffline_ = lib.allAnnotationsOffline();
     readTag_ = lib.readTag();
-    keptCount_ = static_cast<int>(lib.keptCollections().size());
+    keptCount_ = keptCountFor(lib);
     const auto libs = lib.libraries(true);
     const GroupAccess access = lib.keyGroupAccess();
-    groupsRow_ = libs.size() > 1 || access == GroupAccess::None;
+    groupsRow_ = libs.size() > 1 || access == GroupAccess::None;  // None is only ever read when groups are listed
     groupsLine_ = groupLibrariesSummary(libs, access);
     downloadedBytes_ = 0;
     for (const auto& a : lib.downloadedAttachments()) {

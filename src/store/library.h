@@ -8,6 +8,7 @@
 #include "store/records.h"
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -150,7 +151,8 @@ struct LibraryInfo {
     int64_t id = kMyLibrary;
     std::string name;       // "My Library", or the group's name
     bool enabled = true;    // a group switched off in Settings: not synced, hidden everywhere
-    bool gone = false;      // left, deleted, or out of the key's reach: hidden, "No longer available"
+    bool gone = false;      // left or deleted (no longer listed): hidden, "No longer available"
+    bool unreadable = false;  // listed, but the API key can't read it: hidden, not synced, nothing to remove
     bool canEdit = true;    // the key may write and the group lets this user edit (My Library: true)
     bool canEditFiles = true;
     int64_t items = 0;      // its top-level items (as lists count them)
@@ -159,7 +161,8 @@ struct LibraryInfo {
 // What removing a group's local copy found (Library::removeLibraryData).
 struct LibraryRemoval {
     bool removed = false;
-    int unsent = 0;       // Kindle changes not sent yet (annotations, deletions, read marks, plugin changes, positions)
+    int unsent = 0;       // Kindle changes not sent yet that a sync can still send (Sync first)
+    int stranded = 0;     // Kindle changes that can never be sent (the group is read-only, gone or unreadable)
     int conflicts = 0;    // conflict copies kept on the Kindle
     int downloaded = 0;   // files on the Kindle
 };
@@ -225,8 +228,18 @@ public:
     std::vector<LibraryInfo> libraries(bool includeHidden = true);
     std::optional<LibraryInfo> libraryInfo(int64_t lib);
     std::string libraryName(int64_t lib);  // "My Library", the group's name, "" if unknown
-    // The groups the sync goes through: enabled, not gone, by name.
+    // The groups the sync goes through: enabled, not gone, readable by the key, by name.
     std::vector<int64_t> syncedGroups();
+    // Shown in lists, plugins and kept downloads: My Library, or a group enabled, not gone and
+    // readable by the key.
+    bool libraryShown(int64_t lib);
+    // Why the Kindle can't change things in a group, in a plugin author's terms ("the group library
+    // "Lab" is read-only (…)"), or "" when it can (My Library always can).
+    std::string groupEditRefusal(int64_t lib);
+    // Ends (Refused) the pending plugin changes of every group they can never be sent to (read-only,
+    // switched off, gone, unreadable), putting the local copies back; returns how many. The sync
+    // runs it before each push, so a plugin hears the refusal whatever the push would have sent.
+    int refuseUnsendablePluginChanges();
     // A group switched on or off (Settings). Off: no longer synced and hidden everywhere; nothing is deleted.
     void setLibraryEnabled(int64_t lib, bool enabled);
     // Whether the Kindle may change things in the library: My Library always; a group when the
@@ -257,6 +270,18 @@ public:
     // The key's access to a group, as discovery last read it; recomputes canEdit and canEditFiles.
     void setGroupAccess(int64_t lib, bool read, bool write);
     void setGroupGone(int64_t lib, bool gone);
+    // A listed group the key can't read (GET /groups/<id> refused, or the key's access): kept as a
+    // row (name if known), its listing version recorded so it isn't asked about again until the
+    // listing or the key changes. Not gone, never synced, hidden.
+    void markGroupUnreadable(int64_t lib, int64_t version, const std::string& name);
+    bool groupMetaKnown(int64_t lib);  // its editing rules have been read (GET /groups/<id>)
+    // A group's last sync problem in the user's words ("" none): Settings → Group libraries.
+    std::string groupSyncError(int64_t lib);
+    void setGroupSyncError(int64_t lib, const std::string& message);
+    // Objects a group's pull skipped because another library holds their key: the version skipped,
+    // so the same version isn't fetched again every sync.
+    std::map<std::string, int64_t> clashVersions(int64_t lib);
+    void setClashVersion(int64_t lib, const std::string& key, int64_t version);
     GroupAccess keyGroupAccess();  // Unknown before the first discovery
     void setKeyGroupAccess(GroupAccess);
     // The Zotero user this Kindle syncs as (key info): who "mine" is for annotations in groups.
@@ -299,10 +324,13 @@ public:
     // Annotation changes made on the Kindle (spec §7.4), pushed by SyncEngine::push.
     // Stores a new annotation under a fresh key (createdHere, dirty, version 0); returns the key.
     std::string createAnnotation(AnnotationRecord);
-    // Saves an edit; `version` stays the server version the edit is based on.
-    void editAnnotation(const AnnotationRecord&);
-    // Never-synced annotations are removed; synced ones become tombstones until the push.
-    void deleteAnnotation(const std::string& key);
+    // Saves an edit; `version` stays the server version the edit is based on. False (nothing
+    // changed) for an annotation the Kindle may not edit (annotationEditable: another member's in a
+    // group, or any in a read-only group).
+    bool editAnnotation(const AnnotationRecord&);
+    // Never-synced annotations are removed; synced ones become tombstones until the push. False
+    // (nothing changed) for one the Kindle may not edit, as editAnnotation.
+    bool deleteAnnotation(const std::string& key);
     // New annotations whose upload has been sent (its answer may have been lost, so Zotero may
     // have them although they are still at version 0): deleting one leaves a tombstone.
     void markUploadSent(const std::vector<std::string>& keys);
@@ -481,6 +509,7 @@ private:
     int64_t groupColumn(int64_t lib, const char* column);
     void setGroupColumn(int64_t lib, const char* column, int64_t value);
     int unsentIn(int64_t lib);
+    bool ownAnnotation(const AnnotationRecord&);  // My Library's, made here, authorless, or the user's
 
     Db& db_;
     bool inTx_ = false;

@@ -26,10 +26,11 @@ std::string plural(int n, const char* one, const char* many) { return std::to_st
 }  // namespace
 
 std::string groupLibrariesSummary(const std::vector<LibraryInfo>& groups, GroupAccess access) {
-    int on = 0, off = 0, gone = 0;
+    int on = 0, off = 0, gone = 0, unreadable = 0;
     for (const auto& g : groups) {
         if (g.id == kMyLibrary) continue;
         if (g.gone) ++gone;
+        else if (g.unreadable) ++unreadable;
         else if (g.enabled) ++on;
         else ++off;
     }
@@ -39,6 +40,7 @@ std::string groupLibrariesSummary(const std::vector<LibraryInfo>& groups, GroupA
     if (on) add(std::to_string(on) + " on");
     if (off) add(std::to_string(off) + " off");
     if (gone) add(std::to_string(gone) + " no longer available");
+    if (unreadable) add(std::to_string(unreadable) + " your key can't read");
     return s.empty() ? "None yet: groups you're in appear after a sync" : s;
 }
 
@@ -51,6 +53,10 @@ std::string pending(const LibraryRemoval& c) {
     if (c.unsent)
         s += c.unsent == 1 ? "1 change made on this Kindle hasn't been sent to Zotero yet."
                            : std::to_string(c.unsent) + " changes made on this Kindle haven't been sent to Zotero yet.";
+    if (c.stranded)
+        s += std::string(s.empty() ? "" : " ") +
+             (c.stranded == 1 ? "1 change made on this Kindle can't be sent any more."
+                              : std::to_string(c.stranded) + " changes made on this Kindle can't be sent any more.");
     if (c.conflicts)
         s += std::string(s.empty() ? "" : " ") +
              (c.conflicts == 1 ? "1 conflict copy is kept on this Kindle." : plural(c.conflicts, "", "conflict copies are kept on this Kindle."));
@@ -76,20 +82,21 @@ std::string GroupSheet::body() const {
                                    : plural(check.downloaded, "", "books from it are downloaded") +
                                          " on this Kindle. Removing deletes them, and its items and highlights, here;";
     s += " nothing changes in Zotero.";
-    if (!waiting.empty())
-        s += " " + waiting + (group.gone ? " They can't be sent any more: removing loses them." : " Removing loses them.");
+    if (!waiting.empty()) s += " " + waiting + " Removing loses them.";
     return s;
 }
 
+// Sync first only where a sync can still send something; what can never be sent (or a conflict
+// copy, which no sync clears) only asks for a yes.
 GroupSheet::Choice GroupSheet::primary() const {
     if (kind == Kind::TurnOff) return Choice::SyncFirst;
-    if (check.unsent == 0 && check.conflicts == 0) return Choice::Remove;
-    return group.gone ? Choice::Keep : Choice::SyncFirst;
+    if (check.unsent == 0 && check.stranded == 0 && check.conflicts == 0) return Choice::Remove;
+    return check.unsent > 0 && !group.gone ? Choice::SyncFirst : Choice::Keep;
 }
 
 GroupSheet::Choice GroupSheet::secondary() const {
     if (kind == Kind::TurnOff) return Choice::TurnOff;
-    if (check.unsent == 0 && check.conflicts == 0) return Choice::Keep;
+    if (check.unsent == 0 && check.stranded == 0 && check.conflicts == 0) return Choice::Keep;
     return Choice::RemoveAnyway;
 }
 
@@ -127,6 +134,7 @@ void GroupLibrariesScreen::load(Library& lib) {
         for (const auto& w : was)  // still being removed: until the worker's SyncFinished
             if (w.group.id == r.group.id) r.removing = w.removing;
         r.syncing = waiting_ && waiting_->lib == r.group.id;
+        r.error = r.group.enabled && !r.group.gone && !r.group.unreadable ? lib.groupSyncError(r.group.id) : std::string{};
         rows_.push_back(std::move(r));
     }
     layout();
@@ -157,14 +165,18 @@ size_t GroupLibrariesScreen::indexOf(int64_t lib) const {
 }
 
 bool GroupLibrariesScreen::removeOffered(const Row& r) const {
-    return !r.removing && !r.syncing && (r.group.gone || (!r.group.enabled && r.hasCopy));
+    if (r.removing || r.syncing) return false;
+    if (r.group.unreadable) return r.hasCopy;  // nothing of it here: nothing to remove (it stays listed)
+    return r.group.gone || (!r.group.enabled && r.hasCopy);
 }
 
 std::string GroupLibrariesScreen::note(const Row& r) const {
     if (r.removing) return "Removing from this Kindle…";
     if (r.syncing) return "Syncing first…";
     if (r.group.gone) return std::string("No longer available") + (r.hasCopy ? " · still on this Kindle" : "");
+    if (r.group.unreadable) return std::string("Your API key can't read this group") + (r.hasCopy ? " · still on this Kindle" : "");
     if (!r.group.enabled) return std::string("Off") + (r.hasCopy ? " · still on this Kindle" : "");
+    if (!r.error.empty()) return "Can't sync: " + r.error;
     return withThousands(r.group.items) + (r.group.items == 1 ? " item" : " items") + (r.group.canEdit ? "" : " · read-only");
 }
 
@@ -185,7 +197,7 @@ Rect GroupLibrariesScreen::rowRect(size_t i) const {
 
 Rect GroupLibrariesScreen::toggleRect(size_t i) const {
     const Rect r = rowRect(i);
-    if (r.empty() || rows_[i].group.gone || rows_[i].removing) return {};
+    if (r.empty() || rows_[i].group.gone || rows_[i].group.unreadable || rows_[i].removing) return {};
     return {r.x + r.w - 140, r.y + 40, 140, 80};
 }
 
@@ -256,7 +268,7 @@ void GroupLibrariesScreen::toggle(size_t i, Nav& nav) {
         return;
     }
     const LibraryRemoval check = lib.libraryRemovalCheck(row.group.id);
-    if (check.unsent > 0 || check.conflicts > 0) {  // ask first: off, they would wait
+    if (check.unsent > 0) {  // ask first: off, they would wait (what can't be sent, or conflicts, stay as they are)
         sheet_ = GroupSheet{GroupSheet::Kind::TurnOff, row.group, check};
         nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Ui);
         return;
@@ -274,7 +286,7 @@ void GroupLibrariesScreen::toggle(size_t i, Nav& nav) {
 void GroupLibrariesScreen::askRemove(size_t i, Nav& nav) {
     const Row row = rows_[i];
     const LibraryRemoval check = nav.library().libraryRemovalCheck(row.group.id);
-    if (!row.hasCopy && check.unsent == 0 && check.conflicts == 0) {  // nothing of it here: just forgotten
+    if (!row.hasCopy && check.unsent == 0 && check.stranded == 0 && check.conflicts == 0) {  // nothing of it here: just forgotten
         rows_[i].removing = true;
         nav.sync().removeLibrary(row.group.id, false);
         layout();
@@ -295,8 +307,9 @@ void GroupLibrariesScreen::choose(GroupSheet::Choice c, Nav& nav) {
             // Its changes go with the next sync; a group switched off is on for it, then off again.
             const bool reEnable = s.kind == GroupSheet::Kind::Remove && !s.group.gone && !s.group.enabled;
             if (reEnable) lib.setLibraryEnabled(id, true);
-            waiting_ = Waiting{id, s.kind, reEnable};
-            nav.sync().syncNow();
+            waiting_ = Waiting{id, s.kind, reEnable, 0};
+            // Only this sync's end counts (not a removal's, nor a sync already running).
+            waiting_->request = nav.sync().syncNowTracked();
             break;
         }
         case GroupSheet::Choice::TurnOff: lib.setLibraryEnabled(id, false); break;
@@ -313,22 +326,24 @@ void GroupLibrariesScreen::choose(GroupSheet::Choice c, Nav& nav) {
     nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);  // the sheet goes: no ghost of it
 }
 
-void GroupLibrariesScreen::afterSync(Nav& nav) {
+void GroupLibrariesScreen::afterSync(const SyncEvent& e, Nav& nav) {
     const Waiting w = *waiting_;
     waiting_.reset();
     Library& lib = nav.library();
     auto info = lib.libraryInfo(w.lib);
     if (!info) return;
     const LibraryRemoval check = lib.libraryRemovalCheck(w.lib);
-    const bool clean = check.unsent == 0 && check.conflicts == 0;
-    if (w.kind == GroupSheet::Kind::TurnOff && !clean) {  // still unsent (no Wi-Fi?): ask again
-        sheet_ = GroupSheet{GroupSheet::Kind::TurnOff, *info, check};
+    // The sync failed (no Wi-Fi, Zotero refused the group): the group goes off as the user asked,
+    // its copy and its changes kept, and the user is told so.
+    const bool failed = e.error.has_value() || !lib.groupSyncError(w.lib).empty() || check.unsent > 0;
+    if (info->enabled) lib.setLibraryEnabled(w.lib, false);
+    info->enabled = false;
+    if (failed) {
+        nav.toast("Couldn't sync — the group was turned off and its copy kept");
         return;
     }
     // Sent: off now (as the user asked), then the copy only on a yes.
-    if (info->enabled && (w.kind == GroupSheet::Kind::TurnOff || w.reEnabled || clean)) lib.setLibraryEnabled(w.lib, false);
-    info->enabled = false;
-    if (clean && info->items == 0 && check.downloaded == 0) return;  // nothing of it here
+    if (check.stranded == 0 && check.conflicts == 0 && info->items == 0 && check.downloaded == 0) return;  // nothing of it here
     sheet_ = GroupSheet{GroupSheet::Kind::Remove, *info, check};
 }
 
@@ -362,7 +377,8 @@ void GroupLibrariesScreen::onGesture(const Gesture& g, Nav& nav) {
 void GroupLibrariesScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
     for (auto& r : rows_) r.removing = false;  // the worker's removal ends with one too
-    if (waiting_) afterSync(nav);
+    // Sync first: only the end of the sync it asked for (an untracked SyncControl: any sync's).
+    if (waiting_ && (waiting_->request == 0 ? e.request == 0 : e.request == waiting_->request)) afterSync(e, nav);
     load(nav.library());
     nav.damage({0, kHeaderH, W(), H() - kHeaderH}, Waveform::Quality);
 }

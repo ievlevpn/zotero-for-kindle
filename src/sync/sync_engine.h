@@ -38,7 +38,15 @@ struct SyncReport {
     // Empty for the first full sync of a library (`initial`), which tells plugins only that it
     // finished, and for the on-demand download of a book's annotations.
     std::vector<PluginEvent> pluginEvents;
-    bool initial = false;  // this pull was the library's first full sync (fromVersion 0)
+    bool initial = false;  // this pull was the library's first full sync (fromVersion 0); merged: any library's
+    // Groups whose pass failed (SyncService, zk-sync): scoped to the group, never the sync's `error`,
+    // so My Library and the other groups go on. message is in the user's words, about the group.
+    struct GroupError {
+        int64_t lib = 0;
+        std::string name, message;
+        UserError error;
+    };
+    std::vector<GroupError> groupErrors;
 };
 
 // The WriteGuard's view of the plugin changes pending in `lib` (its plugin rules), as Zotero has

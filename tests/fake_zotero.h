@@ -99,6 +99,9 @@ public:
         std::string path = rest.substr(0, rest.find('?'));
         std::map<std::string, std::string> q = query(rest);
         r.headers["last-modified-version"] = std::to_string(libraryVersion);
+        if (req.method == "GET")  // nothing changed since the version asked about: 304
+            for (const auto& [name, value] : req.headers)
+                if (name == "If-Modified-Since-Version" && std::stoll(value) >= libraryVersion) return status(r, 304);
         // The user's groups (FakeZoteroHub has some): none here.
         if (req.method == "GET" && path == "groups") return ok(r, json::object());
 

@@ -290,7 +290,8 @@ std::string pluginDeleteRefusal(const HttpRequest& req, const std::string& key,
 // Why the request must not go out, or empty if it may.
 std::string refusal(const HttpRequest& req, const IsAnnotation& anyAnnotation, const IsAnnotation& isAttachment,
                     const WriteGuard::ItemTags& anyItemTags, const WriteGuard::PluginChanges& anyPluginChanges,
-                    const WriteGuard::LibraryOf& libraryOf, const std::function<bool(int64_t)>& groupWritable) {
+                    const WriteGuard::LibraryOf& libraryOf, const std::function<bool(int64_t)>& groupWritable,
+                    const IsAnnotation& annotationEditable) {
     const std::string& m = req.method;
     if (m == "GET" || m == "HEAD" || m == "PROPFIND")
         return req.body.empty() ? std::string{} : m + " with a body";  // curl would send it as a POST
@@ -312,7 +313,10 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& anyAnnotation, c
         return m + " " + path + " is not an allowed write";
     }
     // The rules below see only the objects of the library written to.
-    const IsAnnotation isAnnotation = [&](const std::string& key) { return anyAnnotation(key) && scope.has(key); };
+    // In a group, only the user's own annotations (another member's are theirs alone).
+    const IsAnnotation isAnnotation = [&](const std::string& key) {
+        return anyAnnotation(key) && scope.has(key) && (scope.lib == 0 || (annotationEditable && annotationEditable(key)));
+    };
     const WriteGuard::ItemTags itemTags =
         !anyItemTags ? WriteGuard::ItemTags()
                      : [&](const std::string& key) -> std::optional<std::vector<std::string>> {
@@ -375,7 +379,8 @@ WriteGuard::WriteGuard(Http& inner, std::function<bool(const std::string& key)> 
       itemTags_(std::move(itemTags)), pluginChanges_(std::move(pluginChanges)) {}
 
 HttpResponse WriteGuard::send(const HttpRequest& req) {
-    const std::string why = refusal(req, isAnnotation_, isAttachment_, itemTags_, pluginChanges_, libraryOf_, groupWritable_);
+    const std::string why =
+        refusal(req, isAnnotation_, isAttachment_, itemTags_, pluginChanges_, libraryOf_, groupWritable_, annotationEditable_);
     if (why.empty()) return inner_.send(req);
     log(LogLevel::Warn, "write guard refused %s %s: %s", req.method.c_str(), pathOf(req.url).c_str(), why.c_str());
     HttpResponse r;

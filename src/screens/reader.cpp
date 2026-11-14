@@ -1943,6 +1943,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
     for (const auto& [key, h] : hits) {
         auto rec = nav.library().annotation(key);
         if (!rec || rec->deletedHere) continue;
+        if (!nav.library().annotationEditable(*rec)) continue;  // another member's ink (or a read-only group's): theirs
         const auto& [crossed, strokes] = h;
         if (crossed.size() < strokes) {
             nlohmann::json pos = nlohmann::json::parse(rec->position, nullptr, false);
@@ -1952,7 +1953,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
                 if (!crossed.count(i)) kept.push_back(pos["paths"][i]);
             pos["paths"] = kept;
             rec->position = pos.dump();
-            nav.library().editAnnotation(*rec);
+            if (!nav.library().editAnnotation(*rec)) continue;
             plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", key);
         } else if (!rec->comment.empty() || !rec->tags.empty()) {
             nav.toast("This handwriting has a comment or tags: delete it in Notes.");
@@ -1960,7 +1961,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
         } else {
             const bool told = nav.plugins().listening();
             const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), *rec) : plugins::AnnotationRef{};
-            nav.library().deleteAnnotation(key);
+            if (!nav.library().deleteAnnotation(key)) continue;
             if (told) plugins::annotationDeleted(nav.plugins(), ref);
         }
         saved = true;

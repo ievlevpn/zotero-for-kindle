@@ -185,10 +185,15 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!st) return JS_EXCEPTION;
     Library& lib = *st->lib;
     std::string a, b, d;
+    // A key of a hidden group (switched off, gone, unreadable): as if it weren't there.
+    auto hidden = [&lib](const std::string& key) {
+        const auto in = lib.libraryOf(key);
+        return in && !lib.libraryShown(*in);
+    };
 
     if (op == "item") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
-        auto r = lib.item(a);
+        auto r = hidden(a) ? std::nullopt : lib.item(a);
         return toJs(c, r ? itemOf(lib, *r) : json(nullptr));
     }
     if (op == "page") {  // collection, tag, offset, limit, library (-1 all)
@@ -229,7 +234,7 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         for (const std::string& isbn : isbnKeys(d)) add(st->byIsbn, isbn);
         json items = json::array();
         for (const std::string& key : keys)
-            if (auto r = lib.item(key)) items.push_back(itemOf(lib, *r));
+            if (auto r = lib.item(key); r && lib.libraryShown(r->lib)) items.push_back(itemOf(lib, *r));
         return toJs(c, items);
     }
     if (op == "feeds") {  // Zotero's "feeds" setting as sync keeps it: {url: [name, ...]}
@@ -301,13 +306,15 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (op == "attachments") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
         json out = json::array();
-        for (const AttachmentRecord& at : lib.attachmentsOf(a)) out.push_back(attachmentJson(at));
+        if (!hidden(a))
+            for (const AttachmentRecord& at : lib.attachmentsOf(a)) out.push_back(attachmentJson(at));
         return toJs(c, out);
     }
     if (op == "annotations") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
         const std::string itemKey = itemKeyOfAttachment(lib, a);
         json out = json::array();
+        if (hidden(a)) return toJs(c, out);
         for (const AnnotationRecord& an : lib.annotationsFor(a))
             if (an.conflictOf.empty()) out.push_back(annotationJson(an, itemKey, lib.libraryName(an.lib)));
         return toJs(c, out);
@@ -324,7 +331,7 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     }
     if (op == "notes") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
-        auto notes = lib.notes(a);
+        auto notes = hidden(a) ? decltype(lib.notes(a)){} : lib.notes(a);
         std::vector<std::pair<std::string, const NoteRecord*>> order;  // oldest first
         for (const NoteRecord& n : notes) order.emplace_back(createdOf(n.json, n.dateModified), &n);
         std::stable_sort(order.begin(), order.end(), [](const auto& x, const auto& y) { return x.first < y.first; });

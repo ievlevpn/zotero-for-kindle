@@ -439,6 +439,55 @@ TEST_CASE("library: group libraries — libraries(), libraryId and libraryName, 
     CHECK(contains(log, "OUT zk.zotero.addTag: the group library \"Lab\" is read-only"));
 }
 
+TEST_CASE("library: a switched-off or gone group's item, files and annotations aren't returned by key") {
+    Env env;
+    fill(env.lib);
+    Library::GroupMeta g;
+    g.id = 31;
+    g.version = 1;
+    g.name = "Off group";
+    g.libraryEditing = g.fileEditing = "members";
+    env.lib.upsertGroup(g);
+    env.lib.setGroupAccess(31, true, true);
+    ItemRecord item = record("OFFITEM1", "Off paper", {});
+    item.lib = 31;
+    env.lib.upsertItem(item);
+    AttachmentRecord file;
+    file.key = "OFFFILE1";
+    file.parentKey = "OFFITEM1";
+    file.contentType = "application/pdf";
+    file.lib = 31;
+    env.lib.upsertAttachment(file);
+    AnnotationRecord a;
+    a.key = "OFFANNO1";
+    a.parentKey = "OFFFILE1";
+    a.type = "highlight";
+    a.text = "hidden";
+    a.lib = 31;
+    env.lib.upsertAnnotation(a);
+    const std::string script = R"(
+        const it = await zk.library.item("OFFITEM1");
+        out(it ? it.key : null);
+        out((await zk.library.annotations("OFFFILE1")).length);
+        out((await zk.library.attachments("OFFITEM1")).length);
+    )";
+    env.fp.add("on", pluginWith(script), {"library:read", "annotations:read"});
+    std::string log = env.run("on");
+    CHECK(contains(log, "OUT OFFITEM1"));
+    CHECK(contains(log, "OUT 1"));
+    env.lib.setLibraryEnabled(31, false);
+    env.fp.add("off", pluginWith(script), {"library:read", "annotations:read"});
+    log = env.run("off");
+    CHECK(contains(log, "OUT null"));
+    CHECK_FALSE(contains(log, "OUT 1"));
+    env.lib.setLibraryEnabled(31, true);
+    env.lib.setGroupGone(31, true);
+    env.fp.add("gone", pluginWith(script), {"library:read", "annotations:read"});
+    log = env.run("gone");
+    CHECK(contains(log, "OUT null"));
+    CHECK_FALSE(contains(log, "OUT 1"));
+}
+
 TEST_CASE("library: feeds() lists the Zotero feed subscriptions by name") {
     Env env;
     env.lib.setMetaValue("zotero:feeds", R"({

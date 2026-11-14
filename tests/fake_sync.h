@@ -13,6 +13,10 @@ namespace zk::test {
 class FakeSync : public SyncControl {
 public:
     void syncNow() override { ++syncs; }
+    uint64_t syncNowTracked() override {  // ids from 100, as SyncEvent::request carries them
+        ++syncs;
+        return lastRequest = 100 + static_cast<uint64_t>(syncs);
+    }
     void pushSoon() override { ++pushes; }
     void syncWhenOnline() override { ++whenOnline; }
     void openBook(const std::string& itemKey, const std::string& attachmentKey) override {
@@ -36,6 +40,7 @@ public:
 
     void removeLibrary(int64_t lib, bool evenUnsent) override { removedLibraries.push_back({lib, evenUnsent}); }
 
+    uint64_t lastRequest = 0;  // the last syncNowTracked()'s id
     int syncs = 0, pushes = 0, whenOnline = 0, removals = 0, interval = -1, keptRuns = 0;
     std::vector<std::pair<int64_t, bool>> removedLibraries;  // removeLibrary(lib, evenUnsent), in order
     std::map<std::string, KeptStatus> kept;  // what keptStatus() answers

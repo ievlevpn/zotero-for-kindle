@@ -115,18 +115,21 @@ void SyncService::stop() {
     thread_.join();
 }
 
-void SyncService::enqueue(Command c) {
+uint64_t SyncService::enqueue(Command c) {
+    uint64_t request = c.request;
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if ((c.kind == Command::Kind::Sync || c.kind == Command::Kind::SyncWhenOnline) &&
-            std::any_of(commands_.begin(), commands_.end(),
-                        [](const Command& q) { return q.kind == Command::Kind::Sync || q.kind == Command::Kind::SyncWhenOnline; }))
-            return;  // one pending sync is enough
+        if (c.kind == Command::Kind::Sync || c.kind == Command::Kind::SyncWhenOnline)
+            for (auto& q : commands_)
+                if (q.kind == Command::Kind::Sync || q.kind == Command::Kind::SyncWhenOnline) {
+                    if (q.request == 0) q.request = c.request;
+                    return q.request;  // one pending sync is enough: the asker waits for that one
+                }
         if (c.kind == Command::Kind::KeepDownloads)
             for (auto& q : commands_)
                 if (q.kind == Command::Kind::KeepDownloads) {
                     q.flag = q.flag || c.flag;
-                    return;  // one pending is enough
+                    return 0;  // one pending is enough
                 }
         // Opening a book is what the reader is waiting for: ahead of queued syncs and kept
         // downloads, and a kept file under way gives way to it.
@@ -138,9 +141,18 @@ void SyncService::enqueue(Command c) {
         else commands_.push_back(std::move(c));
     }
     cv_.notify_all();
+    return request;
 }
 
 void SyncService::syncNow() { enqueue({Command::Kind::Sync, {}, {}, false}); }
+uint64_t SyncService::syncNowTracked() {
+    Command c{Command::Kind::Sync, {}, {}, false};
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        c.request = ++nextRequest_;
+    }
+    return enqueue(std::move(c));
+}
 void SyncService::pushSoon() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -231,7 +243,8 @@ void SyncService::run() {
             pluginChangeShapes(*lib));  // plugin changes, each in its pending shape
         // Group libraries: each object only to its own library's path, and only to groups the Kindle may edit.
         w.guard->setLibraries([lib](const std::string& key) { return lib->libraryOf(key); },
-                              [lib](int64_t group) { return lib->libraryEditable(group); });
+                              [lib](int64_t group) { return lib->libraryEditable(group); },
+                              [lib](const std::string& key) { return lib->annotationEditable(key); });
         if (lib->userId() == 0 && deps_.config.userId > 0) lib->setUser(deps_.config.userId, "");
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
@@ -290,6 +303,13 @@ void SyncService::run() {
                 bool online = deps_.wifiUp();
                 while (!online && !stopping_ && Clock::now() < until && sleepForMs(deps_.onlinePollMs)) online = deps_.wifiUp();
                 if (!online || stopping_) {
+                    if (cmd.request != 0 && !stopping_) {  // someone waits for this sync's end: it didn't happen
+                        SyncEvent done;
+                        done.kind = SyncEvent::Kind::SyncFinished;
+                        done.request = cmd.request;
+                        done.error = UserError{ErrorKind::NoWifi, "No Wi-Fi. Connect to a network and try again.", "offline"};
+                        emit(std::move(done));
+                    }
                     busy_ = false;
                     continue;
                 }
@@ -300,9 +320,12 @@ void SyncService::run() {
             if (deps_.keepAwake && cmd.kind != Command::Kind::KeepDownloads) awake.emplace(*deps_.keepAwake);
             switch (cmd.kind) {
                 case Command::Kind::SyncWhenOnline: break;  // turned into Sync above
-                case Command::Kind::Push:
-                    pushChanges(w);
+                case Command::Kind::Push: {
+                    std::vector<int64_t> passed;
+                    const SyncReport pushed = pushChanges(w, &passed);
+                    recordGroupErrors(*w.lib, passed, pushed);
                     break;
+                }
                 case Command::Kind::Sync: {
                     {
                         std::lock_guard<std::mutex> lock(mutex_);
@@ -310,10 +333,23 @@ void SyncService::run() {
                     }
                     SyncEvent start;
                     start.kind = SyncEvent::Kind::SyncStarted;
+                    start.request = cmd.request;
                     emit(start);
                     // Which groups there are, and who may edit them (one request when nothing changed).
-                    discoverGroups(*w.api, *w.lib, deps_.wallMs(), nullptr);
-                    pushChanges(w);  // ours first, so a pull can't make them look like conflicts
+                    UserError discovery;
+                    if (!discoverGroups(*w.api, *w.lib, deps_.wallMs(), &discovery) && unreachable(discovery)) {
+                        // Zotero can't be reached: every other request would fail the same way.
+                        lastSync = Clock::now();
+                        SyncEvent done;
+                        done.kind = SyncEvent::Kind::SyncFinished;
+                        done.request = cmd.request;
+                        done.error = discovery;
+                        done.report.error = discovery;
+                        if (!stopping_) emit(std::move(done));
+                        break;
+                    }
+                    std::vector<int64_t> passed;  // groups gone through: their errors are recorded
+                    SyncReport pushed = pushChanges(w, &passed);  // ours first, so a pull can't make them look like conflicts
                     auto progress = [this](const SyncProgress& p) {
                         SyncEvent e;
                         e.kind = SyncEvent::Kind::SyncProgress;
@@ -321,16 +357,26 @@ void SyncService::run() {
                         emit(std::move(e));
                     };
                     // My Library, then each group switched on and still there ("Syncing <group>…").
+                    // A group's failure is its own (groupErrors): the others and the last push go on.
                     SyncReport rep = w.engine->pull(progress);
                     if (!rep.error)
                         for (int64_t group : w.lib->syncedGroups()) {
                             if (stopping_) break;
-                            mergeReport(rep, w.engineFor(group, deps_.pluginEventsWanted).pull(progress));
+                            SyncReport one = w.engineFor(group, deps_.pluginEventsWanted).pull(progress);
+                            scopeGroupError(one, group, *w.lib);
+                            if (std::find(passed.begin(), passed.end(), group) == passed.end()) passed.push_back(group);
+                            mergeReport(rep, std::move(one));
                         }
                     lastSync = Clock::now();
-                    if (!rep.error && !stopping_) pushChanges(w);  // e.g. conflicts re-applied meanwhile
+                    if (!rep.error && !stopping_) {
+                        SyncReport again = pushChanges(w, &passed);  // e.g. conflicts re-applied meanwhile
+                        rep.groupErrors.insert(rep.groupErrors.end(), again.groupErrors.begin(), again.groupErrors.end());
+                    }
+                    rep.groupErrors.insert(rep.groupErrors.begin(), pushed.groupErrors.begin(), pushed.groupErrors.end());
+                    recordGroupErrors(*w.lib, passed, rep);
                     SyncEvent done;
                     done.kind = SyncEvent::Kind::SyncFinished;
+                    done.request = cmd.request;
                     done.error = rep.error;
                     done.report = std::move(rep);  // may carry thousands of plugin events: not copied
                     const bool ok = !done.error;
@@ -403,6 +449,7 @@ void SyncService::run() {
             log(LogLevel::Error, "sync service: %s", e.what());
             SyncEvent ev;
             ev.kind = cmd.kind == Command::Kind::OpenBook ? SyncEvent::Kind::DownloadFinished : SyncEvent::Kind::SyncFinished;
+            if (cmd.kind == Command::Kind::Sync) ev.request = cmd.request;
             ev.itemKey = cmd.itemKey;
             ev.attachmentKey = cmd.attachmentKey;
             ev.error = w.lib->lastError();
@@ -507,8 +554,10 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
                 it->collections.insert(key);
                 ++w.keptTotal[key];
             }
-    } else {  // keeping turned off meanwhile: those collections' files are no longer wanted
-        const std::set<std::string> keptSet(kept.begin(), kept.end());
+    } else {  // keeping turned off meanwhile, or its group hidden: those collections' files are no longer wanted
+        std::set<std::string> keptSet;
+        for (const auto& key : kept)
+            if (w.lib->libraryShown(w.lib->libraryOf(key).value_or(kMyLibrary))) keptSet.insert(key);
         for (auto& f : w.keptQueue)
             for (auto c = f.collections.begin(); c != f.collections.end();) c = keptSet.count(*c) ? std::next(c) : f.collections.erase(c);
         std::erase_if(w.keptQueue, [](const Worker::KeptFile& f) { return f.collections.empty(); });
@@ -585,8 +634,12 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
     return stop({});  // network, server, login: not file after file; the next sync tries again
 }
 
-void SyncService::pushChanges(Worker& w) {
-    // Every library with something to send: My Library first, then the groups.
+SyncReport SyncService::pushChanges(Worker& w, std::vector<int64_t>* passed) {
+    // Plugin changes aimed at groups they can never go to (read-only, switched off, gone,
+    // unreadable) are refused first, whatever else is pending: the plugin hears it now.
+    const int refused = w.lib->refuseUnsendablePluginChanges();
+    // Every library with something to send: My Library first, then the groups. pendingChanges
+    // counts what push() will really send.
     std::vector<int64_t> libs;
     int pending = 0;
     for (int64_t l : librariesToSync(*w.lib))
@@ -594,22 +647,34 @@ void SyncService::pushChanges(Worker& w) {
             pending += n;
             libs.push_back(l);
         }
-    if (pending == 0 || stopping_) return;
+    SyncReport rep;
+    rep.pluginRefused = refused;
+    if (pending == 0 || stopping_) return rep;
     SyncEvent start;
     start.kind = SyncEvent::Kind::PushStarted;
     start.total = pending;
     emit(start);
-    SyncReport rep;
     for (size_t i = 0; i < libs.size() && !stopping_; ++i) {
         SyncReport one = w.engineFor(libs[i], deps_.pluginEventsWanted).push();
-        if (i == 0) rep = std::move(one);
-        else mergeReport(rep, std::move(one));
+        if (libs[i] != kMyLibrary) {
+            scopeGroupError(one, libs[i], *w.lib);  // a group's refusal is the group's, not the account's
+            if (passed && std::find(passed->begin(), passed->end(), libs[i]) == passed->end()) passed->push_back(libs[i]);
+        }
+        if (i == 0) {
+            const int r = rep.pluginRefused;
+            rep = std::move(one);
+            rep.pluginRefused += r;
+        } else {
+            mergeReport(rep, std::move(one));
+        }
     }
     SyncEvent done;
     done.kind = SyncEvent::Kind::PushFinished;
     done.error = rep.error;
-    done.report = std::move(rep);
+    done.report = rep;
     if (!stopping_) emit(std::move(done));
+    rep.pluginEvents.clear();  // told with PushFinished
+    return rep;
 }
 
 }  // namespace zk

@@ -398,15 +398,43 @@ TEST_CASE("groups: a schema 11 database gains libraries; its rows are My Library
 
 TEST_CASE("groups: an edit keeps the annotation's library and author") {
     Rig rig;
+    AnnotationRecord mine = note("ANNOWN01", "PDFLAB01", kLab, "mine");  // made in Zotero by the user (55)
+    mine.authorId = 55;
+    mine.authorName = "Pavel";
+    rig.lib.upsertAnnotation(mine);
+    AnnotationRecord edit = note("ANNOWN01", "PDFLAB01", kMyLibrary, "changed");  // as a screen might build it
+    CHECK(rig.lib.editAnnotation(edit));
+    auto now = rig.lib.annotation("ANNOWN01");
+    CHECK(now->text == "changed");
+    CHECK(now->lib == kLab);
+    CHECK(now->authorId == 55);
+    CHECK(now->authorName == "Pavel");
+}
+
+TEST_CASE("groups: another member's annotation is never edited or deleted here, whatever path asks") {
+    Rig rig;
     AnnotationRecord theirs = note("ANNTHEM1", "PDFLAB01", kLab, "theirs");
     theirs.authorId = 99;
     theirs.authorName = "Ada";
+    theirs.version = 4;
     rig.lib.upsertAnnotation(theirs);
-    AnnotationRecord edit = note("ANNTHEM1", "PDFLAB01", kMyLibrary, "changed");  // as a screen might build it
-    rig.lib.editAnnotation(edit);
+    AnnotationRecord edit = *rig.lib.annotation("ANNTHEM1");
+    edit.text = "changed";
+    edit.color = "#ff0000";
+    edit.tags = {"mine now"};
+    CHECK_FALSE(rig.lib.editAnnotation(edit));
+    CHECK_FALSE(rig.lib.deleteAnnotation("ANNTHEM1"));
     auto now = rig.lib.annotation("ANNTHEM1");
-    CHECK(now->text == "changed");
-    CHECK(now->lib == kLab);
-    CHECK(now->authorId == 99);
-    CHECK(now->authorName == "Ada");
+    REQUIRE(now);
+    CHECK(now->text == "theirs");
+    CHECK_FALSE(now->dirty);
+    CHECK_FALSE(now->deletedHere);
+    CHECK(rig.lib.libraryRemovalCheck(kLab).unsent == 0);
+    // In a read-only group even the user's own stays as it is.
+    AnnotationRecord ro = note("ANNRO001", "PDFRO001", kReadOnly, "mine, read-only");
+    ro.authorId = 55;
+    rig.lib.upsertAnnotation(ro);
+    CHECK_FALSE(rig.lib.annotationEditable("ANNRO001"));
+    CHECK_FALSE(rig.lib.deleteAnnotation("ANNRO001"));
+    CHECK(rig.lib.annotation("ANNRO001"));
 }

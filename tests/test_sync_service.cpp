@@ -527,6 +527,37 @@ TEST_CASE("kept: turning it off stops future downloads and keeps the files") {
     CHECK(ui.attachment("ATTA0001")->state == AttachmentRecord::State::Local);
 }
 
+TEST_CASE("kept: a group switched off mid-way stops its kept collection's downloads") {
+    KeptRig rig;
+    std::atomic<bool> release{false};
+    rig.onFile = [&](const HttpRequest& r) {
+        while (!release && !(r.cancel && *r.cancel)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    };
+    rig.startOnZotero();
+    rig.syncAndWait();
+    rig.keep("SHELF001");
+    rig.service->downloadKept();
+    REQUIRE(rig.waitUntil([&] { return rig.service->keptStatus("SHELF001").has_value(); }));  // the first file under way
+    {
+        // Its collection is (now) a group's, and the user switches that group off.
+        Db db = Db::open(rig.db());
+        Library ui(db);
+        Library::GroupMeta g;
+        g.id = 31;
+        g.version = 1;
+        g.name = "Lab";
+        g.libraryEditing = g.fileEditing = "members";
+        ui.upsertGroup(g);
+        ui.setGroupAccess(31, true, true);
+        db.exec("UPDATE collections SET lib = 31 WHERE key = 'SHELF001'");
+        ui.setLibraryEnabled(31, false);
+    }
+    release = true;
+    REQUIRE(rig.waitUntil([&] { return !rig.service->keptStatus("SHELF001"); }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    CHECK(rig.fetchedCopy().size() == 1);  // the one under way, then no more
+}
+
 TEST_CASE("kept: stopping mid-way stops before the next file") {
     KeptRig rig;
     std::atomic<bool> release{false};

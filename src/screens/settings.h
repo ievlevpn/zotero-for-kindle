@@ -18,6 +18,9 @@ namespace zk {
 
 class SettingsScreen final : public Screen {
 public:
+    // Collections kept downloaded that still download: a hidden group's (switched off, gone,
+    // unreadable) aren't counted.
+    static int keptCountFor(Library&);
     // `updater` (may be null): the About row's Check for updates; `openUpdate` pushes the update
     // screen when the check finds a newer release. `pendingUpdate`: a newer version the weekly
     // check found (UpdateNotice), for the About row. `plugins` (may be null, or give null): the
@@ -74,7 +77,7 @@ private:
     std::string readTag_;
     bool confirmRemove_ = false;
     int64_t downloadedBytes_ = 0;
-    int keptCount_ = 0;  // collections kept downloaded
+    int keptCount_ = 0;  // collections kept downloaded (keptCountFor)
     bool groupsRow_ = false;
     std::string groupsLine_;
 };

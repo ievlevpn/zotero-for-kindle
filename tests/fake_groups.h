@@ -24,6 +24,8 @@ public:
         std::vector<int64_t> admins;
         std::string libraryEditing = "members", fileEditing = "members";
         bool listed = true;  // in the user's group listing (false: left, deleted, out of the key's reach)
+        bool readable = true;  // false: listed, but GET /groups/<id> and its library answer 403
+        int failStatus = 0;    // non-zero: every request to its library (/groups/<id>/…) answers this
     };
     std::map<int64_t, Group> groups;
     // keys/current: access.groups (default: every group, read and write).
@@ -64,8 +66,12 @@ public:
             const size_t slash = rest.find('/', 7);
             const int64_t id = std::stoll(rest.substr(7, slash == std::string::npos ? std::string::npos : slash - 7));
             auto it = groups.find(id);
-            if (it == groups.end() || !it->second.listed) {
+            if (it == groups.end() || !it->second.listed || !it->second.readable) {
                 r.status = 403;
+                return r;
+            }
+            if (slash != std::string::npos && it->second.failStatus) {
+                r.status = it->second.failStatus;
                 return r;
             }
             if (slash == std::string::npos) {

@@ -3,6 +3,7 @@
 #include "core/log.h"
 
 #include <chrono>
+#include <cstdio>
 #include <random>
 #include <thread>
 
@@ -106,7 +107,7 @@ HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
             sleeper_(headerInt(r, "retry-after", 60));
             continue;
         }
-        if (r.curlCode != 0 || r.status < 200 || r.status >= 300) {
+        if (r.curlCode != 0 || ((r.status < 200 || r.status >= 300) && r.status != 304)) {
             if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE" || req.method == "PATCH"))) {
                 UserError e = classify(r, r.curlCode ? probeNetState() : NetState{}, kHost, false, req.method);
                 log(LogLevel::Warn, "zotero: %s %s -> %s (%s)", req.method.c_str(), req.url.c_str(), e.message.c_str(),
@@ -116,6 +117,17 @@ HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
         }
         return r;
     }
+}
+
+std::string ZoteroApi::keyFingerprint() const {
+    uint64_t h = 1469598103934665603ull;  // FNV-1a 64
+    for (unsigned char c : std::to_string(userId_) + ":" + apiKey_) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    char buf[17];
+    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(h));
+    return buf;
 }
 
 std::optional<KeyInfo> ZoteroApi::keyInfo(UserError* err) {
@@ -197,11 +209,18 @@ std::optional<GroupInfo> ZoteroApi::group(int64_t groupId, UserError* err) {
 }
 
 std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t since, UserError* err,
-                                              const std::string& itemType) {
+                                              const std::string& itemType, int64_t ifModifiedSince) {
     HttpRequest req;
     req.url = libraryUrl("/" + kind + "?since=" + std::to_string(since) + "&format=versions" +
                       (kind == "items" ? "&includeTrashed=1" : "") + (itemType.empty() ? "" : "&itemType=" + itemType));
+    if (ifModifiedSince > 0) req.headers.emplace_back("If-Modified-Since-Version", std::to_string(ifModifiedSince));
     HttpResponse r = send(req, err);
+    if (!r.curlCode && r.status == 304 && ifModifiedSince > 0) {
+        VersionMap unchanged;
+        unchanged.notModified = true;
+        unchanged.libraryVersion = ifModifiedSince;
+        return unchanged;
+    }
     if (r.curlCode || r.status != 200) return std::nullopt;
     auto j = json::parse(r.body, nullptr, false);
     if (!j.is_object()) return setError(err, badBody(kind + " versions: not an object")), std::nullopt;

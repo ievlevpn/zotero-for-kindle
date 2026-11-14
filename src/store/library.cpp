@@ -2,6 +2,8 @@
 
 #include "core/log.h"
 
+#include <cctype>
+
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -138,7 +140,7 @@ CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY, name TEXT NOT NULL
 
 // Shown: My Library's, or an enabled group's still there (`alias` with its dot, or "").
 std::string shownLib(const std::string& a) {
-    return " AND (" + a + "lib = 0 OR " + a + "lib IN (SELECT id FROM libraries WHERE enabled = 1 AND gone = 0))";
+    return " AND (" + a + "lib = 0 OR " + a + "lib IN (SELECT id FROM libraries WHERE enabled = 1 AND gone = 0 AND keyRead = 1))";
 }
 
 // Highlight and note search (the Notes tab): kept by triggers, so every write to annotations counts.
@@ -2098,9 +2100,13 @@ std::string Library::createAnnotation(AnnotationRecord a) {
     return a.key;
 }
 
-void Library::editAnnotation(const AnnotationRecord& edited) {
+bool Library::editAnnotation(const AnnotationRecord& edited) {
     auto old = annotation(edited.key);
-    if (!old || old->deletedHere) return;
+    if (!old || old->deletedHere) return false;
+    if (!annotationEditable(*old)) {  // another member's, or a read-only group's: never changed here
+        log(LogLevel::Warn, "library: %s may not be edited here; edit ignored", edited.key.c_str());
+        return false;
+    }
     AnnotationRecord a = edited;
     a.version = old->version;
     a.createdHere = old->createdHere;
@@ -2114,6 +2120,7 @@ void Library::editAnnotation(const AnnotationRecord& edited) {
     a.dirty = !old->conflict;  // a conflict copy is only sent once re-applied
     a.dateModified = nowUtc();
     upsertAnnotation(a);
+    return true;
 }
 
 namespace {
@@ -2134,16 +2141,21 @@ bool Library::uploadSent(const std::string& key) {
     return ("\n" + metaValue(kUploadsSent)).find("\n" + key + "\n") != std::string::npos;
 }
 
-void Library::deleteAnnotation(const std::string& key) {
+bool Library::deleteAnnotation(const std::string& key) {
     auto a = annotation(key);
-    if (!a) return;
+    if (!a) return false;
+    if (!annotationEditable(*a)) {  // another member's, or a read-only group's: never deleted here
+        log(LogLevel::Warn, "library: %s may not be deleted here; ignored", key.c_str());
+        return false;
+    }
     if (a->version == 0 && !uploadSent(key)) {  // never left the Kindle
         removeObject("annotation", key);
-        return;
+        return true;
     }
     a->deletedHere = true;
     a->dirty = true;
     upsertAnnotation(*a);
+    return true;
 }
 
 std::vector<AnnotationRecord> Library::pendingDeletions(int64_t lib) {
@@ -2189,7 +2201,7 @@ std::string Library::reapplyConflict(const std::string& key) {
 // ---- Libraries -----------------------------------------------------------------------------
 
 namespace {
-constexpr const char* kLibraryColumns = "id, name, enabled, gone, canEdit, canEditFiles, "
+constexpr const char* kLibraryColumns = "id, name, enabled, gone, canEdit, canEditFiles, keyRead = 0, "
     "(SELECT count(*) FROM items i WHERE i.lib = libraries.id AND i.parentKey = ''";
 LibraryInfo readLibrary(const Stmt& st) {
     LibraryInfo l;
@@ -2199,7 +2211,8 @@ LibraryInfo readLibrary(const Stmt& st) {
     l.gone = st.integer(3) != 0;
     l.canEdit = st.integer(4) != 0;
     l.canEditFiles = st.integer(5) != 0;
-    l.items = st.integer(6);
+    l.unreadable = st.integer(6) != 0;
+    l.items = st.integer(7);
     return l;
 }
 }  // namespace
@@ -2215,7 +2228,7 @@ std::vector<LibraryInfo> Library::libraries(bool includeHidden) {
         out.push_back(mine);
         Stmt st = db_.prepare(std::string("SELECT ") + kLibraryColumns + notTrashed("i.key") +
                               ") FROM libraries WHERE id != 0" +
-                              (includeHidden ? "" : " AND enabled = 1 AND gone = 0") + " ORDER BY name COLLATE NOCASE, id");
+                              (includeHidden ? "" : " AND enabled = 1 AND gone = 0 AND keyRead = 1") + " ORDER BY name COLLATE NOCASE, id");
         while (st.step()) out.push_back(readLibrary(st));
         return out;
     });
@@ -2239,11 +2252,46 @@ std::string Library::libraryName(int64_t lib) {
 std::vector<int64_t> Library::syncedGroups() {
     return guarded([&] {
         std::vector<int64_t> out;
-        Stmt st = db_.prepare("SELECT id FROM libraries WHERE id != 0 AND enabled = 1 AND gone = 0 "
+        Stmt st = db_.prepare("SELECT id FROM libraries WHERE id != 0 AND enabled = 1 AND gone = 0 AND keyRead = 1 "
                               "ORDER BY name COLLATE NOCASE, id");
         while (st.step()) out.push_back(st.integer(0));
         return out;
     });
+}
+
+bool Library::libraryShown(int64_t lib) {
+    if (lib == kMyLibrary) return true;
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT enabled AND NOT gone AND keyRead FROM libraries WHERE id = ?");
+        st.bind(1, lib);
+        return st.step() && st.integer(0) != 0;
+    });
+}
+
+std::string Library::groupEditRefusal(int64_t lib) {
+    if (lib == kMyLibrary || libraryEditable(lib)) return {};
+    const std::optional<LibraryInfo> info = libraryInfo(lib);
+    const std::string name = info && !info->name.empty() ? " \"" + info->name + "\"" : std::string();
+    if (info && info->gone) return "the group library" + name + " is no longer available";
+    if (info && info->unreadable) return "the group library" + name + " can't be read with this API key";
+    if (info && !info->enabled) return "the group library" + name + " is switched off on this Kindle (Settings → Group libraries)";
+    return "the group library" + name + " is read-only (the API key or the group's settings don't allow edits)";
+}
+
+int Library::refuseUnsendablePluginChanges() {
+    int n = 0;
+    for (const LibraryInfo& l : libraries(true)) {
+        if (l.id == kMyLibrary) continue;
+        std::string why = groupEditRefusal(l.id);
+        if (why.empty()) continue;
+        why[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(why[0])));
+        for (const auto& c : pendingPluginChanges("", l.id))
+            if (auto now = pluginChange(c.id); now && now->state == PluginChange::State::Pending) {
+                markPluginChange(c.id, PluginChange::State::Refused, why + ".");
+                ++n;
+            }
+    }
+    return n;
 }
 
 void Library::setLibraryEnabled(int64_t lib, bool enabled) {
@@ -2277,8 +2325,11 @@ std::optional<int64_t> Library::libraryOf(const std::string& key) {
 
 bool Library::annotationEditable(const AnnotationRecord& a) {
     if (a.lib == kMyLibrary) return true;
-    if (!libraryEditable(a.lib)) return false;
-    if (a.createdHere || a.authorId == 0) return true;  // made here, or nobody's on record
+    return libraryEditable(a.lib) && ownAnnotation(a);
+}
+
+bool Library::ownAnnotation(const AnnotationRecord& a) {
+    if (a.lib == kMyLibrary || a.createdHere || a.authorId == 0) return true;  // made here, or nobody's on record
     const int64_t me = userId();
     return me != 0 && a.authorId == me;
 }
@@ -2363,20 +2414,84 @@ void Library::setGroupGone(int64_t lib, bool gone) {
     });
 }
 
+void Library::markGroupUnreadable(int64_t lib, int64_t version, const std::string& name) {
+    if (lib <= 0) return;
+    guarded([&] {
+        atomically([&] {
+            Stmt st = db_.prepare(
+                "INSERT INTO libraries (id, name, groupVersion, keyRead, keyWrite) VALUES (?1, ?2, ?3, 0, 0) "
+                "ON CONFLICT(id) DO UPDATE SET groupVersion = ?3, keyRead = 0, keyWrite = 0, gone = 0, "
+                "name = CASE WHEN ?2 != '' THEN ?2 ELSE name END");
+            st.bind(1, lib).bind(2, name).bind(3, version).step();
+            Stmt re = db_.prepare(kRecomputeEditing);
+            re.bind(1, lib).step();
+        });
+    });
+}
+
+bool Library::groupMetaKnown(int64_t lib) {
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT libraryEditing != '' FROM libraries WHERE id = ?");
+        st.bind(1, lib);
+        return st.step() && st.integer(0) != 0;
+    });
+}
+
+std::string Library::groupSyncError(int64_t lib) { return metaValue("groupSyncError:" + std::to_string(lib)); }
+
+void Library::setGroupSyncError(int64_t lib, const std::string& message) {
+    if (groupSyncError(lib) != message) setMetaValue("groupSyncError:" + std::to_string(lib), message);
+}
+
+std::map<std::string, int64_t> Library::clashVersions(int64_t lib) {
+    std::map<std::string, int64_t> out;
+    const json j = json::parse(metaValue("clashes:" + std::to_string(lib)), nullptr, false);
+    if (j.is_object())
+        for (const auto& [k, v] : j.items())
+            if (v.is_number_integer()) out[k] = v.get<int64_t>();
+    return out;
+}
+
+void Library::setClashVersion(int64_t lib, const std::string& key, int64_t version) {
+    json j = json::parse(metaValue("clashes:" + std::to_string(lib)), nullptr, false);
+    if (!j.is_object()) j = json::object();
+    if (j.value(key, int64_t{-1}) == version) return;
+    j[key] = version;
+    setMetaValue("clashes:" + std::to_string(lib), j.dump());
+}
+
 int Library::unsentIn(int64_t lib) {
+    // What a sync would send of the library's: as SyncEngine::pendingChanges counts it, with a
+    // switched-off group's too (Sync first switches it on for that sync). Another member's
+    // annotations, and plugin changes refused at the next sync, never go.
     int n = 0;
-    for (const auto& a : dirtyAnnotations(lib)) n += !a.conflict && !a.localOnly;
-    n += static_cast<int>(pendingDeletions(lib).size() + dirtyPositions(lib).size() +
-                          pendingPluginChanges("", lib).size());
-    // A read-only group's read marks stay on the Kindle anyway (a switched-off group's still count).
-    const bool canEdit = lib == kMyLibrary || guarded([&] { return groupColumn(lib, "canEdit") != 0; });
-    if (canEdit) n += static_cast<int>(readMarks(lib).size());
+    for (const auto& a : dirtyAnnotations(lib)) n += !a.conflict && !a.localOnly && ownAnnotation(a);
+    for (const auto& a : pendingDeletions(lib)) n += ownAnnotation(a);
+    n += static_cast<int>(pendingPluginChanges("", lib).size() + readMarks(lib).size());
     return n;
 }
 
 LibraryRemoval Library::libraryRemovalCheck(int64_t lib) {
     LibraryRemoval r;
-    r.unsent = unsentIn(lib);
+    // Can a sync still send this group's changes? It may edit (canEdit needs the key's read and
+    // write) and is still there; switched off or not (Sync first switches it on).
+    const bool sendable = lib == kMyLibrary || guarded([&] {
+        Stmt st = db_.prepare("SELECT canEdit AND keyRead AND NOT gone FROM libraries WHERE id = ?");
+        st.bind(1, lib);
+        return st.step() && st.integer(0) != 0;
+    });
+    // Reading positions are the user's settings: My Library's pass sends them whatever the group.
+    const int positions = static_cast<int>(dirtyPositions(lib).size());
+    if (sendable) {
+        r.unsent = unsentIn(lib) + positions;
+    } else {
+        // A read-only group's read marks are only ever local (nothing lost); a gone group's were
+        // meant for Zotero. Its pending plugin changes are refused at the next sync.
+        r.unsent = positions;
+        for (const auto& a : dirtyAnnotations(lib)) r.stranded += !a.conflict && !a.localOnly;
+        r.stranded += static_cast<int>(pendingDeletions(lib).size() + pendingPluginChanges("", lib).size());
+        if (guarded([&] { return groupColumn(lib, "gone") != 0; })) r.stranded += static_cast<int>(readMarks(lib).size());
+    }
     guarded([&] {
         Stmt c = db_.prepare("SELECT count(*) FROM annotations WHERE conflict = 1 AND lib = ?");
         c.bind(1, lib);
@@ -2393,7 +2508,7 @@ LibraryRemoval Library::libraryRemovalCheck(int64_t lib) {
 LibraryRemoval Library::removeLibraryData(int64_t lib, bool evenUnsent) {
     LibraryRemoval r = libraryRemovalCheck(lib);
     if (lib == kMyLibrary || lib <= 0) return r;
-    if (!evenUnsent && (r.unsent > 0 || r.conflicts > 0)) return r;
+    if (!evenUnsent && (r.unsent > 0 || r.stranded > 0 || r.conflicts > 0)) return r;
     guarded([&] {
         atomically([&] {
             auto keysOf = [&](const char* table) {
@@ -2453,6 +2568,10 @@ LibraryRemoval Library::removeLibraryData(int64_t lib, bool evenUnsent) {
                 "notesBackfill = 0, attachmentTitlesBackfill = 0 WHERE id = ?");
             reset.bind(1, lib).step();
             for (const auto& k : items) pending_.erase(k);
+            for (const char* prefix : {"groupSyncError:", "clashes:"}) {
+                Stmt m = db_.prepare("DELETE FROM meta WHERE key = ?");
+                m.bind(1, prefix + std::to_string(lib)).step();
+            }
         });
     });
     r.removed = true;
@@ -2720,16 +2839,8 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                         break;
                     }
                 }
-                if (targetLib != kMyLibrary && !libraryEditable(targetLib)) {
-                    // Why, in the plugin author's terms: switched off here, gone, or read-only for this key.
-                    const std::optional<LibraryInfo> info = libraryInfo(targetLib);
-                    const std::string name = info && !info->name.empty() ? " \"" + info->name + "\"" : std::string();
-                    if (info && info->gone) return refuse("the group library" + name + " is no longer available");
-                    if (info && !info->enabled)
-                        return refuse("the group library" + name +
-                                      " is switched off on this Kindle (Settings → Group libraries)");
-                    return refuse("the group library" + name + " is read-only (the API key or the group's settings don't allow edits)");
-                }
+                // Why, in the plugin author's terms: switched off here, gone, unreadable, or read-only.
+                if (std::string why = groupEditRefusal(targetLib); !why.empty()) return refuse(why);
                 // Targets what a pending change creates: sent after it, withdrawn with it.
                 Stmt dep = db_.prepare(
                     "SELECT id FROM plugin_changes WHERE itemKey = ? AND state = 'pending' "

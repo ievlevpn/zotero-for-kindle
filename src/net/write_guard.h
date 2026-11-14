@@ -9,7 +9,8 @@
 // the network.
 // Group libraries: the same rules hold under /groups/<id>/ as under /users/<id>/, for objects of that
 // library only, and only for a group the Kindle may edit (setLibraries); without setLibraries, no
-// group write goes out. Settings are the user's alone: /users/<id>/settings, where a group file's
+// group write goes out. In a group an annotation is written only if it is the user's own (another
+// member's is never edited or deleted from the Kindle). Settings are the user's alone: /users/<id>/settings, where a group file's
 // reading position is lastPageIndex_g<groupID>_<attachmentKey> (as Zotero names it).
 
 #include "net/http.h"
@@ -62,10 +63,14 @@ public:
     // Which library holds a key (0 My Library, a group ID; nullopt: none), and whether a group may be
     // written to (its key access and editing rules). Unset: only My Library's objects, by the
     // callbacks above, and nothing under /groups/.
+    // annotationEditable: under /groups/<id>/, an annotation may be edited, deleted or posted only
+    // when this says so (the user's own: Library::annotationEditable); unset, none may.
     using LibraryOf = std::function<std::optional<int64_t>(const std::string& key)>;
-    void setLibraries(LibraryOf libraryOf, std::function<bool(int64_t groupId)> groupWritable) {
+    void setLibraries(LibraryOf libraryOf, std::function<bool(int64_t groupId)> groupWritable,
+                      std::function<bool(const std::string& key)> annotationEditable = nullptr) {
         libraryOf_ = std::move(libraryOf);
         groupWritable_ = std::move(groupWritable);
+        annotationEditable_ = std::move(annotationEditable);
     }
 
 private:
@@ -75,6 +80,7 @@ private:
     PluginChanges pluginChanges_;
     LibraryOf libraryOf_;
     std::function<bool(int64_t)> groupWritable_;
+    std::function<bool(const std::string&)> annotationEditable_;
 };
 
 }  // namespace zk
