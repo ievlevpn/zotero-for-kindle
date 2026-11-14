@@ -53,6 +53,10 @@ public:
     // if Wi-Fi is up (never turned on for it). A sync does this by itself when it ends.
     virtual void downloadKept() {}
     virtual std::optional<KeptStatus> keptStatus(const std::string& /*collectionKey*/) const { return std::nullopt; }
+    // Removes a group library's copy from the Kindle (Library::removeLibraryData: its files, items,
+    // annotations; the user said yes), on the worker: deleting many files can take a while. Its
+    // kept and pinned collections stop being so. A SyncFinished follows (screens reload).
+    virtual void removeLibrary(int64_t /*lib*/, bool /*evenUnsent*/) {}
 };
 
 }  // namespace zk

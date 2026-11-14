@@ -34,7 +34,10 @@ public:
         return it == kept.end() ? std::nullopt : std::optional(it->second);
     }
 
+    void removeLibrary(int64_t lib, bool evenUnsent) override { removedLibraries.push_back({lib, evenUnsent}); }
+
     int syncs = 0, pushes = 0, whenOnline = 0, removals = 0, interval = -1, keptRuns = 0;
+    std::vector<std::pair<int64_t, bool>> removedLibraries;  // removeLibrary(lib, evenUnsent), in order
     std::map<std::string, KeptStatus> kept;  // what keptStatus() answers
     bool isBusy = false;
     std::vector<std::string> opened;

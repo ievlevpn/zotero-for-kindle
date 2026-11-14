@@ -155,6 +155,9 @@ void SyncService::openBook(const std::string& itemKey, const std::string& attach
 void SyncService::setAllHighlightsOffline(bool on) { enqueue({Command::Kind::SetAllOffline, {}, {}, on}); }
 void SyncService::removeDownloads() { enqueue({Command::Kind::RemoveDownloads, {}, {}, false}); }
 void SyncService::downloadKept() { enqueue({Command::Kind::KeepDownloads, {}, {}, true}); }
+void SyncService::removeLibrary(int64_t lib, bool evenUnsent) {
+    enqueue({Command::Kind::RemoveLibrary, {}, {}, evenUnsent, lib});
+}
 
 std::optional<KeptStatus> SyncService::keptStatus(const std::string& collectionKey) const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -370,6 +373,20 @@ void SyncService::run() {
                     w.engine->setAllHighlightsOffline(cmd.flag);
                     if (cmd.flag) syncNow();
                     break;
+                case Command::Kind::RemoveLibrary: {
+                    // Its kept and pinned collections go with it: nothing of it comes back unasked.
+                    for (const auto& key : w.lib->keptCollections())
+                        if (w.lib->libraryOf(key) == cmd.lib) w.lib->setCollectionKept(key, false);
+                    for (const auto& key : w.lib->pinnedCollections())
+                        if (w.lib->libraryOf(key) == cmd.lib) w.lib->setCollectionPinned(key, false);
+                    const LibraryRemoval r = w.lib->removeLibraryData(cmd.lib, cmd.flag);
+                    log(LogLevel::Info, "sync service: group %lld %s (%d files, %d unsent)", static_cast<long long>(cmd.lib),
+                        r.removed ? "removed from the Kindle" : "not removed", r.downloaded, r.unsent);
+                    SyncEvent done;
+                    done.kind = SyncEvent::Kind::SyncFinished;
+                    emit(std::move(done));
+                    break;
+                }
                 case Command::Kind::RemoveDownloads: {
                     for (const auto& a : w.lib->downloadedAttachments()) {
                         std::error_code ec;

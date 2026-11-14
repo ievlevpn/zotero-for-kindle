@@ -132,6 +132,7 @@ public:
     bool busy() const override { return app_.sync().busy(); }
     void downloadKept() override { app_.sync().downloadKept(); }
     std::optional<KeptStatus> keptStatus(const std::string& k) const override { return app_.sync().keptStatus(k); }
+    void removeLibrary(int64_t lib, bool evenUnsent) override { app_.sync().removeLibrary(lib, evenUnsent); }
 
 private:
     App& app_;

@@ -65,13 +65,15 @@ public:
     bool busy() const override { return busy_; }
     void downloadKept() override;
     std::optional<KeptStatus> keptStatus(const std::string& collectionKey) const override;
+    void removeLibrary(int64_t lib, bool evenUnsent) override;
 
 private:
     struct Command {
         // KeepDownloads: one file of the kept collections, then itself again (flag: a fresh start).
-        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push, KeepDownloads } kind;
+        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push, KeepDownloads, RemoveLibrary } kind;
         std::string itemKey, attachmentKey;
         bool flag = false;
+        int64_t lib = 0;  // RemoveLibrary's (flag: even with unsent changes)
     };
     struct Worker;
 

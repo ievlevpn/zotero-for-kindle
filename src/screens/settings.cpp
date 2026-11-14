@@ -5,6 +5,7 @@
 
 #include "app/catalog_service.h"
 #include "app/settings_store.h"
+#include "screens/group_libraries.h"
 #include "screens/read_tag.h"
 #include "net/errors.h"
 #include "ui/metrics.h"
@@ -54,6 +55,16 @@ Rect SettingsScreen::pluginsRect() const {
 
 std::string SettingsScreen::pluginsLine() const { return pluginsSummary(plugins_ ? plugins_() : nullptr); }
 
+Rect SettingsScreen::groupsRect() const {
+    return {kMargin, rows().webDav - rows().rule, W() - 2 * kMargin, rows().readTag - rows().webDav};
+}
+
+std::string SettingsScreen::accountLine() const {
+    const std::string user = "User ID " + std::to_string(config_.userId);
+    if (!groupsRow_) return user;  // WebDAV has its own row
+    return user + " · " + (config_.webdavUrl.empty() ? "files from Zotero storage" : "WebDAV: " + hostOf(config_.webdavUrl));
+}
+
 Rect SettingsScreen::accountRect() const { return {W() - kMargin - 240, rows().account + 20, 240, 80}; }
 Rect SettingsScreen::readTagRect() const { return {W() - kMargin - 240, rows().readTag + 20, 240, 80}; }
 Rect SettingsScreen::intervalRect(int i) const {
@@ -97,6 +108,10 @@ void SettingsScreen::load(Library& lib) {
     allOffline_ = lib.allAnnotationsOffline();
     readTag_ = lib.readTag();
     keptCount_ = static_cast<int>(lib.keptCollections().size());
+    const auto libs = lib.libraries(true);
+    const GroupAccess access = lib.keyGroupAccess();
+    groupsRow_ = libs.size() > 1 || access == GroupAccess::None;
+    groupsLine_ = groupLibrariesSummary(libs, access);
     downloadedBytes_ = 0;
     for (const auto& a : lib.downloadedAttachments()) {
         std::error_code ec;
@@ -121,12 +136,20 @@ void SettingsScreen::draw(Canvas& canvas) {
     const int w = W() - 2 * kMargin;
 
     drawText(cr, "Zotero account", label, {kMargin, rows().account, w, 50}, 1);
-    drawText(cr, "User ID " + std::to_string(config_.userId), value, {kMargin, rows().account + 54, w - 260, 50}, 1);
+    drawText(cr, accountLine(), value, {kMargin, rows().account + 54, w - 260, 50}, 1);
     drawButton(cr, accountRect(), "Change…", false);
     hRule(cr, rows().webDav - rows().rule, kMargin, W() - kMargin);
 
-    drawText(cr, "WebDAV", label, {kMargin, rows().webDav, w, 50}, 1);
-    drawText(cr, config_.webdavUrl.empty() ? "Not used: files come from Zotero storage" : hostOf(config_.webdavUrl), value, {kMargin, rows().webDav + 54, w, 50}, 1);
+    if (groupsRow_) {  // in WebDAV's place (the account row names it): the whole row opens the list
+        drawText(cr, "Group libraries", label, {kMargin, rows().webDav, w - 50, 50}, 1);
+        drawText(cr, groupsLine_, value, {kMargin, rows().webDav + 54, w - 50, 50}, 1);
+        const Rect band = groupsRect();
+        centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {band.x + band.w - 30, band.y, 30, band.h}, Align::Right);
+    } else {
+        drawText(cr, "WebDAV", label, {kMargin, rows().webDav, w, 50}, 1);
+        drawText(cr, config_.webdavUrl.empty() ? "Not used: files come from Zotero storage" : hostOf(config_.webdavUrl), value,
+                 {kMargin, rows().webDav + 54, w, 50}, 1);
+    }
     hRule(cr, rows().readTag - rows().rule, kMargin, W() - kMargin);
 
     drawText(cr, "Read tag", label, {kMargin, rows().readTag, w - 260, 50}, 1);
@@ -227,6 +250,10 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
         nav.push(std::make_unique<ReadTagScreen>());
         return;
     }
+    if (groupsRow_ && groupsRect().contains(g.pos)) {
+        nav.push(std::make_unique<GroupLibrariesScreen>());
+        return;
+    }
     if (pluginsRect().contains(g.pos)) {
         if (plugins_ && plugins_()) nav.push(std::make_unique<PluginsScreen>(plugins_, pluginsOff_));
         return;
@@ -276,8 +303,12 @@ void SettingsScreen::onGesture(const Gesture& g, Nav& nav) {
 
 void SettingsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     if (e.kind != SyncEvent::Kind::SyncFinished && e.kind != SyncEvent::Kind::DownloadFinished) return;
+    const bool groups = groupsRow_;
+    const std::string line = groupsLine_;
     load(nav.library());
     nav.damage({0, rows().storage, W(), 200}, Waveform::Quality);
+    if (groups != groupsRow_) nav.damage({0, rows().account, W(), rows().readTag - rows().account}, Waveform::Quality);
+    else if (line != groupsLine_) nav.damage(groupsRect(), Waveform::Ui);
 }
 
 }  // namespace zk
