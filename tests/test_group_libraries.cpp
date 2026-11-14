@@ -395,3 +395,18 @@ TEST_CASE("groups: a schema 11 database gains libraries; its rows are My Library
     }
     fs::remove(path);
 }
+
+TEST_CASE("groups: an edit keeps the annotation's library and author") {
+    Rig rig;
+    AnnotationRecord theirs = note("ANNTHEM1", "PDFLAB01", kLab, "theirs");
+    theirs.authorId = 99;
+    theirs.authorName = "Ada";
+    rig.lib.upsertAnnotation(theirs);
+    AnnotationRecord edit = note("ANNTHEM1", "PDFLAB01", kMyLibrary, "changed");  // as a screen might build it
+    rig.lib.editAnnotation(edit);
+    auto now = rig.lib.annotation("ANNTHEM1");
+    CHECK(now->text == "changed");
+    CHECK(now->lib == kLab);
+    CHECK(now->authorId == 99);
+    CHECK(now->authorName == "Ada");
+}

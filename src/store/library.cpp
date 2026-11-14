@@ -2107,6 +2107,9 @@ void Library::editAnnotation(const AnnotationRecord& edited) {
     a.conflict = old->conflict;
     a.conflictOf = old->conflictOf;
     a.localOnly = old->localOnly;
+    a.lib = old->lib;  // who made it, and where, are not the edit's to change
+    a.authorId = old->authorId;
+    a.authorName = old->authorName;
     a.deletedHere = false;
     a.dirty = !old->conflict;  // a conflict copy is only sent once re-applied
     a.dateModified = nowUtc();
