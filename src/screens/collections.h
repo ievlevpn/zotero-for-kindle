@@ -2,6 +2,9 @@
 // Collections tab: the pinned collections, then the top-level ones by name; a collection shows its
 // subcollections first, then its items by title, one page at a time. The page pill ("2 / 5 ›")
 // opens the jump sheet: the initials of the names (and of the items' titles), as the Library's.
+// With group libraries, a "Group libraries" heading follows My Library's collections, then a line
+// per group shown (switched on, still there): tapping one opens its own list, its top-level
+// collections, then all its items.
 
 #include <functional>
 #include <map>
@@ -48,6 +51,10 @@ public:
 
     const std::vector<CollectionEntry>& entries() const { return entries_; }  // this page
     std::vector<Rect> entryRects() const;
+    // The group libraries (all of them, by name), and those on this page with their lines.
+    const std::vector<LibraryInfo>& groups() const { return groups_; }
+    std::vector<std::pair<LibraryInfo, Rect>> groupRows() const;
+    std::optional<Rect> groupHeadingRect() const;  // "Group libraries", when on this page
     static Rect searchRect();  // the header's search icon
     std::optional<std::string> pinSheetLabel() const { return sheet_ ? std::optional(sheet_->label()) : std::nullopt; }
     std::optional<std::string> keepSheetLabel() const { return sheet_ ? std::optional(sheet_->keepLabel()) : std::nullopt; }
@@ -71,6 +78,9 @@ private:
     std::function<void(const ItemRow&)> openItem_;
     StatusFn status_;
     std::vector<CollectionEntry> all_, entries_;
+    std::vector<LibraryInfo> groups_;  // lines after all_: the heading, then one per group
+    int64_t lines() const { return static_cast<int64_t>(all_.size() + (groups_.empty() ? 0 : 1 + groups_.size())); }
+    Rect lineRect(int64_t line) const;  // a line of this page (an index over all of them)
     Pager pager_{0, 1};
 };
 
@@ -83,6 +93,9 @@ public:
     };
 
     CollectionScreen(CollectionEntry, std::function<void(const ItemRow&)> openItem, StatusFn status = {});
+    // A group library's own list: its top-level collections, then all its items.
+    CollectionScreen(const LibraryInfo& group, std::function<void(const ItemRow&)> openItem, StatusFn status = {});
+    int64_t group() const { return group_; }  // 0: a collection's list
     void draw(Canvas&) override;
     void onGesture(const Gesture&, Nav&) override;
     void onSyncEvent(const SyncEvent&, Nav&) override;
@@ -114,6 +127,7 @@ private:
     std::map<std::string, KeptStatus> kept_;
 
     CollectionEntry entry_;
+    int64_t group_ = 0;  // a group library's list (entry_ only carries its name)
     std::function<void(const ItemRow&)> openItem_;
     StatusFn status_;
     std::vector<CollectionEntry> subs_;

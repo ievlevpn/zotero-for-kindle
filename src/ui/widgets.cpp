@@ -307,11 +307,17 @@ std::string noteRowLabel(const AnnotationRecord& a) {
     return a.pageLabel.empty() ? std::string(kind) : std::string(kind) + " · p. " + a.pageLabel;
 }
 
-void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons) {
+std::string noteRowQuietLine(const AnnotationRecord& a, const std::string& author) {
+    const std::string tags = noteRowTags(a);
+    if (author.empty()) return tags;
+    return "by " + author + (tags.empty() ? "" : " · " + tags);
+}
+
+void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictButtons, const std::string& author) {
     fillRect(cr, r, 255);
     fillRect(cr, {r.x, r.y + 20, 8, r.h - 40}, a.type == "note" ? kTertiary : kSecondary);
     const std::string mark = noteSyncMark(a);
-    const std::string tags = noteRowTags(a);
+    const std::string tags = noteRowQuietLine(a, author);
     constexpr int kTagsH = 44;
     const int tx = r.x + 34, tw = r.w - 34 - 120;
     // Room for the mark (and a conflict's buttons), and the tags' line under the comment.
@@ -334,7 +340,7 @@ void drawNoteRow(cairo_t* cr, Rect r, const AnnotationRecord& a, bool conflictBu
     if (!a.comment.empty() && bottom - y >= 36)
         y += drawText(cr, a.comment, {kSans, 7, 400, false, kSecondary}, {tx, y, tw, bottom - y}, mark.empty() && tags.empty() ? 2 : 1)
                  .height + 6;
-    if (!tags.empty())  // a quiet line: "#method · #to-cite"
+    if (!tags.empty())  // a quiet line: "by Anna · #method · #to-cite"
         drawText(cr, tags, {kSans, 6.5, 400, false, kTertiary}, {tx, std::min(y, bottom), tw, kTagsH}, 1);
     if (!a.pageLabel.empty())
         drawText(cr, "p. " + a.pageLabel, {kSans, 6.5, 400, false, kTertiary}, {r.x + r.w - 110, r.y + 20, 110, 40}, 1,
@@ -453,6 +459,35 @@ void drawCollectionRow(cairo_t* cr, Rect r, const std::string& name, int64_t ite
     centredText(cr, thousandsOf(items), {kSans, 7.5, 400, false, kTertiary}, {r.x + r.w - countW - 40, r.y, countW, r.h},
                 Align::Right);
     if (hasChildren) centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {r.x + r.w - 30, r.y, 30, r.h}, Align::Right);
+    hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
+}
+
+void drawGroupRow(cairo_t* cr, Rect r, const std::string& name, int64_t items) {
+    fillRect(cr, r, 255);
+    // Two people, the folder glyph's size and pen: a head and shoulders in front, another behind.
+    gray(cr, kSecondary);
+    cairo_save(cr);
+    cairo_set_line_width(cr, 4);
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+    const double fx = r.x + 6, fy = r.y + r.h / 2.0 - 26;
+    cairo_new_path(cr);
+    cairo_arc(cr, fx + 20, fy + 17, 8, 0, 2 * 3.14159265);  // behind: head
+    cairo_stroke(cr);
+    cairo_arc(cr, fx + 20, fy + 44, 15, 3.14159265, 1.5 * 3.14159265 + 0.35);  // its shoulder, cut by the other's
+    cairo_stroke(cr);
+    cairo_new_path(cr);
+    cairo_arc(cr, fx + 40, fy + 22, 10, 0, 2 * 3.14159265);  // in front: head
+    cairo_stroke(cr);
+    cairo_move_to(cr, fx + 20, fy + 52);
+    cairo_arc(cr, fx + 40, fy + 52, 20, 3.14159265, 2 * 3.14159265);  // shoulders
+    cairo_close_path(cr);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+    const Rect nameBox = collectionRowNameRect(r, false, false);
+    centredText(cr, name.empty() ? "Untitled" : name, {kSans, 9.5, 500}, {nameBox.x, r.y, nameBox.w, r.h}, Align::Left);
+    centredText(cr, thousandsOf(items), {kSans, 7.5, 400, false, kTertiary}, {r.x + r.w - kRowCountW - 40, r.y, kRowCountW, r.h},
+                Align::Right);
+    centredText(cr, "›", {kSans, 12, 400, false, kSecondary}, {r.x + r.w - 30, r.y, 30, r.h}, Align::Right);
     hRule(cr, r.y + r.h - 2, r.x, r.x + r.w);
 }
 
