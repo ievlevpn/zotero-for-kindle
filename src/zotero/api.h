@@ -1,5 +1,6 @@
 #pragma once
-// Zotero Web API v3 for one personal library. Every call returns nullopt on failure and fills
+// Zotero Web API v3 for the user's library and the groups the key reaches: library calls go to
+// /users/<id> or, after setLibrary(groupId), to /groups/<groupId>; settings always to the user's. Every call returns nullopt on failure and fills
 // `err` (when given) with a plain-language UserError. Rate limiting (429/503 + Retry-After) is
 // waited out up to three times; a Backoff header delays the next request.
 
@@ -19,8 +20,25 @@ namespace zk {
 
 struct KeyInfo {
     int64_t userId = 0;
+    std::string username, displayName;
     bool canRead = false, canWrite = false;
     bool canReadFiles = false;  // Zotero storage downloads
+    // access.groups: "all" (every group the user is in), and/or per group ID; each {library, write}.
+    struct Access {
+        bool read = false, write = false;
+    };
+    std::optional<Access> allGroups;
+    std::map<int64_t, Access> groups;
+    Access groupAccess(int64_t groupId) const;  // the group's own entry, else "all", else none
+    bool anyGroupAccess() const;
+};
+
+// GET /groups/<id>: what the sync needs of a group (its data object). libraryEditing and
+// fileEditing as Zotero names them: "members", "admins" ("none" for files).
+struct GroupInfo {
+    int64_t id = 0, version = 0, owner = 0;
+    std::string name, libraryEditing, fileEditing;
+    std::vector<int64_t> admins;
 };
 
 struct VersionMap {
@@ -55,7 +73,14 @@ public:
     void setSleeper(std::function<void(int seconds)>);
     void setOnWait(std::function<void(const UserError&)>);  // "Zotero is busy — retrying at …"
 
+    // The library the calls below go to: 0 the user's own, else a group ID.
+    void setLibrary(int64_t groupId) { library_ = groupId; }
+    int64_t library() const { return library_; }
+
     std::optional<KeyInfo> keyInfo(UserError*);
+    // GET /users/<id>/groups?format=versions: the groups the key reaches, ID -> metadata version.
+    std::optional<std::map<int64_t, int64_t>> groupVersions(UserError*);
+    std::optional<GroupInfo> group(int64_t groupId, UserError*);
     // kind: "items" or "collections". Includes trashed items (their data has "deleted": 1).
     // itemType narrows an items listing, e.g. "annotation" or "-annotation".
     std::optional<VersionMap> versions(const std::string& kind, int64_t since, UserError*,
@@ -85,6 +110,7 @@ public:
 private:
     HttpResponse send(HttpRequest req, UserError* err);
     std::string userUrl(const std::string& path) const;
+    std::string libraryUrl(const std::string& path) const;  // /users/<id> or /groups/<id>
 
     Http& http_;
     int64_t userId_;
@@ -92,6 +118,7 @@ private:
     std::function<void(int)> sleeper_;
     std::function<void(const UserError&)> onWait_;
     int backoffS_ = 0;
+    int64_t library_ = 0;
 };
 
 }  // namespace zk

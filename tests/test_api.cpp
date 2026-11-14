@@ -166,3 +166,63 @@ TEST_CASE("api: a 403 on a write is ApiKeyNoWrite") {
     CHECK_FALSE(rig.api.createItems(json::array({{{"itemType", "annotation"}}}), 29, &err));
     CHECK(err.kind == ErrorKind::ApiKeyNoWrite);
 }
+
+TEST_CASE("api: keyInfo reads the key's access to groups, all or one by one") {
+    Rig rig;
+    rig.http.expect("GET", kBase + "/keys/current",
+                    FakeHttp::ok(R"({"userID":1,"username":"pavel","displayName":"Pavel","access":{
+                        "user":{"library":true,"write":true},
+                        "groups":{"all":{"library":true,"write":false},"4242":{"library":true,"write":true}}}})"));
+    auto info = rig.api.keyInfo(nullptr);
+    REQUIRE(info);
+    CHECK(info->username == "pavel");
+    CHECK(info->displayName == "Pavel");
+    REQUIRE(info->allGroups);
+    CHECK(info->groupAccess(4242).write);
+    CHECK(info->groupAccess(77).read);
+    CHECK_FALSE(info->groupAccess(77).write);
+    CHECK(info->anyGroupAccess());
+}
+
+TEST_CASE("api: a key without group access reaches none") {
+    Rig rig;
+    rig.http.expect("GET", kBase + "/keys/current", FakeHttp::ok(R"({"userID":1,"access":{"user":{"library":true}}})"));
+    auto info = rig.api.keyInfo(nullptr);
+    REQUIRE(info);
+    CHECK_FALSE(info->anyGroupAccess());
+    CHECK_FALSE(info->groupAccess(4242).read);
+}
+
+TEST_CASE("api: groups are listed with their metadata versions, then read one by one") {
+    Rig rig;
+    rig.http.expect("GET", kBase + "/users/1/groups?format=versions", FakeHttp::ok(R"({"4242":17,"77":"3"})"));
+    rig.http.expect("GET", kBase + "/groups/4242",
+                    FakeHttp::ok(R"({"id":4242,"version":17,"meta":{"numItems":3},"data":{"id":4242,"version":17,
+                        "name":"Lab","owner":9,"type":"Private","libraryEditing":"members","libraryReading":"all",
+                        "fileEditing":"admins","admins":[1,5],"members":[2]}})"));
+    auto groups = rig.api.groupVersions(nullptr);
+    REQUIRE(groups);
+    CHECK(*groups == std::map<int64_t, int64_t>{{77, 3}, {4242, 17}});
+    auto g = rig.api.group(4242, nullptr);
+    REQUIRE(g);
+    CHECK(g->name == "Lab");
+    CHECK(g->version == 17);
+    CHECK(g->owner == 9);
+    CHECK(g->libraryEditing == "members");
+    CHECK(g->fileEditing == "admins");
+    CHECK(g->admins == std::vector<int64_t>{1, 5});
+}
+
+TEST_CASE("api: with a group's library set, library calls go to /groups/<id>; settings stay the user's") {
+    Rig rig;
+    rig.api.setLibrary(4242);
+    rig.http.expect("GET", kBase + "/groups/4242/items?since=5&format=versions&includeTrashed=1", FakeHttp::ok("{}"));
+    rig.http.expect("GET", kBase + "/groups/4242/deleted?since=5", FakeHttp::ok("{}"));
+    rig.http.expect("GET", kBase + "/users/1/settings?since=5", FakeHttp::ok("{}"));
+    CHECK(rig.api.versions("items", 5, nullptr));
+    CHECK(rig.api.deleted(5, nullptr));
+    CHECK(rig.api.settings(5, nullptr));
+    rig.api.setLibrary(0);
+    rig.http.expect("GET", kBase + "/users/1/deleted?since=5", FakeHttp::ok("{}"));
+    CHECK(rig.api.deleted(5, nullptr));
+}

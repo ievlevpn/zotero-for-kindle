@@ -146,3 +146,17 @@ TEST_CASE("parse: missing or mistyped fields never throw") {
     CHECK(a.key == "ANNX2345");
     CHECK(a.position.empty());
 }
+
+TEST_CASE("parse: a group annotation names its author (meta.createdByUser)") {
+    auto a = zk::parseAnnotation(nlohmann::json::parse(R"({"key":"ANNO0001","version":3,
+        "meta":{"createdByUser":{"id":99,"username":"ada","name":"Ada Lovelace","links":{}}},
+        "data":{"itemType":"annotation","parentItem":"PDF00001","annotationType":"highlight"}})"));
+    CHECK(a.authorId == 99);
+    CHECK(a.authorName == "Ada Lovelace");
+    auto b = zk::parseAnnotation(nlohmann::json::parse(R"({"key":"ANNO0002","version":3,
+        "meta":{"createdByUser":{"id":98,"username":"bob","name":""}},"data":{"itemType":"annotation"}})"));
+    CHECK(b.authorName == "bob");
+    auto c = zk::parseAnnotation(nlohmann::json::parse(R"({"key":"ANNO0003","data":{"itemType":"annotation"}})"));
+    CHECK(c.authorId == 0);
+    CHECK(c.authorName.empty());
+}

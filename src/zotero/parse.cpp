@@ -139,6 +139,15 @@ AnnotationRecord parseAnnotation(const json& obj) {
     a.tags = tagsOf(d);
     a.json = d.dump();
     a.dateModified = str(d, "dateModified");
+    // In a group: who made it (meta.createdByUser {id, username, name}; name may be empty).
+    if (obj.is_object() && obj.contains("meta") && obj["meta"].is_object()) {
+        const json& meta = obj["meta"];
+        if (auto it = meta.find("createdByUser"); it != meta.end() && it->is_object()) {
+            a.authorId = num(*it, "id");
+            a.authorName = str(*it, "name");
+            if (a.authorName.empty()) a.authorName = str(*it, "username");
+        }
+    }
     return a;
 }
 
