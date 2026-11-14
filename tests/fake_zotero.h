@@ -32,6 +32,7 @@ public:
     std::map<std::string, int64_t> deletedSettings;  // key -> version of deletion
     std::set<std::string> answerUnchanged;   // POST: written, but answered as "unchanged"
     bool omitSuccessful = false;             // POST: "success" without the "successful" copies
+    std::string libraryPath = "users/1/";    // a group's: "groups/<id>/" (FakeZoteroHub)
 
     // A setting changed elsewhere (the desktop's reader): bumps the library version.
     void putSetting(const std::string& key, json value) {
@@ -92,7 +93,7 @@ public:
             r.curlError = "Operation timed out";
             return r;
         }
-        const std::string prefix = "https://api.zotero.org/users/1/";
+        const std::string prefix = "https://api.zotero.org/" + libraryPath;
         if (req.url.rfind(prefix, 0) != 0) return status(r, 404);
         std::string rest = req.url.substr(prefix.size());
         std::string path = rest.substr(0, rest.find('?'));

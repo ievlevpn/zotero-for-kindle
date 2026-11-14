@@ -44,6 +44,29 @@ bool deletedIn(const json& data) {
 }
 
 constexpr const char* kDeletedInZotero = "It was deleted in Zotero.";
+
+// Zotero's name of a file's reading position (in the user's own settings): lastPageIndex_u_<key>
+// in My Library, lastPageIndex_g<groupID>_<key> in a group (zotero/zotero, Zotero.Item._getSettingKey).
+std::string positionSetting(int64_t group, const std::string& key) {
+    return group == 0 ? "lastPageIndex_u_" + key : "lastPageIndex_g" + std::to_string(group) + "_" + key;
+}
+
+bool parsePositionSetting(const std::string& name, int64_t& group, std::string& key) {
+    static const std::string user = "lastPageIndex_u_", groupPrefix = "lastPageIndex_g";
+    if (name.rfind(user, 0) == 0) {
+        group = 0;
+        key = name.substr(user.size());
+        return !key.empty();
+    }
+    if (name.rfind(groupPrefix, 0) != 0) return false;
+    const size_t sep = name.find('_', groupPrefix.size());
+    if (sep == std::string::npos || sep == groupPrefix.size()) return false;
+    const std::string id = name.substr(groupPrefix.size(), sep - groupPrefix.size());
+    if (id.find_first_not_of("0123456789") != std::string::npos || id.size() > 18) return false;
+    group = std::stoll(id);
+    key = name.substr(sep + 1);
+    return group > 0 && !key.empty();
+}
 constexpr const char* kNotAllowed = "The app doesn't allow this change.";
 
 }  // namespace
@@ -85,7 +108,31 @@ WriteGuard::PluginChanges pluginChangeShapes(Library& lib) {
     };
 }
 
-SyncEngine::SyncEngine(ZoteroApi& api, Library& lib) : api_(api), lib_(lib) {}
+SyncEngine::SyncEngine(ZoteroApi& api, Library& lib, int64_t library) : api_(api), lib_(lib), libId_(library) {}
+
+void SyncEngine::scope() { api_.setLibrary(libId_); }
+
+bool SyncEngine::foreign(const std::string& key) {
+    auto in = lib_.libraryOf(key);
+    if (!in || *in == libId_) return false;
+    log(LogLevel::Warn, "sync: %s is already in library %lld; skipped in library %lld", key.c_str(),
+        static_cast<long long>(*in), static_cast<long long>(libId_));
+    return true;
+}
+
+namespace {
+// The progress callback, telling which library it is about.
+std::function<void(const SyncProgress&)> labelled(const std::function<void(const SyncProgress&)>& progress, int64_t lib,
+                                                  const std::string& name) {
+    if (!progress) return [](const SyncProgress&) {};
+    return [progress, lib, name](const SyncProgress& p) {
+        SyncProgress q = p;
+        q.lib = lib;
+        q.library = name;
+        progress(q);
+    };
+}
+}  // namespace
 
 SyncReport SyncEngine::pull(std::function<void(const SyncProgress&)> progress) {
     SyncReport rep;
@@ -94,7 +141,8 @@ SyncReport SyncEngine::pull(std::function<void(const SyncProgress&)> progress) {
     annotationEvents_ = true;
     collecting_ = false;
     try {
-        pullInto(rep, progress ? progress : [](const SyncProgress&) {});
+        scope();
+        pullInto(rep, labelled(progress, libId_, libId_ == kMyLibrary ? "" : lib_.libraryName(libId_)));
         // Even a pull that stopped on an error leaves its stored batches behind, and they are not
         // listed again: their changes are told now.
         if (collecting_ && !pulled_.empty()) rep.pluginEvents = plugins::pulledEvents(lib_, pulled_);
@@ -108,7 +156,7 @@ SyncReport SyncEngine::pull(std::function<void(const SyncProgress&)> progress) {
 }
 
 void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncProgress&)>& progress) {
-    const int64_t from = lib_.libraryVersion();
+    const int64_t from = lib_.libraryVersion(libId_);
     rep.fromVersion = from;
     rep.initial = from == 0;
     // The first full sync tells plugins nothing item by item; with no plugin on, nothing at all.
@@ -129,7 +177,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         int64_t since;
     };
     std::vector<Phase> phases = {{"collections", "collections", "", from}, {"items", "items", "-annotation", from}};
-    if (allOffline) phases.push_back({"annotations", "items", "annotation", lib_.annotationsVersion()});
+    if (allOffline) phases.push_back({"annotations", "items", "annotation", lib_.annotationsVersion(libId_)});
     else if (from > 0) phases.push_back({"annotations", "items", "annotation", from});
     for (const Phase& phase : phases) {
         const std::string kind = phase.kind;
@@ -141,7 +189,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
             if (lib_.objectVersion(key) < version) changed.push_back(key);
         // Annotations that are only being caught up on (the "Keep all highlights offline" setting was
         // just switched on, or its full download is behind) are not news: no events for them.
-        annotationEvents_ = !(std::string(phase.name) == "annotations" && allOffline && lib_.annotationsVersion() < from);
+        annotationEvents_ = !(std::string(phase.name) == "annotations" && allOffline && lib_.annotationsVersion(libId_) < from);
         std::function<bool(const json&)> accept;
         if (std::string(phase.name) == "annotations" && !allOffline)
             accept = [&](const json& obj) {
@@ -154,7 +202,7 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
         if (!done) return;
     }
 
-    if (lib_.metaValue("notesBackfill") == "1") {
+    if (lib_.backfillPending(libId_, "notes")) {
         // A database from before notes were kept: its notes' versions are recorded but their
         // content never was. List every note once; the flag clears only when all are in.
         auto listing = api_.versions("items", 0, &err, "note");
@@ -165,14 +213,14 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
             if (!have || have->version < version) missing.push_back(key);
         }
         if (!fetchAndApply("items", "notes", missing, rep, progress)) return;
-        lib_.setMetaValue("notesBackfill", "0");
+        lib_.clearBackfill(libId_, "notes");
     }
 
-    if (lib_.metaValue("attachmentTitlesBackfill") == "1") {
+    if (lib_.backfillPending(libId_, "attachmentTitles")) {
         // A database from before attachment titles were kept: the files of items with more than
         // one are fetched once more, for the titles "Open which file?" names them by.
-        if (!fetchAndApply("items", "attachments", lib_.filesOfManyFileItems(), rep, progress)) return;
-        lib_.setMetaValue("attachmentTitlesBackfill", "0");
+        if (!fetchAndApply("items", "attachments", lib_.filesOfManyFileItems(libId_), rep, progress)) return;
+        lib_.clearBackfill(libId_, "attachmentTitles");
     }
 
     if (!refetch_.empty()) {  // Zotero's copies of annotations whose Kindle edits became conflicts
@@ -186,20 +234,25 @@ void SyncEngine::pullInto(SyncReport& rep, const std::function<void(const SyncPr
     progress({"deletions", 0, static_cast<int>(gone->items.size() + gone->collections.size())});
     {
         auto tx = lib_.begin();
-        for (const auto& key : gone->items) removeKey(key, rep);
-        for (const auto& key : gone->collections) lib_.removeObject("collection", key);
+        // Only this library's objects: a key another library holds is that library's to delete.
+        for (const auto& key : gone->items)
+            if (!foreign(key)) removeKey(key, rep);
+        for (const auto& key : gone->collections)
+            if (!foreign(key)) lib_.removeObject("collection", key);
         for (const auto& key : gone->settings)
-            if (key == "feeds") lib_.setMetaValue(kFeedsMeta, "{}");
+            if (key == "feeds" && libId_ == kMyLibrary) lib_.setMetaValue(kFeedsMeta, "{}");
         tx.commit();
     }
     progress({"deletions", static_cast<int>(gone->items.size() + gone->collections.size()),
               static_cast<int>(gone->items.size() + gone->collections.size())});
-    lib_.setLibraryVersion(rep.toVersion);
-    if (allOffline) lib_.setAnnotationsVersion(rep.toVersion);
-    pullPositions(rep);
+    lib_.setLibraryVersion(libId_, rep.toVersion);
+    if (allOffline) lib_.setAnnotationsVersion(libId_, rep.toVersion);
+    if (libId_ == kMyLibrary) pullPositions(rep);  // the user's settings, group files' positions too
 }
 
-// Reading positions: the settings lastPageIndex_u_<attachmentKey> changed since the last pull.
+// Reading positions: the settings lastPageIndex_u_<attachmentKey> changed since the last pull, and
+// lastPageIndex_g<groupID>_<attachmentKey> for group files (Zotero keeps those in the user's own
+// settings too; a file another library holds under that key is left alone).
 // Also Zotero's feed subscriptions (setting "feeds"), kept for plugins and never written back. A
 // library synced before they were kept lists every setting once (since=0) to pick them up; that
 // re-applies no position, as each is applied only when its version is newer.
@@ -211,12 +264,14 @@ void SyncEngine::pullPositions(SyncReport& rep) {
         log(LogLevel::Warn, "sync: reading positions not fetched: %s", err.details.c_str());
         return;
     }
-    static const std::string prefix = "lastPageIndex_u_";
     auto tx = lib_.begin();
     for (const auto& [key, setting] : listing->settings) {
-        if (key.rfind(prefix, 0) != 0) continue;
+        int64_t group = 0;
+        std::string file;
+        if (!parsePositionSetting(key, group, file)) continue;
+        if (auto in = lib_.libraryOf(file); in && *in != group) continue;
         const auto& [value, version] = setting;
-        if (value.is_number() || value.is_string()) lib_.applyRemotePosition(key.substr(prefix.size()), value.dump(), version);
+        if (value.is_number() || value.is_string()) lib_.applyRemotePosition(file, value.dump(), version);
     }
     auto feeds = listing->settings.find("feeds");
     if (feeds != listing->settings.end() && feeds->second.first.is_object()) lib_.setMetaValue(kFeedsMeta, feeds->second.first.dump());
@@ -237,8 +292,9 @@ bool SyncEngine::pushPositions(SyncReport& rep, bool& preconditionFailed) {
         {
             auto tx = lib_.begin();
             for (size_t j = i; j < end; ++j) {
-                body["lastPageIndex_u_" + dirty[j].attachmentKey] = {{"value", json::parse(dirty[j].local)},
-                                                                     {"version", dirty[j].remoteVersion}};
+                const int64_t group = lib_.libraryOf(dirty[j].attachmentKey).value_or(kMyLibrary);
+                body[positionSetting(group, dirty[j].attachmentKey)] = {{"value", json::parse(dirty[j].local)},
+                                                                        {"version", dirty[j].remoteVersion}};
                 lib_.markPositionSending(dirty[j].attachmentKey, dirty[j].local);  // its echo isn't news
             }
             tx.commit();
@@ -276,8 +332,11 @@ bool SyncEngine::fetchAndApply(const std::string& kind, const std::string& phase
         for (const auto& obj : *objects) {
             if (accept && !accept(obj)) continue;
             if (kind == "collections") {
-                if (trashed(obj)) lib_.removeObject("collection", parseCollection(obj).key);
-                else lib_.upsertCollection(parseCollection(obj));
+                CollectionRecord c = parseCollection(obj);
+                if (foreign(c.key)) continue;
+                c.lib = libId_;
+                if (trashed(obj)) lib_.removeObject("collection", c.key);
+                else lib_.upsertCollection(c);
                 lib_.setObjectVersion(obj.value("key", ""), versionOf(obj));
             } else {
                 apply(obj, rep);
@@ -292,8 +351,18 @@ bool SyncEngine::fetchAndApply(const std::string& kind, const std::string& phase
 SyncReport SyncEngine::pullAnnotationsFor(const std::string& attachmentKey,
                                           std::function<void(const SyncProgress&)> progress) {
     SyncReport rep;
-    rep.fromVersion = rep.toVersion = lib_.libraryVersion();
+    // From the file's own library, whichever library this engine syncs.
+    const int64_t own = libId_;
+    libId_ = lib_.libraryOf(attachmentKey).value_or(own);
+    struct Restore {
+        int64_t& id;
+        int64_t was;
+        ~Restore() { id = was; }
+    } restore{libId_, own};
+    rep.fromVersion = rep.toVersion = lib_.libraryVersion(libId_);
+    progress = labelled(progress, libId_, libId_ == kMyLibrary ? "" : lib_.libraryName(libId_));
     try {
+        scope();
         UserError err;
         auto listing = api_.annotationVersions(attachmentKey, 0, &err);
         if (!listing) {
@@ -325,7 +394,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
     const ObjectKind kind = kindOf(obj);
     const std::string key = obj.value("key", "");
     const int64_t version = versionOf(obj);
-    if (key.empty()) return;
+    if (key.empty() || foreign(key)) return;
     if (trashed(obj)) {
         removeKey(key, rep);
         lib_.setObjectVersion(key, version);
@@ -335,7 +404,9 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
         case ObjectKind::Item: {
             const bool known = lib_.objectVersion(key) > 0;
             const bool wasRead = collecting_ && known && lib_.isRead(key);
-            lib_.upsertItem(parseItem(obj));
+            ItemRecord item = parseItem(obj);
+            item.lib = libId_;
+            lib_.upsertItem(item);
             ++(known ? rep.itemsUpdated : rep.itemsAdded);
             if (collecting_ && known) {
                 const bool nowRead = lib_.isRead(key);
@@ -345,6 +416,7 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
         }
         case ObjectKind::Attachment: {
             AttachmentRecord incoming = parseAttachment(obj);
+            incoming.lib = libId_;
             if (auto old = lib_.attachment(key)) {
                 if (old->md5 == incoming.md5) {
                     incoming.localPath = old->localPath;
@@ -358,13 +430,16 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
             if (incoming.parentKey.empty()) {
                 // A file without a parent item is a top-level entry in Zotero: list and index it.
                 const bool known = lib_.objectVersion(key) > 0;
-                lib_.upsertItem(parseItem(obj));
+                ItemRecord entry = parseItem(obj);
+                entry.lib = libId_;
+                lib_.upsertItem(entry);
                 ++(known ? rep.itemsUpdated : rep.itemsAdded);
             }
             break;
         }
         case ObjectKind::Annotation: {
             AnnotationRecord incoming = parseAnnotation(obj);
+            incoming.lib = libId_;
             // On a web snapshot: not kept (Zotero places these with CSS selectors, which the Kindle
             // doesn't read); its version is, so it isn't fetched again.
             if (auto att = lib_.attachment(incoming.parentKey); att && isWebSnapshot(att->contentType)) break;
@@ -428,9 +503,12 @@ void SyncEngine::apply(const json& obj, SyncReport& rep) {
             }
             break;
         }
-        case ObjectKind::Note:
-            lib_.upsertNote(parseNote(obj));
+        case ObjectKind::Note: {
+            NoteRecord n = parseNote(obj);
+            n.lib = libId_;
+            lib_.upsertNote(n);
             break;
+        }
         case ObjectKind::Other:
             break;
     }
@@ -515,8 +593,19 @@ void SyncEngine::removeKey(const std::string& key, SyncReport& rep) {
 
 SyncReport SyncEngine::push() {
     SyncReport rep;
-    rep.fromVersion = lib_.libraryVersion();
+    rep.fromVersion = lib_.libraryVersion(libId_);
     try {
+        scope();
+        if (libId_ != kMyLibrary && !lib_.libraryEditable(libId_)) {
+            // A read-only group: nothing goes out. Read marks stay on the Kindle; plugin changes
+            // (queued while it was editable) can't be made.
+            for (const auto& c : lib_.pendingPluginChanges("", libId_))
+                if (auto now = lib_.pluginChange(c.id); now && now->state == PluginChange::State::Pending)
+                    lib_.markPluginChange(c.id, PluginChange::State::Refused,
+                                          "The group library \"" + lib_.libraryName(libId_) + "\" is read-only.");
+            rep.toVersion = rep.fromVersion;
+            return rep;
+        }
         bool precondition = false;
         if (!pushOnce(rep, precondition) && precondition && !rep.error) {
             // The library changed on the server: pull first, then send our changes again.
@@ -532,7 +621,7 @@ SyncReport SyncEngine::push() {
         // Plugin changes, after the Kindle's own: each refused one on its own.
         if (!rep.error) pushPluginChanges(rep);
         // Read marks of items a plugin has just created in Zotero.
-        if (!rep.error && rep.pluginSent > 0 && !lib_.readMarks().empty()) pushReadMarks(rep);
+        if (!rep.error && rep.pluginSent > 0 && !lib_.readMarks(libId_).empty()) pushReadMarks(rep);
         // Reading positions, on their own: a refused one never holds annotations back.
         if (!rep.error && !pushPositions(rep, precondition) && precondition && !rep.error) {
             SyncReport pulled = pull(nullptr);  // the computer moved: the reader will ask
@@ -544,23 +633,24 @@ SyncReport SyncEngine::push() {
     } catch (const DbError&) {
         rep.error = lib_.lastError();
     }
-    rep.toVersion = lib_.libraryVersion();
+    rep.toVersion = lib_.libraryVersion(libId_);
     if (rep.error) log(LogLevel::Warn, "sync: push stopped: %s (%s)", rep.error->message.c_str(), rep.error->details.c_str());
     return rep;
 }
 
 int SyncEngine::pendingChanges() {
-    int n = static_cast<int>(lib_.pendingDeletions().size());
-    for (const auto& a : lib_.dirtyAnnotations()) n += !a.conflict && !a.localOnly;
-    return n + static_cast<int>(sendablePositions().size() + lib_.readMarks().size() +
-                                lib_.pendingPluginChanges().size());
+    if (libId_ != kMyLibrary && !lib_.libraryEditable(libId_)) return 0;  // a read-only group's stay here
+    int n = static_cast<int>(lib_.pendingDeletions(libId_).size());
+    for (const auto& a : lib_.dirtyAnnotations(libId_)) n += !a.conflict && !a.localOnly && lib_.annotationEditable(a);
+    return n + static_cast<int>(sendablePositions().size() + lib_.readMarks(libId_).size() +
+                                lib_.pendingPluginChanges("", libId_).size());
 }
 
 // Each mark adds the read tag to its item or takes it off, sending the item's whole tag list
 // (Zotero replaces it) against the item's version, so a tag changed on the desktop meanwhile is
 // never lost: on a 412 the item is fetched again and the change made once more on Zotero's copy.
 bool SyncEngine::pushReadMarks(SyncReport& rep) {
-    for (const ReadMark& mark : lib_.readMarks()) {
+    for (const ReadMark& mark : lib_.readMarks(libId_)) {
         for (int attempt = 0;; ++attempt) {
             auto item = lib_.zoteroItem(mark.itemKey);  // a plugin's pending changes aren't sent here
             if (!item) {  // gone from Zotero: nothing to tag
@@ -636,7 +726,7 @@ bool SyncEngine::pushReadMarks(SyncReport& rep) {
 bool SyncEngine::pushPluginChanges(SyncReport& rep) {
     using K = PluginChange::Kind;
     using S = PluginChange::State;
-    const std::vector<PluginChange> initial = lib_.pendingPluginChanges();
+    const std::vector<PluginChange> initial = lib_.pendingPluginChanges("", libId_);
     if (initial.empty()) return true;
     auto ready = [&](const PluginChange& c) {  // what it targets is in Zotero (or never will be)
         if (c.dependsOn.empty()) return true;
@@ -645,7 +735,7 @@ bool SyncEngine::pushPluginChanges(SyncReport& rep) {
     };
     auto creates = [&](K kind) {
         std::vector<PluginChange> out;
-        for (auto& c : lib_.pendingPluginChanges())
+        for (auto& c : lib_.pendingPluginChanges("", libId_))
             if (c.kind == kind && ready(c)) out.push_back(std::move(c));
         return out;
     };
@@ -673,7 +763,7 @@ bool SyncEngine::pushPluginChanges(SyncReport& rep) {
         if (precondition) log(LogLevel::Warn, "sync: plugin changes: Zotero kept changing (412 twice); next time");
     }
     if (ok)
-        for (const auto& c : lib_.pendingPluginChanges()) {
+        for (const auto& c : lib_.pendingPluginChanges("", libId_)) {
             if (c.kind == K::CreateItem || c.kind == K::AddNote || !ready(c)) continue;
             auto now = lib_.pluginChange(c.id);  // an earlier one may have ended it (its item went)
             if (!now || now->state != S::Pending) continue;
@@ -688,7 +778,7 @@ bool SyncEngine::pushPluginChanges(SyncReport& rep) {
         if (now && now->state == S::Refused) ++rep.pluginRefused;
     }
     log(LogLevel::Info, "sync: plugin changes: %d sent, %d refused, %d waiting", rep.pluginSent, rep.pluginRefused,
-        static_cast<int>(lib_.pendingPluginChanges().size()));
+        static_cast<int>(lib_.pendingPluginChanges("", libId_).size()));
     return ok;
 }
 
@@ -730,7 +820,7 @@ bool SyncEngine::pushPluginCreates(SyncReport& rep, std::vector<PluginChange> ch
         json batch = json::array();
         for (size_t j = from; j < to; ++j) batch.push_back(objects[j]);
         UserError err;
-        auto res = api_.createItems(batch, lib_.libraryVersion(), &err);
+        auto res = api_.createItems(batch, lib_.libraryVersion(libId_), &err);
         if (!res && err.kind == ErrorKind::Blocked) {
             if (to - from > 1) {
                 for (size_t j = from; j < to; ++j)
@@ -766,7 +856,7 @@ bool SyncEngine::pushPluginCreates(SyncReport& rep, std::vector<PluginChange> ch
                 apply(it->second, rep);  // Zotero's copy, at its version
                 lib_.markPluginChange(c.id, PluginChange::State::Sent, "", nowMs());
             }
-            lib_.setLibraryVersion(res->libraryVersion);  // our write was the only change since (else 412)
+            lib_.setLibraryVersion(libId_, res->libraryVersion);  // our write was the only change since (else 412)
             for (const auto& [index, message] : res->failed) {
                 if (index < 0 || static_cast<size_t>(index) >= to - from) continue;
                 answered.insert(index);
@@ -947,9 +1037,11 @@ bool SyncEngine::pushPluginEdit(SyncReport& rep, const PluginChange& c) {
     }
 }
 
-// Reading positions to send: of the library's files, and well-formed.
+// Reading positions to send: of the library's files, and well-formed. They are the user's own
+// settings, so My Library's engine sends them all (group files' too); a group's sends none.
 std::vector<ReadingPosition> SyncEngine::sendablePositions() {
     std::vector<ReadingPosition> out;
+    if (libId_ != kMyLibrary) return out;
     for (auto& p : lib_.dirtyPositions())
         if (lib_.attachment(p.attachmentKey) && !json::parse(p.local, nullptr, false).is_discarded())
             out.push_back(std::move(p));
@@ -962,8 +1054,14 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
     preconditionFailed = false;
     if (!pushDeletions(rep, preconditionFailed)) return false;
     std::vector<AnnotationRecord> pending;
-    for (auto& a : lib_.dirtyAnnotations())
-        if (!a.conflict && !a.localOnly) pending.push_back(std::move(a));
+    for (auto& a : lib_.dirtyAnnotations(libId_)) {
+        if (a.conflict || a.localOnly) continue;
+        if (!lib_.annotationEditable(a)) {  // another member's: never sent from here
+            log(LogLevel::Warn, "sync: %s is another member's annotation; not sent", a.key.c_str());
+            continue;
+        }
+        pending.push_back(std::move(a));
+    }
     {
         // New annotations are sent with a key made here (committed before sending), so if the
         // answer is lost, the next pull recognises the object as our own write.
@@ -985,7 +1083,7 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
         json batch = json::array();
         for (size_t j = i; j < end; ++j) batch.push_back(annotationJson(pending[j]));
         UserError err;
-        auto res = api_.createItems(batch, lib_.libraryVersion(), &err);
+        auto res = api_.createItems(batch, lib_.libraryVersion(libId_), &err);
         if (!res) {
             rep.error = err;
             return false;
@@ -1015,7 +1113,7 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
             ++rep.annotations;
         }
         // Our write was the only change since the version we sent (otherwise: 412).
-        lib_.setLibraryVersion(res->libraryVersion);
+        lib_.setLibraryVersion(libId_, res->libraryVersion);
         // Objects Zotero refused: a 412 means it changed there — fetch it, so the usual rule
         // (Zotero's copy wins, ours becomes a conflict) applies; anything else would fail
         // forever, so it stays on the Kindle only, with the reason in the report.
@@ -1057,11 +1155,12 @@ bool SyncEngine::pushOnce(SyncReport& rep, bool& preconditionFailed) {
 
 bool SyncEngine::pushDeletions(SyncReport& rep, bool& preconditionFailed) {
     std::vector<std::string> keys;
-    for (const auto& a : lib_.pendingDeletions()) keys.push_back(a.key);
+    for (const auto& a : lib_.pendingDeletions(libId_))
+        if (lib_.annotationEditable(a)) keys.push_back(a.key);  // another member's: never deleted from here
     for (size_t i = 0; i < keys.size(); i += kBatch) {
         std::vector<std::string> batch(keys.begin() + i, keys.begin() + std::min(keys.size(), i + kBatch));
         UserError err;
-        auto res = api_.deleteItems(batch, lib_.libraryVersion(), &err);
+        auto res = api_.deleteItems(batch, lib_.libraryVersion(libId_), &err);
         if (!res) {
             rep.error = err;
             return false;
@@ -1076,7 +1175,7 @@ bool SyncEngine::pushDeletions(SyncReport& rep, bool& preconditionFailed) {
             lib_.setObjectVersion(k, res->libraryVersion);
             ++rep.annotations;
         }
-        lib_.setLibraryVersion(res->libraryVersion);  // our deletion was the only change since (else 412)
+        lib_.setLibraryVersion(libId_, res->libraryVersion);  // our deletion was the only change since (else 412)
         tx.commit();
     }
     return true;

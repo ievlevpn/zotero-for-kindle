@@ -25,6 +25,7 @@ test_sources = files(
   'test_parse.cpp',
   'test_api.cpp',
   'test_sync_engine.cpp',
+  'test_group_sync.cpp',
   'test_annotation_sync.cpp',
   'test_selection_api.cpp',
   'test_epub_select.cpp',

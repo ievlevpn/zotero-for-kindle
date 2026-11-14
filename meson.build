@@ -115,7 +115,7 @@ services_lib = static_library('zk-services',
 services_dep = declare_dependency(link_with : services_lib, dependencies : [core_dep])
 
 sync_lib = static_library('zk-sync',
-  'src/sync/sync_engine.cpp',
+  'src/sync/sync_engine.cpp', 'src/sync/libraries.cpp',
   'src/sync/files_sweep.cpp',
   'src/sync/webdav.cpp', 'src/sync/zotero_storage.cpp', 'src/sync/snapshot_zip.cpp',
   'src/sync/config.cpp',

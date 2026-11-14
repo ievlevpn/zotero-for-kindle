@@ -24,6 +24,8 @@ nlohmann::json annotationJson(const AnnotationRecord&);
 struct SyncProgress {
     std::string phase;  // "collections", "items", "annotations", "deletions"
     int done = 0, total = 0;
+    int64_t lib = 0;       // the library being synced (0 My Library, else the group ID)
+    std::string library;   // its name ("" for My Library): "Syncing <library>…"
 };
 
 struct SyncReport {
@@ -43,14 +45,21 @@ struct SyncReport {
 // each key: what both WriteGuards (the app's sync service and zk-sync) are given.
 WriteGuard::PluginChanges pluginChangeShapes(Library& lib);
 
+// One library's sync (My Library, or a group): everything it reads and writes is that library's
+// (versions, objects, deletions, dirty annotations, read marks, plugin changes). An incoming object
+// whose key another library already holds is skipped and logged. Settings (reading positions,
+// feeds) are the user's own, so only My Library's engine pulls and pushes them, the positions of
+// group files included (lastPageIndex_g<groupID>_<key>). A group the Kindle may not edit is never
+// pushed to: its read marks stay on the Kindle, its plugin changes are refused.
 class SyncEngine {
 public:
-    SyncEngine(ZoteroApi&, Library&);
+    SyncEngine(ZoteroApi&, Library&, int64_t library = kMyLibrary);
+    int64_t library() const { return libId_; }
     SyncReport pull(std::function<void(const SyncProgress&)> progress);
     SyncReport push();
     int pendingChanges();  // what push() would send: deletions, creations, edits, positions, read marks, plugin changes
     // On-demand annotations: called when a book is opened. Downloads the attachment's
-    // annotations and keeps them in sync from then on.
+    // annotations and keeps them in sync from then on (from the attachment's own library).
     SyncReport pullAnnotationsFor(const std::string& attachmentKey, std::function<void(const SyncProgress&)> progress);
     // The "Keep all highlights offline" setting. Off drops the downloaded annotations of books
     // not opened on the Kindle (never local edits or conflicts); on syncs all at the next pull.
@@ -66,6 +75,8 @@ private:
                        SyncReport&, const std::function<void(const SyncProgress&)>&,
                        const std::function<bool(const nlohmann::json&)>& accept = nullptr);
     void apply(const nlohmann::json& obj, SyncReport&);
+    bool foreign(const std::string& key);  // held by another library: skipped (logged)
+    void scope();                            // the API's library: this engine's
     void removeKey(const std::string& key, SyncReport&);
     int conflictUnsynced(const std::string& attachmentKey);
     bool pushOnce(SyncReport&, bool& preconditionFailed);
@@ -82,6 +93,7 @@ private:
 
     ZoteroApi& api_;
     Library& lib_;
+    int64_t libId_ = kMyLibrary;
     plugins::Pulled pulled_;  // this pull's changes for plugins; kept only when collecting_
     bool collecting_ = false;
     std::function<bool()> pluginEventsWanted_;
