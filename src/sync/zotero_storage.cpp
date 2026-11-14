@@ -37,7 +37,9 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
     const std::string name = localFileName(a);
     // 1. Where the file is: Zotero answers with a redirect (the key stays with Zotero).
     HttpRequest where;
-    where.url = "https://api.zotero.org/users/" + std::to_string(userId_) + "/items/" + a.key + "/file";
+    // A group's file is in the group's storage: /groups/<id>/items/<key>/file.
+    where.url = "https://api.zotero.org/" + (a.lib != kMyLibrary ? "groups/" + std::to_string(a.lib) : "users/" + std::to_string(userId_)) +
+                "/items/" + a.key + "/file";
     where.headers = {{"Zotero-API-Key", apiKey_}, {"Zotero-API-Version", "3"}};
     where.followRedirects = false;
     where.timeoutS = 60;
@@ -103,8 +105,32 @@ bool ZoteroStorage::download(const AttachmentRecord& a, const std::string& destD
     return true;
 }
 
+namespace {
+
+// WebDAV for My Library's files, Zotero storage for groups' (Zotero never puts a group's files on
+// the user's WebDAV).
+class WebDavAndGroups final : public FileStore {
+public:
+    WebDavAndGroups(Http& http, const Config& c)
+        : webdav_(http, c.webdavUrl, c.webdavUser, c.webdavPassword), zotero_(http, c.userId, c.apiKey) {}
+    bool download(const AttachmentRecord& a, const std::string& destDir, UserError* err) override {
+        if (a.lib != kMyLibrary) return zotero_.download(a, destDir, err);
+        return webdav_.download(a, destDir, err);
+    }
+    void setProgress(std::function<void(int64_t, int64_t)> f) override {
+        webdav_.setProgress(f);
+        zotero_.setProgress(std::move(f));
+    }
+
+private:
+    WebDav webdav_;
+    ZoteroStorage zotero_;
+};
+
+}  // namespace
+
 std::unique_ptr<FileStore> makeFileStore(Http& http, const Config& c) {
-    if (!c.webdavUrl.empty()) return std::make_unique<WebDav>(http, c.webdavUrl, c.webdavUser, c.webdavPassword);
+    if (!c.webdavUrl.empty()) return std::make_unique<WebDavAndGroups>(http, c);
     return std::make_unique<ZoteroStorage>(http, c.userId, c.apiKey);
 }
 

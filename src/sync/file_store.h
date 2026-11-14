@@ -25,7 +25,8 @@ public:
     virtual void setProgress(std::function<void(int64_t done, int64_t total)>) = 0;
 };
 
-// WebDAV when the account has a WebDAV address, Zotero storage otherwise.
+// WebDAV when the account has a WebDAV address, Zotero storage otherwise. A group's files always
+// come from Zotero storage (/groups/<id>/items/<key>/file), WebDAV or not.
 std::unique_ptr<FileStore> makeFileStore(Http&, const Config&);
 
 }  // namespace zk

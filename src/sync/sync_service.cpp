@@ -502,7 +502,7 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
     // Once the size is known: would it take the Kindle under the floor? (WebDAV keeps the zip and
     // the file it holds, so twice the size.)
     bool tooBig = false;
-    const uint64_t factor = deps_.config.webdavUrl.empty() ? 1 : 2;
+    const uint64_t factor = deps_.config.webdavUrl.empty() || next.att.lib != kMyLibrary ? 1 : 2;
     auto onTotal = [&](int64_t total) {
         const uint64_t need = static_cast<uint64_t>(total) * factor, free = deps_.freeBytes();
         if (free >= need && free - need >= kKeptMinFree) return;
