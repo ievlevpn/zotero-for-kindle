@@ -154,8 +154,13 @@ TEST_CASE("push triggers: a sync sends unsent changes before pulling") {
     auto events = rig.waitFor(Rig::is(SyncEvent::Kind::SyncFinished));
     CHECK_FALSE(events.back().error);
     std::lock_guard<std::mutex> lock(rig.serverMutex);
-    REQUIRE_FALSE(rig.requests.empty());
-    CHECK(rig.requests.front().first.rfind("POST ", 0) == 0);
+    // After the group discovery (the user's groups, the key's access), the push comes first.
+    std::vector<std::string> work;
+    for (const auto& [r, t] : rig.requests)
+        if (r.find("/groups?format=versions") == std::string::npos && r.find("/keys/current") == std::string::npos)
+            work.push_back(r);
+    REQUIRE_FALSE(work.empty());
+    CHECK(work.front().rfind("POST ", 0) == 0);
 }
 
 TEST_CASE("push triggers: an API key that can't write keeps the changes and says so") {

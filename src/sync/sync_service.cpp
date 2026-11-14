@@ -12,6 +12,7 @@
 #include "net/write_guard.h"
 #include "store/db.h"
 #include "store/library.h"
+#include "sync/libraries.h"
 #include "sync/sync_engine.h"
 #include "sync/webdav.h"
 #include "sync/zotero_storage.h"
@@ -55,7 +56,17 @@ struct SyncService::Worker {
     std::unique_ptr<Library> lib;
     std::unique_ptr<WriteGuard> guard;
     std::unique_ptr<ZoteroApi> api;
-    std::unique_ptr<SyncEngine> engine;
+    std::unique_ptr<SyncEngine> engine;  // My Library's (on-demand annotations find their file's library)
+    std::map<int64_t, std::unique_ptr<SyncEngine>> groupEngines;
+    SyncEngine& engineFor(int64_t lib, const std::function<bool()>& eventsWanted) {
+        if (lib == kMyLibrary) return *engine;
+        auto& e = groupEngines[lib];
+        if (!e) {
+            e = std::make_unique<SyncEngine>(*api, *this->lib, lib);
+            e->setPluginEventsWanted(eventsWanted);
+        }
+        return *e;
+    }
     std::unique_ptr<FileStore> files;  // WebDAV or Zotero storage
     // The kept collections' catch-up, listed once when it starts: the files still to download
     // (each with the kept collections it is in), and per collection how many it lacked then.
@@ -215,6 +226,10 @@ void SyncService::run() {
                 return std::nullopt;
             },
             pluginChangeShapes(*lib));  // plugin changes, each in its pending shape
+        // Group libraries: each object only to its own library's path, and only to groups the Kindle may edit.
+        w.guard->setLibraries([lib](const std::string& key) { return lib->libraryOf(key); },
+                              [lib](int64_t group) { return lib->libraryEditable(group); });
+        if (lib->userId() == 0 && deps_.config.userId > 0) lib->setUser(deps_.config.userId, "");
         w.api = std::make_unique<ZoteroApi>(*w.guard, deps_.config.userId, deps_.config.apiKey);
         w.api->setSleeper([this](int s) { sleepFor(s); });
         w.engine = std::make_unique<SyncEngine>(*w.api, *w.lib);
@@ -293,13 +308,22 @@ void SyncService::run() {
                     SyncEvent start;
                     start.kind = SyncEvent::Kind::SyncStarted;
                     emit(start);
+                    // Which groups there are, and who may edit them (one request when nothing changed).
+                    discoverGroups(*w.api, *w.lib, deps_.wallMs(), nullptr);
                     pushChanges(w);  // ours first, so a pull can't make them look like conflicts
-                    SyncReport rep = w.engine->pull([this](const SyncProgress& p) {
+                    auto progress = [this](const SyncProgress& p) {
                         SyncEvent e;
                         e.kind = SyncEvent::Kind::SyncProgress;
                         e.progress = p;
                         emit(std::move(e));
-                    });
+                    };
+                    // My Library, then each group switched on and still there ("Syncing <group>…").
+                    SyncReport rep = w.engine->pull(progress);
+                    if (!rep.error)
+                        for (int64_t group : w.lib->syncedGroups()) {
+                            if (stopping_) break;
+                            mergeReport(rep, w.engineFor(group, deps_.pluginEventsWanted).pull(progress));
+                        }
                     lastSync = Clock::now();
                     if (!rep.error && !stopping_) pushChanges(w);  // e.g. conflicts re-applied meanwhile
                     SyncEvent done;
@@ -545,13 +569,25 @@ bool SyncService::keepStep(Worker& w, bool fresh) {
 }
 
 void SyncService::pushChanges(Worker& w) {
-    const int pending = w.engine->pendingChanges();
+    // Every library with something to send: My Library first, then the groups.
+    std::vector<int64_t> libs;
+    int pending = 0;
+    for (int64_t l : librariesToSync(*w.lib))
+        if (const int n = w.engineFor(l, deps_.pluginEventsWanted).pendingChanges(); n > 0) {
+            pending += n;
+            libs.push_back(l);
+        }
     if (pending == 0 || stopping_) return;
     SyncEvent start;
     start.kind = SyncEvent::Kind::PushStarted;
     start.total = pending;
     emit(start);
-    SyncReport rep = w.engine->push();
+    SyncReport rep;
+    for (size_t i = 0; i < libs.size() && !stopping_; ++i) {
+        SyncReport one = w.engineFor(libs[i], deps_.pluginEventsWanted).push();
+        if (i == 0) rep = std::move(one);
+        else mergeReport(rep, std::move(one));
+    }
     SyncEvent done;
     done.kind = SyncEvent::Kind::PushFinished;
     done.error = rep.error;

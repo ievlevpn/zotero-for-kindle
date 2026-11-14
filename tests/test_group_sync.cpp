@@ -341,3 +341,80 @@ TEST_CASE("group sync: a book's annotations come from its own library, whichever
     CHECK(rig.hub.count("groups/4242/items/EPUBLAB1/children") == 1);
     CHECK(mine.library() == kMyLibrary);
 }
+
+// ---- The sync service: discovery, then My Library, then each group ----
+
+#include "fn_http.h"
+#include "sync/sync_service.h"
+
+#include <chrono>
+#include <filesystem>
+#include <mutex>
+#include <thread>
+#include <unistd.h>
+
+TEST_CASE("group sync: the service syncs My Library, then each group, saying which it is on") {
+    namespace fs = std::filesystem;
+    char tmpl[] = "/tmp/zk-gsvc-XXXXXX";
+    const fs::path dir = mkdtemp(tmpl);
+    FakeZoteroHub hub;
+    std::mutex m;
+    hub.user.put(FakeZotero::item("BOOKMINE", "Mine"));
+    hub.addGroup(kLab, "Lab").put(FakeZotero::item("BOOKLAB1", "Lab book"));
+    hub.group(kLab).put(FakeZotero::attachment("EPUBLAB1", "BOOKLAB1"));
+    SyncDeps deps;
+    deps.makeHttp = [&] {
+        return std::make_unique<zk::test::FnHttp>([&](const HttpRequest& r) {
+            std::lock_guard<std::mutex> lock(m);
+            return hub.send(r);
+        });
+    };
+    deps.dbPath = (dir / "zotero.db").string();
+    deps.filesDir = (dir / "files").string();
+    deps.config.userId = 1;
+    deps.config.apiKey = "k3y";
+    deps.wifiUp = [] { return true; };
+    deps.intervalMinutes = 0;
+    auto events = [&](SyncService& s, SyncEvent::Kind until) {
+        std::vector<SyncEvent> out;
+        const auto t0 = std::chrono::steady_clock::now();
+        while (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(5)) {
+            SyncEvent e;
+            while (s.poll(e)) {
+                out.push_back(e);
+                if (e.kind == until) return out;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        FAIL("timed out");
+        return out;
+    };
+    {
+        SyncService service(deps);
+        service.start();
+        service.syncNow();
+        auto seen = events(service, SyncEvent::Kind::SyncFinished);
+        CHECK_FALSE(seen.back().error);
+        bool lab = false;
+        for (const auto& e : seen) lab |= e.kind == SyncEvent::Kind::SyncProgress && e.progress.library == "Lab";
+        CHECK(lab);
+        // A highlight on the group's book goes to the group.
+        Db db = Db::open(deps.dbPath);
+        Library ui(db);
+        CHECK(ui.item("BOOKLAB1")->lib == kLab);
+        AnnotationRecord a;
+        a.parentKey = "EPUBLAB1";
+        a.type = "highlight";
+        a.text = "group note";
+        a.color = "#ffd400";
+        a.position = R"j({"type":"FragmentSelector","value":"epubcfi(/6/2!/4/2/1:0)"})j";
+        const std::string key = ui.createAnnotation(a);
+        service.syncNow();
+        seen = events(service, SyncEvent::Kind::SyncFinished);
+        CHECK_FALSE(seen.back().error);
+        std::lock_guard<std::mutex> lock(m);
+        CHECK(hub.group(kLab).items.count(key) == 1);
+        CHECK(hub.user.items.count(key) == 0);
+    }
+    fs::remove_all(dir);
+}
