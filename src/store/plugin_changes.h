@@ -31,6 +31,9 @@ struct PluginChange {
     State state = State::Pending;
     std::string message;  // why it was refused, ...
     int64_t createdMs = 0, sentMs = 0;
+    // The library it goes to (read from the store, never stored): its item's or note's (a new item:
+    // its collections'), 0 My Library. Queuing refuses one aimed at a read-only group or mixing libraries.
+    int64_t lib = 0;
 };
 
 // As zk.d.ts names them ("createItem", ...; "pending", "sent", ...); stored so in the database.

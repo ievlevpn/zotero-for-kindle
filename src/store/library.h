@@ -38,6 +38,7 @@ struct ListQuery {
     ReadFilter read = ReadFilter::Any;
     bool downloaded = false;  // only items with a readable file on the Kindle (any of them)
     std::string tag, collectionKey;
+    int64_t lib = kAllLibraries;  // the Library filter: kAllLibraries, kMyLibrary or a group ID
     int offset = 0, limit = 8;
 };
 
@@ -63,6 +64,7 @@ struct ItemRow {
     bool read = false;     // has the read tag (or was marked read on the Kindle, not sent yet)
     int files = 0;         // its readable files (EPUB, PDF, web snapshot): with more than one, opening asks which
     bool exactFile = false;  // attachmentKey is a file chosen (rowFor with a file): open it without asking
+    int64_t lib = kMyLibrary;  // its library (0 My Library, else the group ID)
     bool operator==(const ItemRow&) const = default;
 };
 
@@ -143,6 +145,28 @@ struct ReadingState {
 // "Kuhn · 1962", "Adda, Cooper · 2003", "Raissi et al. · 2019", "2019", "".
 std::string byline(const ItemRecord&);
 
+// A Zotero library on the Kindle: My Library (id 0, always there) or a group (its Zotero group ID).
+struct LibraryInfo {
+    int64_t id = kMyLibrary;
+    std::string name;       // "My Library", or the group's name
+    bool enabled = true;    // a group switched off in Settings: not synced, hidden everywhere
+    bool gone = false;      // left, deleted, or out of the key's reach: hidden, "No longer available"
+    bool canEdit = true;    // the key may write and the group lets this user edit (My Library: true)
+    bool canEditFiles = true;
+    int64_t items = 0;      // its top-level items (as lists count them)
+};
+
+// What removing a group's local copy found (Library::removeLibraryData).
+struct LibraryRemoval {
+    bool removed = false;
+    int unsent = 0;       // Kindle changes not sent yet (annotations, deletions, read marks, plugin changes, positions)
+    int conflicts = 0;    // conflict copies kept on the Kindle
+    int downloaded = 0;   // files on the Kindle
+};
+
+// The key's reach into group libraries (from GET /keys/current; the last discovery's).
+enum class GroupAccess { Unknown, None, Some, All };
+
 struct LibraryStats {
     int64_t items = 0, attachments = 0, annotations = 0, collections = 0, conflicts = 0, unsent = 0;
 };
@@ -186,8 +210,59 @@ public:
     // as Remote, until Zotero deletes them as well).
     void removeObject(const std::string& type, const std::string& key);
 
+    // My Library's sync versions (meta); the `lib` overloads also a group's (its libraries row).
     int64_t libraryVersion();
     void setLibraryVersion(int64_t);
+    int64_t libraryVersion(int64_t lib);
+    void setLibraryVersion(int64_t lib, int64_t);
+    // One-off catch-ups a pull runs ("notes", "attachmentTitles"): per library.
+    bool backfillPending(int64_t lib, const std::string& name);
+    void clearBackfill(int64_t lib, const std::string& name);
+
+    // ---- Libraries: My Library and the user's groups (spec: group libraries) ----
+    // My Library first, then the groups by name. includeHidden: disabled and gone groups too
+    // (Settings); otherwise only those shown (lists, filters, plugins).
+    std::vector<LibraryInfo> libraries(bool includeHidden = true);
+    std::optional<LibraryInfo> libraryInfo(int64_t lib);
+    std::string libraryName(int64_t lib);  // "My Library", the group's name, "" if unknown
+    // The groups the sync goes through: enabled, not gone, by name.
+    std::vector<int64_t> syncedGroups();
+    // A group switched on or off (Settings). Off: no longer synced and hidden everywhere; nothing is deleted.
+    void setLibraryEnabled(int64_t lib, bool enabled);
+    // Whether the Kindle may change things in the library: My Library always; a group when the
+    // key can write to it, its editing rules let this user, and it is enabled and not gone.
+    bool libraryEditable(int64_t lib);
+    // The library holding a key (item, attachment, annotation, note or collection); nullopt if none does.
+    std::optional<int64_t> libraryOf(const std::string& key);
+    // Whether the Kindle may edit or delete the annotation: in an editable library, and in a group
+    // only the user's own (made here, or by the user's Zotero account; authorless ones too).
+    bool annotationEditable(const AnnotationRecord&);
+    bool annotationEditable(const std::string& key);
+    // What removing the group's copy would leave unsent, and how many of its files are on the Kindle.
+    LibraryRemoval libraryRemovalCheck(int64_t lib);
+    // Removes a group's local copy (items, files on the Kindle, annotations, notes, collections,
+    // reading state). Refused (removed false, with the counts) while it has unsent changes or
+    // conflicts, unless evenUnsent. A disabled group stays listed, off, to be downloaded again when
+    // switched on; a gone one is forgotten. My Library (0) is never removed.
+    LibraryRemoval removeLibraryData(int64_t lib, bool evenUnsent = false);
+    // Discovery's record of a group (GET /groups/<id>), keeping enabled as the user set it; a new
+    // group starts enabled. libraryEditing and fileEditing as Zotero names them ("members", "admins").
+    struct GroupMeta {
+        int64_t id = 0, version = 0, owner = 0;
+        std::string name, libraryEditing, fileEditing;
+        bool admin = false;  // the user is the owner or an admin
+    };
+    void upsertGroup(const GroupMeta&);
+    int64_t groupMetaVersion(int64_t lib);  // the version of the group's metadata last recorded (0: none)
+    // The key's access to a group, as discovery last read it; recomputes canEdit and canEditFiles.
+    void setGroupAccess(int64_t lib, bool read, bool write);
+    void setGroupGone(int64_t lib, bool gone);
+    GroupAccess keyGroupAccess();  // Unknown before the first discovery
+    void setKeyGroupAccess(GroupAccess);
+    // The Zotero user this Kindle syncs as (key info): who "mine" is for annotations in groups.
+    int64_t userId();
+    void setUser(int64_t id, const std::string& name);
+    std::string userName();
     // The server version of any object (item, attachment, annotation, note, collection) as last
     // stored; 0 if unknown. Lets an interrupted first sync resume without refetching.
     int64_t objectVersion(const std::string& key);
@@ -196,9 +271,11 @@ public:
     // Annotation sync scope (spec §7.4): by default only books opened on the Kindle ("tracked"
     // attachments) have their annotations synced; "Keep all highlights offline" syncs all.
     bool allAnnotationsOffline();
-    void setAllAnnotationsOffline(bool);  // turning it off resets annotationsVersion to 0
+    void setAllAnnotationsOffline(bool);  // turning it off resets annotationsVersion to 0 (every library's)
     int64_t annotationsVersion();         // library version the full annotation sync reached
     void setAnnotationsVersion(int64_t);
+    int64_t annotationsVersion(int64_t lib);
+    void setAnnotationsVersion(int64_t lib, int64_t);
     void trackAttachment(const std::string& key);
     bool isTracked(const std::string& key);
     std::vector<std::string> trackedAttachments();
@@ -216,7 +293,8 @@ public:
     // highlights: recentAnnotations searches those); case and diacritics are ignored.
     std::vector<ItemRecord> search(const std::string& query, int limit);
     std::vector<AnnotationRecord> annotationsFor(const std::string& attachmentKey);
-    std::vector<AnnotationRecord> dirtyAnnotations();  // edits and creations; not tombstones
+    // Edits and creations; not tombstones. lib: only that library's (kAllLibraries: all).
+    std::vector<AnnotationRecord> dirtyAnnotations(int64_t lib = kAllLibraries);
 
     // Annotation changes made on the Kindle (spec §7.4), pushed by SyncEngine::push.
     // Stores a new annotation under a fresh key (createdHere, dirty, version 0); returns the key.
@@ -229,7 +307,7 @@ public:
     // have them although they are still at version 0): deleting one leaves a tombstone.
     void markUploadSent(const std::vector<std::string>& keys);
     bool uploadSent(const std::string& key);
-    std::vector<AnnotationRecord> pendingDeletions();
+    std::vector<AnnotationRecord> pendingDeletions(int64_t lib = kAllLibraries);
     std::vector<AnnotationRecord> conflicts();
     void discardConflict(const std::string& key);
     // Puts a conflict copy's content back as a change to send: onto the annotation it was an
@@ -287,7 +365,7 @@ public:
     void setReadTag(const std::string&);     // "" puts back the default
     bool isRead(const std::string& itemKey);
     void markRead(const std::string& itemKey, bool read);
-    std::vector<ReadMark> readMarks();
+    std::vector<ReadMark> readMarks(int64_t lib = kAllLibraries);  // lib: of that library's items
     void clearReadMark(const ReadMark&);     // only if it is still this mark (not marked again meanwhile)
     // Deletes the downloaded copy of an attachment (the file and its folder) and marks it as not
     // on the Kindle. Highlights, the reading position and the item itself stay.
@@ -304,7 +382,7 @@ public:
     void holdRemotePosition(const std::string& attachmentKey);
     // The reader's Go / Stay about the position at `version` (a newer one pulled meanwhile stays news).
     void answerRemotePosition(const std::string& attachmentKey, bool go, int64_t version);
-    std::vector<ReadingPosition> dirtyPositions();
+    std::vector<ReadingPosition> dirtyPositions(int64_t lib = kAllLibraries);  // lib: of that library's files
     int64_t settingsVersion();  // library version the settings pull reached
     // Bookmarks of a file, oldest first (on this Kindle only; Zotero has none).
     std::vector<Bookmark> bookmarks(const std::string& attachmentKey);
@@ -312,7 +390,9 @@ public:
     void removeBookmark(const std::string& attachmentKey, const std::string& position);
     void setSettingsVersion(int64_t);
     std::vector<std::pair<std::string, int64_t>> topTags(int n);
-    std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */);
+    // lib: only that library's (with parentKey "": a group's top-level collections).
+    std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */,
+                                                  int64_t lib = kAllLibraries);
     std::vector<CollectionEntry> allCollections();  // every level, by name
     // Pinned collections (a long press): kept on the Kindle, in the order pinned.
     std::vector<std::string> pinnedCollections();
@@ -324,7 +404,8 @@ public:
     // What keeping a collection covers: for every item in it or in its subcollections (any depth)
     // that has one, a row per readable file (ItemRow::attachmentKey; the one Open opens first), by title.
     std::vector<ItemRow> collectionFiles(const std::string& collectionKey);
-    // The Collections tab: the pinned ones (any level, those still there), then the other top-level ones.
+    // The Collections tab: the pinned ones (any level, those still there, of any library shown),
+    // then My Library's other top-level ones (a group's are under its own row: childCollections("", id)).
     std::vector<CollectionEntry> collectionsTab();
     // Items whose books were opened on the Kindle, last opened first.
     std::vector<ItemRow> recentlyOpened(int limit);
@@ -344,7 +425,8 @@ public:
     void setFileState(const std::string& attachmentKey, AttachmentRecord::State, const std::string& localPath);
     std::vector<AttachmentRecord> downloadedAttachments();
     std::vector<std::string> attachmentKeys();  // every attachment in the library, whatever its state
-    std::vector<std::string> filesOfManyFileItems();  // the readable files of items that have more than one
+    // The readable files of items that have more than one (lib: that library's).
+    std::vector<std::string> filesOfManyFileItems(int64_t lib = kAllLibraries);
 
     // Plugin changes (zk.zotero.*), kept until SyncEngine::push has sent them and applied to the
     // local copy at once: CreateItem inserts the item under a fresh local key, AddNote a note
@@ -362,7 +444,8 @@ public:
     // putting the local copy back; it becomes Cancelled. False if not pending or not the plugin's.
     bool cancelPluginChange(const std::string& pluginId, const std::string& changeId);
     // Pending changes ("" every plugin's), in creation order with each after what it depends on.
-    std::vector<PluginChange> pendingPluginChanges(const std::string& pluginId = "");
+    // lib: only those going to that library (PluginChange::lib).
+    std::vector<PluginChange> pendingPluginChanges(const std::string& pluginId = "", int64_t lib = kAllLibraries);
     // A plugin's changes, every state, newest first; finished ones beyond kPluginChangeLog are dropped.
     static constexpr int kPluginChangeLog = 500;
     std::vector<PluginChange> pluginChangeLog(const std::string& pluginId, int limit);
@@ -395,6 +478,9 @@ private:
                               const std::string& dependentsMessage = "");
     void prunePluginLog(const std::string& pluginId);
     void setMeta(const std::string& key, const std::string& value);
+    int64_t groupColumn(int64_t lib, const char* column);
+    void setGroupColumn(int64_t lib, const char* column, int64_t value);
+    int unsentIn(int64_t lib);
 
     Db& db_;
     bool inTx_ = false;

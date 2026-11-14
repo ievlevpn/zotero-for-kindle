@@ -7,6 +7,12 @@
 
 namespace zk {
 
+// Which Zotero library a record belongs to: 0 is My Library (the user's own), any other value the
+// Zotero group ID. Keys stay global (a key is unique in practice across libraries; one already
+// held by another library is skipped by the sync), so a record's library rides along as `lib`.
+constexpr int64_t kMyLibrary = 0;
+constexpr int64_t kAllLibraries = -1;  // queries: no library filter
+
 struct Creator {
     std::string first, last, name, type;  // `name` for single-field creators
 };
@@ -21,6 +27,7 @@ struct ItemRecord {
     std::string json;  // raw `data` object, for round-trips
     std::string year;         // from meta.parsedDate (else the first 4-digit run of `date`)
     std::string sortCreator;  // first creator's last name or name; filled by the store if empty
+    int64_t lib = kMyLibrary;  // set on insert; an existing row keeps its library
 };
 
 struct AttachmentRecord {
@@ -29,6 +36,7 @@ struct AttachmentRecord {
     std::string localPath;
     enum class State { Remote, Downloading, Local } state = State::Remote;
     std::string title;  // Zotero's ("Full Text PDF"), "" if none
+    int64_t lib = kMyLibrary;  // set on insert; an existing row keeps its library
 };
 
 // The files the Kindle reads: EPUB, PDF and web snapshots (Zotero's saved pages, text/html, a zip of
@@ -58,6 +66,11 @@ struct AnnotationRecord {
     std::string conflictOf;    // a conflict copy: the annotation it was an edit of
     std::string json;
     std::string dateModified;
+    int64_t lib = kMyLibrary;  // set on insert (createAnnotation: its file's); an existing row keeps its library
+    // Who made it, in a group library (Zotero's meta.createdByUser): 0 and "" when unknown (My
+    // Library's never say). Library::annotationEditable tells another member's from the user's own.
+    int64_t authorId = 0;
+    std::string authorName;
 };
 
 // A Zotero note: its HTML as Zotero holds it. Read-only on the Kindle; createdBy is empty for
@@ -65,11 +78,13 @@ struct AnnotationRecord {
 struct NoteRecord {
     std::string key, parentKey /* '' for a standalone note */, html, json, dateModified, createdBy;
     int64_t version = 0;
+    int64_t lib = kMyLibrary;  // set on insert; an existing row keeps its library
 };
 
 struct CollectionRecord {
     std::string key, name, parentKey;
     int64_t version = 0;
+    int64_t lib = kMyLibrary;  // set on insert; an existing row keeps its library
 };
 
 }  // namespace zk

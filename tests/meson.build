@@ -21,6 +21,7 @@ test_sources = files(
   'test_storage_hygiene.cpp',
   'test_errors.cpp',
   'test_library.cpp',
+  'test_group_libraries.cpp',
   'test_parse.cpp',
   'test_api.cpp',
   'test_sync_engine.cpp',

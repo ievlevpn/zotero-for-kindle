@@ -597,7 +597,7 @@ TEST_CASE("changes: a schema 7 database gains the change table and keeps its lib
     {
         Db db = Db::open(path.string());
         Library lib(db);
-        CHECK(db.userVersion() == 11);
+        CHECK(db.userVersion() == 12);
         CHECK(lib.searchRows("owls", 0, 10).size() == 1);  // the index is not doubled
         CHECK(lib.metaValue("notesBackfill").empty());     // only for databases before notes
         PluginChange c;

@@ -22,7 +22,7 @@ using nlohmann::json;
 
 namespace {
 
-constexpr int64_t kSchemaVersion = 11;
+constexpr int64_t kSchemaVersion = 12;
 
 // The files the Kindle reads (isReadableType), kept in Zotero (not linked), as SQL over attachments
 // (`a` the table's alias with its dot, or "").
@@ -69,7 +69,8 @@ CREATE TABLE items (
   tags TEXT NOT NULL DEFAULT '[]', dateAdded TEXT NOT NULL DEFAULT '', dateModified TEXT NOT NULL DEFAULT '',
   json TEXT NOT NULL DEFAULT '{}', creatorsText TEXT NOT NULL DEFAULT '', tagsText TEXT NOT NULL DEFAULT '',
   year TEXT NOT NULL DEFAULT '', sortCreator TEXT NOT NULL DEFAULT '', readableKey TEXT NOT NULL DEFAULT '',
-  readableType TEXT NOT NULL DEFAULT '', titleKey TEXT NOT NULL DEFAULT '', authorKey TEXT NOT NULL DEFAULT '');
+  readableType TEXT NOT NULL DEFAULT '', titleKey TEXT NOT NULL DEFAULT '', authorKey TEXT NOT NULL DEFAULT '',
+  lib INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX items_recent ON items(parentKey, dateAdded DESC);
 CREATE INDEX items_title ON items(parentKey, title COLLATE NOCASE);
 CREATE INDEX items_author ON items(parentKey, sortCreator COLLATE NOCASE, title COLLATE NOCASE);
@@ -83,12 +84,13 @@ CREATE INDEX reading_state_opened ON reading_state(openedMs DESC);
 CREATE TABLE file_reading (attachmentKey TEXT PRIMARY KEY, location TEXT NOT NULL DEFAULT '', progress REAL NOT NULL DEFAULT 0);
 CREATE TABLE item_collections (itemKey TEXT NOT NULL, collectionKey TEXT NOT NULL, PRIMARY KEY (collectionKey, itemKey));
 CREATE INDEX item_collections_item ON item_collections(itemKey);
-CREATE TABLE collections (key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', parentKey TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE collections (key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', parentKey TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0,
+  lib INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE attachments (
   key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', contentType TEXT NOT NULL DEFAULT '',
   filename TEXT NOT NULL DEFAULT '', md5 TEXT NOT NULL DEFAULT '', linkMode TEXT NOT NULL DEFAULT '',
   mtime INTEGER NOT NULL DEFAULT 0, localPath TEXT NOT NULL DEFAULT '', state INTEGER NOT NULL DEFAULT 0,
-  title TEXT NOT NULL DEFAULT '');
+  title TEXT NOT NULL DEFAULT '', lib INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX attachments_parent ON attachments(parentKey);
 CREATE TABLE annotations (
   key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', type TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '',
@@ -96,13 +98,15 @@ CREATE TABLE annotations (
   sortIndex TEXT NOT NULL DEFAULT '', position TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '[]',
   version INTEGER NOT NULL DEFAULT 0, dirty INTEGER NOT NULL DEFAULT 0, conflict INTEGER NOT NULL DEFAULT 0,
   createdHere INTEGER NOT NULL DEFAULT 0, json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '',
-  deletedHere INTEGER NOT NULL DEFAULT 0, localOnly INTEGER NOT NULL DEFAULT 0, conflictOf TEXT NOT NULL DEFAULT '');
+  deletedHere INTEGER NOT NULL DEFAULT 0, localOnly INTEGER NOT NULL DEFAULT 0, conflictOf TEXT NOT NULL DEFAULT '',
+  lib INTEGER NOT NULL DEFAULT 0, authorId INTEGER NOT NULL DEFAULT 0, authorName TEXT NOT NULL DEFAULT '');
 CREATE INDEX annotations_modified ON annotations(dateModified DESC);
 CREATE INDEX annotations_parent ON annotations(parentKey, sortIndex);
 CREATE INDEX annotations_dirty ON annotations(dirty) WHERE dirty = 1;
 CREATE TABLE notes (
   key TEXT PRIMARY KEY, parentKey TEXT NOT NULL DEFAULT '', html TEXT NOT NULL DEFAULT '', version INTEGER NOT NULL DEFAULT 0,
-  json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '', createdBy TEXT NOT NULL DEFAULT '');
+  json TEXT NOT NULL DEFAULT '{}', dateModified TEXT NOT NULL DEFAULT '', createdBy TEXT NOT NULL DEFAULT '',
+  lib INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX notes_parent ON notes(parentKey);
 CREATE TABLE tracked_attachments (key TEXT PRIMARY KEY);
 CREATE TABLE object_versions (key TEXT PRIMARY KEY, version INTEGER NOT NULL);
@@ -113,6 +117,29 @@ CREATE TABLE read_marks (itemKey TEXT PRIMARY KEY, read INTEGER NOT NULL, tag TE
 CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags,
   tokenize='unicode61 remove_diacritics 2');
 )sql";
+
+// Group libraries (schema 12): one row per Zotero group the key reaches, My Library being 0 in
+// every object table's `lib` and keeping its sync state in meta. Per group: its sync versions and
+// one-off catch-ups (as My Library's meta keys), what discovery read (groupVersion: GET /groups/<id>'s
+// version; libraryEditing, fileEditing: "members" | "admins" | "none"; admin: the user is its owner
+// or an admin; keyRead, keyWrite: the API key's access), canEdit / canEditFiles worked out from
+// those, and the user's switch (enabled) and gone (no longer listed for the key).
+const char* kLibraries = R"sql(
+CREATE TABLE IF NOT EXISTS libraries (id INTEGER PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+  groupVersion INTEGER NOT NULL DEFAULT 0, libraryVersion INTEGER NOT NULL DEFAULT 0,
+  settingsVersion INTEGER NOT NULL DEFAULT 0, annotationsVersion INTEGER NOT NULL DEFAULT 0,
+  notesBackfill INTEGER NOT NULL DEFAULT 0, attachmentTitlesBackfill INTEGER NOT NULL DEFAULT 0,
+  owner INTEGER NOT NULL DEFAULT 0, admin INTEGER NOT NULL DEFAULT 0,
+  libraryEditing TEXT NOT NULL DEFAULT '', fileEditing TEXT NOT NULL DEFAULT '',
+  keyRead INTEGER NOT NULL DEFAULT 1, keyWrite INTEGER NOT NULL DEFAULT 0,
+  canEdit INTEGER NOT NULL DEFAULT 0, canEditFiles INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1, gone INTEGER NOT NULL DEFAULT 0);
+)sql";
+
+// Shown: My Library's, or an enabled group's still there (`alias` with its dot, or "").
+std::string shownLib(const std::string& a) {
+    return " AND (" + a + "lib = 0 OR " + a + "lib IN (SELECT id FROM libraries WHERE enabled = 1 AND gone = 0))";
+}
 
 // Highlight and note search (the Notes tab): kept by triggers, so every write to annotations counts.
 const char* kNoteSearch = R"sql(
@@ -158,7 +185,7 @@ CREATE VIRTUAL TABLE item_fts USING fts5(title, creators, publication, tags,
 
 const char* kItemColumns =
     "items.key, items.version, items.itemType, items.title, items.date, items.publication, items.parentKey, "
-    "items.creators, items.collections, items.tags, items.dateAdded, items.dateModified, items.json, items.year";
+    "items.creators, items.collections, items.tags, items.dateAdded, items.dateModified, items.json, items.year, items.lib";
 
 std::vector<std::string> strings(const std::string& text) {
     auto j = json::parse(text, nullptr, false);
@@ -194,6 +221,7 @@ ItemRecord readItem(const Stmt& st) {
     r.dateModified = st.text(11);
     r.json = st.text(12);
     r.year = st.text(13);
+    r.lib = st.integer(14);
     return r;
 }
 
@@ -205,7 +233,7 @@ std::vector<ItemRecord> readItems(Stmt& st) {
 
 const char* kAnnotationColumns =
     "key, parentKey, type, text, comment, color, pageLabel, sortIndex, position, tags, version, dirty, conflict, "
-    "createdHere, json, dateModified, deletedHere, localOnly, conflictOf";
+    "createdHere, json, dateModified, deletedHere, localOnly, conflictOf, lib, authorId, authorName";
 
 // Reads the kAnnotationColumns of the current row, starting at column `at`.
 AnnotationRecord readAnnotation(Stmt& st, int at = 0) {
@@ -229,6 +257,9 @@ AnnotationRecord readAnnotation(Stmt& st, int at = 0) {
     a.deletedHere = st.integer(at + 16) != 0;
     a.localOnly = st.integer(at + 17) != 0;
     a.conflictOf = st.text(at + 18);
+    a.lib = st.integer(at + 19);
+    a.authorId = st.integer(at + 20);
+    a.authorName = st.text(at + 21);
     return a;
 }
 
@@ -248,7 +279,7 @@ std::string nowUtc() {
     return buf;
 }
 
-const char* kAttachmentColumns = "key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state, title";
+const char* kAttachmentColumns = "key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state, title, lib";
 
 std::vector<AttachmentRecord> readAttachments(Stmt& st) {
     std::vector<AttachmentRecord> out;
@@ -264,6 +295,7 @@ std::vector<AttachmentRecord> readAttachments(Stmt& st) {
         a.localPath = st.text(7);
         a.state = static_cast<AttachmentRecord::State>(st.integer(8));
         a.title = st.text(9);
+        a.lib = st.integer(10);
         out.push_back(std::move(a));
     }
     return out;
@@ -285,7 +317,11 @@ std::string ftsQuery(const std::string& input) {
     return out;
 }
 
-const char* kChangeColumns = "id, pluginId, kind, itemKey, value, parentKey, dependsOn, state, message, createdMs, sentMs";
+// lib: the library of what it made or changes (its item, or its note), as the store has it now.
+const char* kChangeColumns =
+    "id, pluginId, kind, itemKey, value, parentKey, dependsOn, state, message, createdMs, sentMs, "
+    "coalesce((SELECT lib FROM items WHERE key = plugin_changes.itemKey), (SELECT lib FROM notes WHERE key = "
+    "plugin_changes.itemKey), (SELECT lib FROM items WHERE key = plugin_changes.parentKey), 0)";
 
 PluginChange readChange(const Stmt& st) {
     PluginChange c;
@@ -300,6 +336,7 @@ PluginChange readChange(const Stmt& st) {
     c.message = st.text(8);
     c.createdMs = st.integer(9);
     c.sentMs = st.integer(10);
+    c.lib = st.integer(11);
     return c;
 }
 
@@ -495,7 +532,7 @@ void Library::migrate() {
     if (version >= kSchemaVersion) return;
     db_.exec("BEGIN");
     try {
-        if (version >= 2 && version <= 10) {
+        if (version >= 2 && version <= 11) {
             // Versions 2 to 8 may hold unsent Kindle work, so they are extended in place, never rebuilt.
             if (version == 2)
                 db_.exec(
@@ -566,6 +603,20 @@ void Library::migrate() {
             if (has("reading_state") && version < 10)  // the place so far was the item's: its last file's
                 db_.exec("INSERT OR IGNORE INTO file_reading (attachmentKey, location, progress) SELECT attachmentKey, "
                          "location, progress FROM reading_state WHERE attachmentKey != ''");
+            // version 12: group libraries. Every row so far is My Library's (lib 0).
+            auto addColumn = [&](const char* table, const char* column, const char* type) {
+                if (!has(table)) return;
+                Stmt st = db_.prepare(std::string("SELECT 1 FROM pragma_table_info('") + table + "') WHERE name = ?");
+                st.bind(1, std::string(column));
+                if (!st.step()) db_.exec(std::string("ALTER TABLE ") + table + " ADD COLUMN " + column + " " + type + ";");
+            };
+            for (const char* table : {"items", "collections", "attachments", "annotations", "notes"})
+                addColumn(table, "lib", "INTEGER NOT NULL DEFAULT 0");
+            addColumn("annotations", "authorId", "INTEGER NOT NULL DEFAULT 0");
+            addColumn("annotations", "authorName", "TEXT NOT NULL DEFAULT ''");
+            db_.exec(kLibraries);
+            if (has("items")) db_.exec("CREATE INDEX IF NOT EXISTS items_lib ON items(lib, parentKey);");
+            if (has("collections")) db_.exec("CREATE INDEX IF NOT EXISTS collections_lib ON collections(lib, parentKey);");
             db_.setUserVersion(kSchemaVersion);
             db_.exec("COMMIT");
             return;
@@ -587,6 +638,9 @@ void Library::migrate() {
         db_.exec(kSchema);
         db_.exec(kNoteSearch);
         db_.exec(kPluginChanges);
+        db_.exec(kLibraries);
+        db_.exec("CREATE INDEX items_lib ON items(lib, parentKey);"
+                 "CREATE INDEX collections_lib ON collections(lib, parentKey);");
         db_.setUserVersion(kSchemaVersion);
         db_.exec("COMMIT");
     } catch (...) {
@@ -635,8 +689,8 @@ void Library::upsertItem(const ItemRecord& r) {
         }
         Stmt st = db_.prepare(
             "INSERT INTO items (key, version, itemType, title, date, publication, parentKey, creators, collections, "
-            "tags, dateAdded, dateModified, json, creatorsText, tagsText, year, sortCreator, titleKey, authorKey) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "tags, dateAdded, dateModified, json, creatorsText, tagsText, year, sortCreator, titleKey, authorKey, lib) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET version=excluded.version, itemType=excluded.itemType, "
             "title=excluded.title, date=excluded.date, publication=excluded.publication, parentKey=excluded.parentKey, "
             "creators=excluded.creators, collections=excluded.collections, tags=excluded.tags, "
@@ -656,6 +710,7 @@ void Library::upsertItem(const ItemRecord& r) {
         if (sortCreator.empty() && !r.creators.empty())
             sortCreator = r.creators[0].last.empty() ? r.creators[0].name : r.creators[0].last;
         st.bind(16, r.year).bind(17, sortCreator).bind(18, listSortKey(r.title)).bind(19, listSortKey(sortCreator));
+        st.bind(20, r.lib);
         st.step();
         Stmt clear = db_.prepare("DELETE FROM item_collections WHERE itemKey = ?");
         clear.bind(1, r.key).step();
@@ -672,13 +727,14 @@ void Library::upsertAttachment(const AttachmentRecord& r) {
     guarded([&] {
         const std::string oldParent = itemOfAttachment(r.key);
         Stmt st = db_.prepare(
-            "INSERT INTO attachments (key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state, title) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
+            "INSERT INTO attachments (key, parentKey, contentType, filename, md5, linkMode, mtime, localPath, state, title, lib) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
             "contentType=excluded.contentType, filename=excluded.filename, md5=excluded.md5, "
             "linkMode=excluded.linkMode, mtime=excluded.mtime, localPath=excluded.localPath, state=excluded.state, "
             "title=excluded.title");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.contentType).bind(4, r.filename).bind(5, r.md5);
         st.bind(6, r.linkMode).bind(7, r.mtime).bind(8, r.localPath).bind(9, static_cast<int64_t>(r.state)).bind(10, r.title);
+        st.bind(11, r.lib);
         st.step();
         const std::string entry = r.parentKey.empty() ? r.key : r.parentKey;
         if (!oldParent.empty() && oldParent != entry) touch(oldParent);
@@ -693,18 +749,19 @@ void Library::upsertAnnotation(const AnnotationRecord& r) {
         const std::string oldAttachment = old.step() ? old.text(0) : std::string{};
         Stmt st = db_.prepare(
             std::string("INSERT INTO annotations (") + kAnnotationColumns +
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, "
             "type=excluded.type, text=excluded.text, comment=excluded.comment, color=excluded.color, "
             "pageLabel=excluded.pageLabel, sortIndex=excluded.sortIndex, position=excluded.position, "
             "tags=excluded.tags, version=excluded.version, dirty=excluded.dirty, conflict=excluded.conflict, "
             "createdHere=excluded.createdHere, json=excluded.json, dateModified=excluded.dateModified, "
-            "deletedHere=excluded.deletedHere, localOnly=excluded.localOnly, conflictOf=excluded.conflictOf");
+            "deletedHere=excluded.deletedHere, localOnly=excluded.localOnly, conflictOf=excluded.conflictOf, "
+            "authorId=excluded.authorId, authorName=excluded.authorName");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.type).bind(4, r.text).bind(5, r.comment);
         st.bind(6, r.color).bind(7, r.pageLabel).bind(8, r.sortIndex).bind(9, r.position);
         st.bind(10, json(r.tags).dump()).bind(11, r.version).bind(12, int64_t{r.dirty});
         st.bind(13, int64_t{r.conflict}).bind(14, int64_t{r.createdHere}).bind(15, r.json.empty() ? "{}" : r.json);
         st.bind(16, r.dateModified).bind(17, int64_t{r.deletedHere}).bind(18, int64_t{r.localOnly});
-        st.bind(19, r.conflictOf);
+        st.bind(19, r.conflictOf).bind(20, r.lib).bind(21, r.authorId).bind(22, r.authorName);
         st.step();
         if (!oldAttachment.empty() && oldAttachment != r.parentKey) touch(itemOfAttachment(oldAttachment));
         touch(itemOfAttachment(r.parentKey));
@@ -714,18 +771,18 @@ void Library::upsertAnnotation(const AnnotationRecord& r) {
 void Library::upsertNote(const NoteRecord& r) {
     guarded([&] {
         Stmt st = db_.prepare(
-            "INSERT INTO notes (key, parentKey, html, version, json, dateModified, createdBy) VALUES (?,?,?,?,?,?,?) "
+            "INSERT INTO notes (key, parentKey, html, version, json, dateModified, createdBy, lib) VALUES (?,?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET parentKey=excluded.parentKey, html=excluded.html, version=excluded.version, "
             "json=excluded.json, dateModified=excluded.dateModified, "
             "createdBy=CASE WHEN excluded.createdBy = '' THEN notes.createdBy ELSE excluded.createdBy END");
         st.bind(1, r.key).bind(2, r.parentKey).bind(3, r.html).bind(4, r.version);
-        st.bind(5, r.json.empty() ? "{}" : r.json).bind(6, r.dateModified).bind(7, r.createdBy);
+        st.bind(5, r.json.empty() ? "{}" : r.json).bind(6, r.dateModified).bind(7, r.createdBy).bind(8, r.lib);
         st.step();
     });
 }
 
 namespace {
-const char* kNoteColumns = "key, parentKey, html, version, json, dateModified, createdBy";
+const char* kNoteColumns = "key, parentKey, html, version, json, dateModified, createdBy, lib";
 // Hidden while a plugin's deletion of it is still to be sent.
 const char* kNoteNotDeleted =
     " AND NOT EXISTS (SELECT 1 FROM plugin_changes p WHERE p.itemKey = notes.key AND p.kind = 'deleteNote' "
@@ -739,6 +796,7 @@ NoteRecord readNote(Stmt& st) {
     n.json = st.text(4);
     n.dateModified = st.text(5);
     n.createdBy = st.text(6);
+    n.lib = st.integer(7);
     return n;
 }
 }  // namespace
@@ -775,9 +833,9 @@ std::vector<NoteRecord> Library::notes(const std::string& itemKey) {
 void Library::upsertCollection(const CollectionRecord& r) {
     guarded([&] {
         Stmt st = db_.prepare(
-            "INSERT INTO collections (key, name, parentKey, version) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
+            "INSERT INTO collections (key, name, parentKey, version, lib) VALUES (?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
             "name=excluded.name, parentKey=excluded.parentKey, version=excluded.version");
-        st.bind(1, r.key).bind(2, r.name).bind(3, r.parentKey).bind(4, r.version).step();
+        st.bind(1, r.key).bind(2, r.name).bind(3, r.parentKey).bind(4, r.version).bind(5, r.lib).step();
     });
 }
 
@@ -897,6 +955,50 @@ void Library::setLibraryVersion(int64_t v) {
     guarded([&] { setMeta("libraryVersion", std::to_string(v)); });
 }
 
+int64_t Library::groupColumn(int64_t lib, const char* column) {
+    Stmt st = db_.prepare(std::string("SELECT ") + column + " FROM libraries WHERE id = ?");
+    st.bind(1, lib);
+    return st.step() ? st.integer(0) : int64_t{0};
+}
+
+void Library::setGroupColumn(int64_t lib, const char* column, int64_t value) {
+    db_.exec("INSERT OR IGNORE INTO libraries (id) VALUES (" + std::to_string(lib) + ")");
+    Stmt st = db_.prepare(std::string("UPDATE libraries SET ") + column + " = ? WHERE id = ?");
+    st.bind(1, value).bind(2, lib).step();
+}
+
+int64_t Library::libraryVersion(int64_t lib) {
+    if (lib == kMyLibrary) return libraryVersion();
+    return guarded([&] { return groupColumn(lib, "libraryVersion"); });
+}
+
+void Library::setLibraryVersion(int64_t lib, int64_t v) {
+    if (lib == kMyLibrary) return setLibraryVersion(v);
+    guarded([&] { setGroupColumn(lib, "libraryVersion", v); });
+}
+
+bool Library::backfillPending(int64_t lib, const std::string& name) {
+    if (name != "notes" && name != "attachmentTitles") return false;
+    if (lib == kMyLibrary) return metaValue(name + "Backfill") == "1";
+    return guarded([&] { return groupColumn(lib, name == "notes" ? "notesBackfill" : "attachmentTitlesBackfill") != 0; });
+}
+
+void Library::clearBackfill(int64_t lib, const std::string& name) {
+    if (name != "notes" && name != "attachmentTitles") return;
+    if (lib == kMyLibrary) return setMetaValue(name + "Backfill", "0");
+    guarded([&] { setGroupColumn(lib, name == "notes" ? "notesBackfill" : "attachmentTitlesBackfill", 0); });
+}
+
+int64_t Library::annotationsVersion(int64_t lib) {
+    if (lib == kMyLibrary) return annotationsVersion();
+    return guarded([&] { return groupColumn(lib, "annotationsVersion"); });
+}
+
+void Library::setAnnotationsVersion(int64_t lib, int64_t v) {
+    if (lib == kMyLibrary) return setAnnotationsVersion(v);
+    guarded([&] { setGroupColumn(lib, "annotationsVersion", v); });
+}
+
 bool Library::allAnnotationsOffline() {
     return guarded([&] { return meta("allAnnotationsOffline") == "1"; });
 }
@@ -904,7 +1006,10 @@ bool Library::allAnnotationsOffline() {
 void Library::setAllAnnotationsOffline(bool on) {
     guarded([&] {
         setMeta("allAnnotationsOffline", on ? "1" : "0");
-        if (!on) setMeta("annotationsVersion", "0");
+        if (!on) {
+            setMeta("annotationsVersion", "0");
+            db_.exec("UPDATE libraries SET annotationsVersion = 0");
+        }
     });
 }
 
@@ -967,7 +1072,7 @@ LibraryStats Library::stats() {
 
 void Library::forEachItemData(const std::function<void(const std::string&, const std::string&)>& fn) {
     guarded([&] {
-        Stmt st = db_.prepare("SELECT key, json FROM items WHERE parentKey = ''" + notTrashed("items.key"));
+        Stmt st = db_.prepare("SELECT key, json FROM items WHERE parentKey = ''" + notTrashed("items.key") + shownLib("items."));
         while (st.step()) fn(st.text(0), st.text(1));
     });
 }
@@ -982,7 +1087,7 @@ int64_t Library::dataVersion() {
 std::vector<ItemRecord> Library::recentItems(int limit) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns +
-                              " FROM items WHERE parentKey = ''" + notTrashed("items.key") +
+                              " FROM items WHERE parentKey = ''" + notTrashed("items.key") + shownLib("items.") +
                               " ORDER BY dateAdded DESC LIMIT ?");
         st.bind(1, int64_t{limit});
         return readItems(st);
@@ -993,7 +1098,7 @@ std::vector<ItemRecord> Library::itemsInCollection(const std::string& key) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns +
                               " FROM item_collections c JOIN items ON items.key = c.itemKey WHERE c.collectionKey = ?" +
-                              notTrashed("items.key") + " ORDER BY items.title COLLATE NOCASE");
+                              notTrashed("items.key") + shownLib("items.") + " ORDER BY items.title COLLATE NOCASE");
         st.bind(1, key);
         return readItems(st);
     });
@@ -1001,9 +1106,10 @@ std::vector<ItemRecord> Library::itemsInCollection(const std::string& key) {
 
 std::vector<CollectionRecord> Library::collections() {
     return guarded([&] {
-        Stmt st = db_.prepare("SELECT key, name, parentKey, version FROM collections ORDER BY name COLLATE NOCASE");
+        Stmt st = db_.prepare("SELECT key, name, parentKey, version, lib FROM collections WHERE 1" + shownLib("") +
+                              " ORDER BY name COLLATE NOCASE");
         std::vector<CollectionRecord> out;
-        while (st.step()) out.push_back({st.text(0), st.text(1), st.text(2), st.integer(3)});
+        while (st.step()) out.push_back({st.text(0), st.text(1), st.text(2), st.integer(3), st.integer(4)});
         return out;
     });
 }
@@ -1014,7 +1120,7 @@ std::vector<ItemRecord> Library::search(const std::string& query, int limit) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kItemColumns +
                               " FROM item_fts JOIN items ON items.rowid = item_fts.rowid WHERE item_fts MATCH ?" +
-                              notTrashed("items.key") + " ORDER BY rank LIMIT ?");
+                              notTrashed("items.key") + shownLib("items.") + " ORDER BY rank LIMIT ?");
         st.bind(1, fts).bind(2, int64_t{limit});
         return readItems(st);
     });
@@ -1029,10 +1135,17 @@ std::vector<AnnotationRecord> Library::annotationsFor(const std::string& attachm
     });
 }
 
-std::vector<AnnotationRecord> Library::dirtyAnnotations() {
+namespace {
+// " AND <column> = <lib>" unless lib is kAllLibraries.
+std::string inLib(int64_t lib, const char* column = "lib") {
+    return lib == kAllLibraries ? std::string() : std::string(" AND ") + column + " = " + std::to_string(lib);
+}
+}  // namespace
+
+std::vector<AnnotationRecord> Library::dirtyAnnotations(int64_t lib) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns +
-                              " FROM annotations WHERE dirty = 1 AND deletedHere = 0 ORDER BY parentKey, sortIndex");
+                              " FROM annotations WHERE dirty = 1 AND deletedHere = 0" + inLib(lib) + " ORDER BY parentKey, sortIndex");
         return readAnnotations(st);
     });
 }
@@ -1103,7 +1216,7 @@ const char* kRowColumns =
     "i.key, i.title, i.creators, i.year, i.readableKey, i.readableType, coalesce(a.state, 0), "
     "coalesce(rs.progress, -1), i.itemType, i.tags, coalesce(m.read, -1), coalesce(m.tag, ''), "
     "(SELECT count(*) FROM attachments f WHERE f.parentKey = i.key AND f.contentType IN ('application/epub+zip', "
-    "'application/pdf', 'text/html') AND f.linkMode NOT IN ('linked_file', 'linked_url'))";
+    "'application/pdf', 'text/html') AND f.linkMode NOT IN ('linked_file', 'linked_url')), i.lib";
 const char* kRowJoins =
     " LEFT JOIN attachments a ON a.key = i.readableKey LEFT JOIN reading_state rs ON rs.itemKey = i.key "
     "LEFT JOIN read_marks m ON m.itemKey = i.key ";
@@ -1135,6 +1248,7 @@ std::vector<ItemRow> readRows(Stmt& st, const std::string& readTag) {
         r.itemType = st.text(8);
         r.read = isReadNow(strings(st.text(9)), st.integer(10) >= 0, st.integer(10) == 1, st.text(11), readTag);
         r.files = static_cast<int>(st.integer(12));
+        r.lib = st.integer(13);
         out.push_back(std::move(r));
     }
     return out;
@@ -1147,7 +1261,8 @@ struct Where {
 };
 
 Where whereOf(const ListQuery& q, const std::string& readTag) {
-    Where w{" WHERE i.parentKey = ''" + notTrashed("i.key"), {}};
+    Where w{" WHERE i.parentKey = ''" + notTrashed("i.key") + shownLib("i."), {}};
+    if (q.lib != kAllLibraries) w.sql += " AND i.lib = " + std::to_string(q.lib);
     switch (q.type) {
         case TypeFilter::WithFile: w.sql += " AND i.readableType != ''"; break;
         case TypeFilter::Epub: w.sql += " AND i.readableType = 'EPUB'"; break;
@@ -1262,7 +1377,7 @@ std::vector<ItemRow> Library::searchRows(const std::string& query, int offset, i
                   "WITH RECURSIVE sub(key) AS (SELECT ?4 UNION SELECT c.key FROM collections c JOIN sub ON c.parentKey = sub.key) "
                   "SELECT key FROM sub))";
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM item_fts JOIN items i ON i.id = item_fts.rowid" +
-                              kRowJoins + " WHERE item_fts MATCH ?1 AND i.parentKey = ''" + notTrashed("i.key") + inCollection +
+                              kRowJoins + " WHERE item_fts MATCH ?1 AND i.parentKey = ''" + notTrashed("i.key") + shownLib("i.") + inCollection +
                               " ORDER BY rank LIMIT ?2 OFFSET ?3");
         st.bind(1, fts).bind(2, int64_t{limit}).bind(3, int64_t{offset});
         if (!collectionKey.empty()) st.bind(4, collectionKey);
@@ -1307,7 +1422,7 @@ void Library::rememberAnnotationTag(const std::string& tag) {
 std::vector<std::pair<std::string, int64_t>> Library::annotationTags(const std::string& attachmentKey) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT t.value, count(*) FROM annotations n, json_each(n.tags) t "
-                                          "WHERE n.deletedHere = 0") +
+                                          "WHERE n.deletedHere = 0") + shownLib("n.") +
                               (attachmentKey.empty() ? "" : " AND n.parentKey = ?") + " GROUP BY t.value ORDER BY 2 DESC, 1");
         if (!attachmentKey.empty()) st.bind(1, attachmentKey);
         std::vector<std::pair<std::string, int64_t>> out;
@@ -1319,7 +1434,7 @@ std::vector<std::pair<std::string, int64_t>> Library::annotationTags(const std::
 std::optional<ItemRow> Library::rowFor(const std::string& itemKey) {
     return guarded([&]() -> std::optional<ItemRow> {
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins + " WHERE i.key = ?" +
-                              notTrashed("i.key"));
+                              notTrashed("i.key") + shownLib("i."));
         st.bind(1, itemKey);
         auto rows = readRows(st, readTag());
         if (rows.empty()) return std::nullopt;
@@ -1513,9 +1628,10 @@ void Library::answerRemotePosition(const std::string& key, bool go, int64_t vers
     });
 }
 
-std::vector<ReadingPosition> Library::dirtyPositions() {
+std::vector<ReadingPosition> Library::dirtyPositions(int64_t lib) {
     return guarded([&] {
-        Stmt st = db_.prepare(std::string("SELECT ") + kPositionColumns + " FROM reading_positions WHERE dirty = 1");
+        Stmt st = db_.prepare(std::string("SELECT ") + kPositionColumns + " FROM reading_positions p WHERE dirty = 1" +
+                              inLib(lib, "coalesce((SELECT lib FROM attachments WHERE key = p.attachmentKey), 0)"));
         std::vector<ReadingPosition> out;
         while (st.step()) out.push_back(readPosition(st));
         return out;
@@ -1573,7 +1689,7 @@ std::vector<std::pair<std::string, int64_t>> Library::topTags(int n) {
     return guarded([&] {
         Stmt st = db_.prepare(
             "SELECT t.value, count(*) FROM items i, json_each(i.tags) t WHERE i.parentKey = ''" + notTrashed("i.key") +
-            " GROUP BY t.value ORDER BY 2 DESC, 1 LIMIT ?");
+            shownLib("i.") + " GROUP BY t.value ORDER BY 2 DESC, 1 LIMIT ?");
         st.bind(1, int64_t{n});
         std::vector<std::pair<std::string, int64_t>> out;
         while (st.step()) out.emplace_back(st.text(0), st.integer(1));
@@ -1587,17 +1703,18 @@ void markKept(std::vector<CollectionEntry>& entries, const std::vector<std::stri
 }
 }  // namespace
 
-std::vector<CollectionEntry> Library::childCollections(const std::string& parentKey) {
+std::vector<CollectionEntry> Library::childCollections(const std::string& parentKey, int64_t lib) {
     return guarded([&] {
         Stmt st = db_.prepare(
             "SELECT c.key, c.name, c.parentKey, c.version, "
             "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key" + notTrashed("ic.itemKey") + "), "
-            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
-            "FROM collections c WHERE c.parentKey = ? ORDER BY c.name COLLATE NOCASE");
+            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key), c.lib "
+            "FROM collections c WHERE c.parentKey = ?" + shownLib("c.") +
+            (lib == kAllLibraries ? std::string() : " AND c.lib = " + std::to_string(lib)) + " ORDER BY c.name COLLATE NOCASE");
         st.bind(1, parentKey);
         std::vector<CollectionEntry> out;
         while (st.step())
-            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3), st.integer(6)}, st.integer(4), st.integer(5) != 0});
         markKept(out, keptCollections());
         return out;
     });
@@ -1642,7 +1759,7 @@ void Library::setCollectionKept(const std::string& key, bool kept) {
 std::vector<ItemRow> Library::collectionFiles(const std::string& collectionKey) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kRowColumns + " FROM items i" + kRowJoins +
-                              " WHERE i.parentKey = ''" + notTrashed("i.key") +
+                              " WHERE i.parentKey = ''" + notTrashed("i.key") + shownLib("i.") +
                               " AND i.readableKey != '' AND i.key IN (SELECT itemKey FROM item_collections WHERE collectionKey IN ("
                               "WITH RECURSIVE sub(key) AS (SELECT ?1 UNION SELECT c.key FROM collections c JOIN sub ON c.parentKey = sub.key) "
                               "SELECT key FROM sub)) ORDER BY i.title COLLATE NOCASE, i.key");
@@ -1684,7 +1801,8 @@ std::vector<CollectionEntry> Library::collectionsTab() {
             out.push_back(std::move(p));
         }
     for (const auto& e : all)
-        if (e.collection.parentKey.empty() && std::find(pins.begin(), pins.end(), e.collection.key) == pins.end())
+        if (e.collection.parentKey.empty() && e.collection.lib == kMyLibrary &&
+            std::find(pins.begin(), pins.end(), e.collection.key) == pins.end())
             out.push_back(e);
     return out;
 }
@@ -1694,11 +1812,11 @@ std::vector<CollectionEntry> Library::allCollections() {
         Stmt st = db_.prepare(
             "SELECT c.key, c.name, c.parentKey, c.version, "
             "(SELECT count(*) FROM item_collections ic WHERE ic.collectionKey = c.key" + notTrashed("ic.itemKey") + "), "
-            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key) "
-            "FROM collections c ORDER BY c.name COLLATE NOCASE");
+            "EXISTS (SELECT 1 FROM collections d WHERE d.parentKey = c.key), c.lib "
+            "FROM collections c WHERE 1" + shownLib("c.") + " ORDER BY c.name COLLATE NOCASE");
         std::vector<CollectionEntry> out;
         while (st.step())
-            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3)}, st.integer(4), st.integer(5) != 0});
+            out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3), st.integer(6)}, st.integer(4), st.integer(5) != 0});
         markKept(out, keptCollections());
         return out;
     });
@@ -1706,7 +1824,10 @@ std::vector<CollectionEntry> Library::allCollections() {
 
 std::vector<ItemRow> Library::recentlyOpened(int limit) {
     std::vector<std::string> keys = guarded([&] {
-        Stmt st = db_.prepare("SELECT itemKey FROM reading_state WHERE openedMs > 0 ORDER BY openedMs DESC LIMIT ?");
+        Stmt st = db_.prepare(
+            "SELECT itemKey FROM reading_state WHERE openedMs > 0 AND coalesce((SELECT lib FROM items WHERE key = "
+            "reading_state.itemKey), 0) IN (SELECT 0 UNION SELECT id FROM libraries WHERE enabled = 1 AND gone = 0) "
+            "ORDER BY openedMs DESC LIMIT ?");
         st.bind(1, int64_t{limit});
         std::vector<std::string> out;
         while (st.step()) out.push_back(st.text(0));
@@ -1725,13 +1846,13 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std
         std::string cols;
         for (const char* c : {"key", "parentKey", "type", "text", "comment", "color", "pageLabel", "sortIndex", "position",
                               "tags", "version", "dirty", "conflict", "createdHere", "json", "dateModified", "deletedHere",
-                              "localOnly", "conflictOf"})
+                              "localOnly", "conflictOf", "lib", "authorId", "authorName"})
             cols += std::string(cols.empty() ? "" : ", ") + "n." + c;
         Stmt st = db_.prepare("SELECT " + cols +
                               ", coalesce(i.key, ''), coalesce(i.title, '') FROM annotations n "
                               "LEFT JOIN attachments a ON a.key = n.parentKey "
                               "LEFT JOIN items i ON i.key = CASE WHEN a.parentKey = '' THEN a.key ELSE a.parentKey END "
-                              "WHERE n.deletedHere = 0" +
+                              "WHERE n.deletedHere = 0" + shownLib("n.") +
                               (tag.empty() ? std::string() : std::string(" AND EXISTS (SELECT 1 FROM json_each(n.tags) WHERE value = ?4)")) +
                               (fts.empty() ? std::string(" ORDER BY n.dateModified DESC, n.key")
                                            : std::string(" AND n.rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?3) "
@@ -1744,8 +1865,8 @@ std::vector<NoteRow> Library::recentAnnotations(int offset, int limit, const std
         while (st.step()) {
             NoteRow row;
             row.annotation = readAnnotation(st);
-            row.itemKey = st.text(19);
-            row.itemTitle = st.text(20);
+            row.itemKey = st.text(22);
+            row.itemTitle = st.text(23);
             out.push_back(std::move(row));
         }
         return out;
@@ -1756,7 +1877,7 @@ int64_t Library::countAnnotations(const std::string& query, const std::string& t
     const std::string fts = ftsQuery(query);
     if (!query.empty() && fts.empty()) return 0;
     return guarded([&] {
-        Stmt st = db_.prepare(std::string("SELECT count(*) FROM annotations n WHERE deletedHere = 0") +
+        Stmt st = db_.prepare(std::string("SELECT count(*) FROM annotations n WHERE deletedHere = 0") + shownLib("n.") +
                               (fts.empty() ? "" : " AND rowid IN (SELECT rowid FROM note_fts WHERE note_fts MATCH ?1)") +
                               (tag.empty() ? "" : " AND EXISTS (SELECT 1 FROM json_each(n.tags) WHERE value = ?2)"));
         if (!fts.empty()) st.bind(1, fts);
@@ -1788,7 +1909,8 @@ std::optional<ReadingState> Library::lastOpened() {
     return guarded([&]() -> std::optional<ReadingState> {
         Stmt st = db_.prepare(
             "SELECT itemKey, attachmentKey, openedMs, progress, location FROM reading_state WHERE openedMs > 0 "
-            "ORDER BY openedMs DESC LIMIT 1");
+            "AND coalesce((SELECT lib FROM items WHERE key = reading_state.itemKey), 0) IN "
+            "(SELECT 0 UNION SELECT id FROM libraries WHERE enabled = 1 AND gone = 0) ORDER BY openedMs DESC LIMIT 1");
         if (!st.step()) return std::nullopt;
         return ReadingState{st.text(0), st.text(1), st.integer(2), st.real(3), st.text(4)};
     });
@@ -1826,10 +1948,11 @@ void Library::markRead(const std::string& itemKey, bool read) {
     });
 }
 
-std::vector<ReadMark> Library::readMarks() {
+std::vector<ReadMark> Library::readMarks(int64_t lib) {
     return guarded([&] {
         std::vector<ReadMark> out;
-        Stmt st = db_.prepare("SELECT itemKey, read, tag FROM read_marks ORDER BY itemKey");
+        Stmt st = db_.prepare("SELECT itemKey, read, tag FROM read_marks m WHERE 1" +
+                              inLib(lib, "coalesce((SELECT lib FROM items WHERE key = m.itemKey), 0)") + " ORDER BY itemKey");
         while (st.step()) out.push_back({st.text(0), st.integer(1) != 0, st.text(2)});
         return out;
     });
@@ -1916,10 +2039,10 @@ void Library::setFileState(const std::string& attachmentKey, AttachmentRecord::S
     });
 }
 
-std::vector<std::string> Library::filesOfManyFileItems() {
+std::vector<std::string> Library::filesOfManyFileItems(int64_t lib) {
     return guarded([&] {
         const std::string readable = readableFile();
-        Stmt st = db_.prepare("SELECT key FROM attachments WHERE " + readable + " AND parentKey IN (SELECT parentKey FROM "
+        Stmt st = db_.prepare("SELECT key FROM attachments WHERE " + readable + inLib(lib) + " AND parentKey IN (SELECT parentKey FROM "
                               "attachments WHERE parentKey != '' AND " + readable + " GROUP BY parentKey HAVING count(*) > 1) ORDER BY key");
         std::vector<std::string> out;
         while (st.step()) out.push_back(st.text(0));
@@ -1959,6 +2082,12 @@ bool isZoteroKey(const std::string& k) {
 std::string Library::createAnnotation(AnnotationRecord a) {
     do a.key = newLocalKey();
     while (annotation(a.key) || objectVersion(a.key) > 0);
+    // In its file's library; in a group, made by this user.
+    if (auto file = attachment(a.parentKey)) a.lib = file->lib;
+    if (a.lib != kMyLibrary) {
+        a.authorId = userId();
+        a.authorName = userName();
+    }
     a.version = 0;
     a.createdHere = true;
     a.dirty = true;
@@ -2014,10 +2143,10 @@ void Library::deleteAnnotation(const std::string& key) {
     upsertAnnotation(*a);
 }
 
-std::vector<AnnotationRecord> Library::pendingDeletions() {
+std::vector<AnnotationRecord> Library::pendingDeletions(int64_t lib) {
     return guarded([&] {
         Stmt st = db_.prepare(std::string("SELECT ") + kAnnotationColumns +
-                              " FROM annotations WHERE deletedHere = 1 ORDER BY key");
+                              " FROM annotations WHERE deletedHere = 1" + inLib(lib) + " ORDER BY key");
         return readAnnotations(st);
     });
 }
@@ -2052,6 +2181,279 @@ std::string Library::reapplyConflict(const std::string& key) {
     }
     tx.commit();
     return result;
+}
+
+// ---- Libraries -----------------------------------------------------------------------------
+
+namespace {
+constexpr const char* kLibraryColumns = "id, name, enabled, gone, canEdit, canEditFiles, "
+    "(SELECT count(*) FROM items i WHERE i.lib = libraries.id AND i.parentKey = ''";
+LibraryInfo readLibrary(const Stmt& st) {
+    LibraryInfo l;
+    l.id = st.integer(0);
+    l.name = st.text(1);
+    l.enabled = st.integer(2) != 0;
+    l.gone = st.integer(3) != 0;
+    l.canEdit = st.integer(4) != 0;
+    l.canEditFiles = st.integer(5) != 0;
+    l.items = st.integer(6);
+    return l;
+}
+}  // namespace
+
+std::vector<LibraryInfo> Library::libraries(bool includeHidden) {
+    return guarded([&] {
+        std::vector<LibraryInfo> out;
+        LibraryInfo mine;
+        mine.name = "My Library";
+        Stmt count = db_.prepare("SELECT count(*) FROM items i WHERE i.lib = 0 AND i.parentKey = ''" + notTrashed("i.key"));
+        count.step();
+        mine.items = count.integer(0);
+        out.push_back(mine);
+        Stmt st = db_.prepare(std::string("SELECT ") + kLibraryColumns + notTrashed("i.key") +
+                              ") FROM libraries WHERE id != 0" +
+                              (includeHidden ? "" : " AND enabled = 1 AND gone = 0") + " ORDER BY name COLLATE NOCASE, id");
+        while (st.step()) out.push_back(readLibrary(st));
+        return out;
+    });
+}
+
+std::optional<LibraryInfo> Library::libraryInfo(int64_t lib) {
+    for (auto& l : libraries(true))
+        if (l.id == lib) return l;
+    return std::nullopt;
+}
+
+std::string Library::libraryName(int64_t lib) {
+    if (lib == kMyLibrary) return "My Library";
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT name FROM libraries WHERE id = ?");
+        st.bind(1, lib);
+        return st.step() ? st.text(0) : std::string{};
+    });
+}
+
+std::vector<int64_t> Library::syncedGroups() {
+    return guarded([&] {
+        std::vector<int64_t> out;
+        Stmt st = db_.prepare("SELECT id FROM libraries WHERE id != 0 AND enabled = 1 AND gone = 0 "
+                              "ORDER BY name COLLATE NOCASE, id");
+        while (st.step()) out.push_back(st.integer(0));
+        return out;
+    });
+}
+
+void Library::setLibraryEnabled(int64_t lib, bool enabled) {
+    if (lib == kMyLibrary) return;
+    guarded([&] {
+        Stmt st = db_.prepare("UPDATE libraries SET enabled = ? WHERE id = ?");
+        st.bind(1, int64_t{enabled}).bind(2, lib).step();
+    });
+}
+
+bool Library::libraryEditable(int64_t lib) {
+    if (lib == kMyLibrary) return true;
+    return guarded([&] {
+        Stmt st = db_.prepare("SELECT canEdit AND enabled AND NOT gone FROM libraries WHERE id = ?");
+        st.bind(1, lib);
+        return st.step() && st.integer(0) != 0;
+    });
+}
+
+std::optional<int64_t> Library::libraryOf(const std::string& key) {
+    return guarded([&]() -> std::optional<int64_t> {
+        Stmt st = db_.prepare(
+            "SELECT lib FROM items WHERE key = ?1 UNION ALL SELECT lib FROM attachments WHERE key = ?1 "
+            "UNION ALL SELECT lib FROM annotations WHERE key = ?1 UNION ALL SELECT lib FROM notes WHERE key = ?1 "
+            "UNION ALL SELECT lib FROM collections WHERE key = ?1 LIMIT 1");
+        st.bind(1, key);
+        if (!st.step()) return std::nullopt;
+        return st.integer(0);
+    });
+}
+
+bool Library::annotationEditable(const AnnotationRecord& a) {
+    if (a.lib == kMyLibrary) return true;
+    if (!libraryEditable(a.lib)) return false;
+    if (a.createdHere || a.authorId == 0) return true;  // made here, or nobody's on record
+    const int64_t me = userId();
+    return me != 0 && a.authorId == me;
+}
+
+bool Library::annotationEditable(const std::string& key) {
+    auto a = annotation(key);
+    return a && annotationEditable(*a);
+}
+
+int64_t Library::userId() {
+    const std::string v = metaValue("zotero.userId");
+    try {
+        return v.empty() ? 0 : std::stoll(v);
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::string Library::userName() { return metaValue("zotero.userName"); }
+
+void Library::setUser(int64_t id, const std::string& name) {
+    guarded([&] {
+        if (meta("zotero.userId") != std::to_string(id)) setMeta("zotero.userId", std::to_string(id));
+        if (!name.empty() && meta("zotero.userName") != name) setMeta("zotero.userName", name);
+    });
+}
+
+GroupAccess Library::keyGroupAccess() {
+    const std::string v = metaValue("zotero.groupAccess");
+    return v == "none" ? GroupAccess::None : v == "some" ? GroupAccess::Some : v == "all" ? GroupAccess::All : GroupAccess::Unknown;
+}
+
+void Library::setKeyGroupAccess(GroupAccess a) {
+    setMetaValue("zotero.groupAccess", a == GroupAccess::None   ? "none"
+                                       : a == GroupAccess::Some ? "some"
+                                       : a == GroupAccess::All  ? "all"
+                                                                : "");
+}
+
+namespace {
+// canEdit: the key writes, and the group lets the user edit ("members": anyone; "admins": the owner
+// and admins). Files likewise by fileEditing ("none": nobody).
+constexpr const char* kRecomputeEditing =
+    "UPDATE libraries SET canEdit = (keyRead AND keyWrite AND (libraryEditing = 'members' OR "
+    "(libraryEditing = 'admins' AND admin))), canEditFiles = (keyRead AND keyWrite AND (fileEditing = 'members' OR "
+    "(fileEditing = 'admins' AND admin))) WHERE id = ?";
+}  // namespace
+
+void Library::upsertGroup(const GroupMeta& g) {
+    if (g.id <= 0) return;
+    guarded([&] {
+        atomically([&] {
+            Stmt st = db_.prepare(
+                "INSERT INTO libraries (id, name, groupVersion, owner, admin, libraryEditing, fileEditing) "
+                "VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(id) DO UPDATE SET name = ?2, groupVersion = ?3, "
+                "owner = ?4, admin = ?5, libraryEditing = ?6, fileEditing = ?7, gone = 0");
+            st.bind(1, g.id).bind(2, g.name).bind(3, g.version).bind(4, g.owner).bind(5, int64_t{g.admin});
+            st.bind(6, g.libraryEditing).bind(7, g.fileEditing).step();
+            Stmt re = db_.prepare(kRecomputeEditing);
+            re.bind(1, g.id).step();
+        });
+    });
+}
+
+int64_t Library::groupMetaVersion(int64_t lib) {
+    return guarded([&] { return groupColumn(lib, "groupVersion"); });
+}
+
+void Library::setGroupAccess(int64_t lib, bool read, bool write) {
+    guarded([&] {
+        Stmt st = db_.prepare("UPDATE libraries SET keyRead = ?, keyWrite = ? WHERE id = ?");
+        st.bind(1, int64_t{read}).bind(2, int64_t{write}).bind(3, lib).step();
+        Stmt re = db_.prepare(kRecomputeEditing);
+        re.bind(1, lib).step();
+    });
+}
+
+void Library::setGroupGone(int64_t lib, bool gone) {
+    guarded([&] {
+        Stmt st = db_.prepare("UPDATE libraries SET gone = ? WHERE id = ?");
+        st.bind(1, int64_t{gone}).bind(2, lib).step();
+    });
+}
+
+int Library::unsentIn(int64_t lib) {
+    int n = 0;
+    for (const auto& a : dirtyAnnotations(lib)) n += !a.conflict && !a.localOnly;
+    n += static_cast<int>(pendingDeletions(lib).size() + dirtyPositions(lib).size() +
+                          pendingPluginChanges("", lib).size());
+    // A read-only group's read marks stay on the Kindle anyway (a switched-off group's still count).
+    const bool canEdit = lib == kMyLibrary || guarded([&] { return groupColumn(lib, "canEdit") != 0; });
+    if (canEdit) n += static_cast<int>(readMarks(lib).size());
+    return n;
+}
+
+LibraryRemoval Library::libraryRemovalCheck(int64_t lib) {
+    LibraryRemoval r;
+    r.unsent = unsentIn(lib);
+    guarded([&] {
+        Stmt c = db_.prepare("SELECT count(*) FROM annotations WHERE conflict = 1 AND lib = ?");
+        c.bind(1, lib);
+        c.step();
+        r.conflicts = static_cast<int>(c.integer(0));
+        Stmt d = db_.prepare("SELECT count(*) FROM attachments WHERE state = ? AND lib = ?");
+        d.bind(1, static_cast<int64_t>(AttachmentRecord::State::Local)).bind(2, lib);
+        d.step();
+        r.downloaded = static_cast<int>(d.integer(0));
+    });
+    return r;
+}
+
+LibraryRemoval Library::removeLibraryData(int64_t lib, bool evenUnsent) {
+    LibraryRemoval r = libraryRemovalCheck(lib);
+    if (lib == kMyLibrary || lib <= 0) return r;
+    if (!evenUnsent && (r.unsent > 0 || r.conflicts > 0)) return r;
+    guarded([&] {
+        atomically([&] {
+            auto keysOf = [&](const char* table) {
+                std::vector<std::string> out;
+                Stmt st = db_.prepare(std::string("SELECT key FROM ") + table + " WHERE lib = ?");
+                st.bind(1, lib);
+                while (st.step()) out.push_back(st.text(0));
+                return out;
+            };
+            const auto items = keysOf("items"), attachments = keysOf("attachments"), annotations = keysOf("annotations"),
+                       notes = keysOf("notes"), collections = keysOf("collections");
+            // Pending plugin changes going there end (refused), putting the local copy back first.
+            for (const auto& c : pendingPluginChanges("", lib))
+                if (auto now = pluginChange(c.id); now && now->state == PluginChange::State::Pending)
+                    withdrawPluginChange(*now, PluginChange::State::Refused, "Its group library was removed from the Kindle.");
+            // Downloaded files, then the rows.
+            {
+                Stmt st = db_.prepare("SELECT key, localPath FROM attachments WHERE lib = ? AND localPath != ''");
+                st.bind(1, lib);
+                std::vector<std::pair<std::string, std::string>> copies;
+                while (st.step()) copies.emplace_back(st.text(0), st.text(1));
+                for (const auto& [k, path] : copies) deleteDownloadedCopy(k, path);
+            }
+            auto forKeys = [&](const std::vector<std::string>& keys, const char* sql) {
+                Stmt st = db_.prepare(sql);
+                for (const auto& k : keys) {
+                    st.bind(1, k).step();
+                    st.reset();
+                }
+            };
+            forKeys(items, "DELETE FROM item_fts WHERE rowid = (SELECT rowid FROM items WHERE key = ?)");
+            forKeys(items, "DELETE FROM item_collections WHERE itemKey = ?");
+            forKeys(items, "DELETE FROM reading_state WHERE itemKey = ?");
+            forKeys(items, "DELETE FROM read_marks WHERE itemKey = ?");
+            forKeys(attachments, "DELETE FROM file_reading WHERE attachmentKey = ?");
+            forKeys(attachments, "DELETE FROM reading_positions WHERE attachmentKey = ?");
+            forKeys(attachments, "DELETE FROM tracked_attachments WHERE key = ?");
+            forKeys(attachments, "DELETE FROM meta WHERE key = 'bookmarks:' || ?");
+            forKeys(collections, "DELETE FROM item_collections WHERE collectionKey = ?");
+            for (const auto* keys : {&items, &attachments, &annotations, &notes, &collections})
+                forKeys(*keys, "DELETE FROM object_versions WHERE key = ?");
+            for (const char* table : {"items", "attachments", "annotations", "notes", "collections"}) {
+                Stmt st = db_.prepare(std::string("DELETE FROM ") + table + " WHERE lib = ?");
+                st.bind(1, lib).step();
+            }
+            for (const char* listKey : {"pinnedCollections", "keptCollections"}) {
+                std::vector<std::string> keep;
+                for (const auto& k : strings(meta(listKey)))
+                    if (std::find(collections.begin(), collections.end(), k) == collections.end()) keep.push_back(k);
+                if (!meta(listKey).empty()) setMeta(listKey, json(keep).dump());
+            }
+            // Gone: forgotten. Off: kept, off, to download afresh if switched on again.
+            Stmt gone = db_.prepare("DELETE FROM libraries WHERE id = ? AND gone = 1");
+            gone.bind(1, lib).step();
+            Stmt reset = db_.prepare(
+                "UPDATE libraries SET libraryVersion = 0, settingsVersion = 0, annotationsVersion = 0, "
+                "notesBackfill = 0, attachmentTitlesBackfill = 0 WHERE id = ?");
+            reset.bind(1, lib).step();
+            for (const auto& k : items) pending_.erase(k);
+        });
+    });
+    r.removed = true;
+    return r;
 }
 
 // ---- Plugin changes ------------------------------------------------------------------------
@@ -2227,11 +2629,6 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
             if (why) *why = reason;
         };
         atomically([&] {
-            auto exists = [&](const char* table, const std::string& key) {
-                Stmt st = db_.prepare(std::string("SELECT 1 FROM ") + table + " WHERE key = ?");
-                st.bind(1, key);
-                return st.step();
-            };
             auto trashPending = [&](const std::string& key) {
                 Stmt st = db_.prepare("SELECT 1 FROM plugin_changes WHERE itemKey = ? AND kind = 'trash' AND state = 'pending'");
                 st.bind(1, key);
@@ -2239,6 +2636,13 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
             };
             const bool pending = c.state == PluginChange::State::Pending;
             std::optional<ItemRecord> created;
+            int64_t targetLib = kMyLibrary;  // the library the change goes to
+            auto libOf = [&](const char* table, const std::string& key) -> std::optional<int64_t> {
+                Stmt st = db_.prepare(std::string("SELECT lib FROM ") + table + " WHERE key = ?");
+                st.bind(1, key);
+                if (!st.step()) return std::nullopt;
+                return st.integer(0);
+            };
             if (pending) {
                 c.dependsOn.clear();
                 const std::string target = c.kind == K::AddNote ? c.parentKey : c.itemKey;
@@ -2249,8 +2653,13 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                         json v = json::parse(c.value, nullptr, false);
                         if (!v.is_object()) return refuse("the item's fields are not JSON");
                         const auto collections = uniqueStrings(v, "collections"), tags = uniqueStrings(v, "tags");
-                        for (const auto& k : collections)
-                            if (!exists("collections", k)) return refuse("no collection " + k);
+                        for (size_t i = 0; i < collections.size(); ++i) {
+                            auto in = libOf("collections", collections[i]);
+                            if (!in) return refuse("no collection " + collections[i]);
+                            if (i == 0) targetLib = *in;  // a new item goes to its collections' library
+                            else if (*in != targetLib)
+                                return refuse("the collections are in different libraries; an item can only go to one");
+                        }
                         auto data = zoteroDataOf(v.contains("fields") ? v["fields"] : json(), collections, tags);
                         if (!data) return refuse("an item needs a type and a title");
                         const json& f = v["fields"];
@@ -2267,6 +2676,7 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                         r.tags = tags;
                         r.dateAdded = r.dateModified = nowUtc();
                         r.json = data->dump();
+                        r.lib = targetLib;
                         created = std::move(r);
                         break;
                     }
@@ -2276,22 +2686,41 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                         if (!st.step()) return refuse("no item " + c.parentKey);
                         if (!st.text(0).empty() || st.text(1) == "attachment" || st.text(1) == "note")
                             return refuse("a note can only go on a regular item, not " + c.parentKey);
+                        targetLib = *libOf("items", c.parentKey);
                         c.itemKey = freshKey();
                         break;
                     }
-                    case K::DeleteNote:
-                        if (!exists("notes", c.itemKey)) return refuse("no note " + c.itemKey);
+                    case K::DeleteNote: {
+                        auto in = libOf("notes", c.itemKey);
+                        if (!in) return refuse("no note " + c.itemKey);
+                        targetLib = *in;
                         break;
-                    case K::Trash:
-                        if (!exists("items", c.itemKey)) return refuse("no item " + c.itemKey);
+                    }
+                    case K::Trash: {
+                        auto in = libOf("items", c.itemKey);
+                        if (!in) return refuse("no item " + c.itemKey);
+                        targetLib = *in;
                         break;
-                    default:  // a tag or collection
+                    }
+                    default: {  // a tag or collection
                         if (c.value.empty())
                             return refuse(c.kind == K::AddTag || c.kind == K::RemoveTag ? "an empty tag" : "no collection given");
-                        if (!exists("items", c.itemKey)) return refuse("no item " + c.itemKey);
-                        if (c.kind == K::AddToCollection && !exists("collections", c.value))
-                            return refuse("no collection " + c.value);
+                        auto in = libOf("items", c.itemKey);
+                        if (!in) return refuse("no item " + c.itemKey);
+                        targetLib = *in;
+                        if (c.kind == K::AddToCollection) {
+                            auto coll = libOf("collections", c.value);
+                            if (!coll) return refuse("no collection " + c.value);
+                            if (*coll != targetLib)
+                                return refuse("collection " + c.value + " is in another library than item " + c.itemKey);
+                        }
                         break;
+                    }
+                }
+                if (targetLib != kMyLibrary && !libraryEditable(targetLib)) {
+                    const std::string name = libraryName(targetLib);
+                    return refuse("the group library" + (name.empty() ? std::string() : " \"" + name + "\"") +
+                                  " is read-only here");
                 }
                 // Targets what a pending change creates: sent after it, withdrawn with it.
                 Stmt dep = db_.prepare(
@@ -2321,6 +2750,7 @@ std::string Library::queuePluginChange(PluginChange c, std::string* why) {
                         n.json = json{{"itemType", "note"}, {"parentItem", c.parentKey}, {"note", c.value}}.dump();
                         n.dateModified = nowUtc();
                         n.createdBy = c.pluginId;
+                        n.lib = targetLib;
                         upsertNote(n);
                         break;
                     }
@@ -2405,13 +2835,16 @@ bool Library::cancelPluginChange(const std::string& pluginId, const std::string&
     });
 }
 
-std::vector<PluginChange> Library::pendingPluginChanges(const std::string& pluginId) {
+std::vector<PluginChange> Library::pendingPluginChanges(const std::string& pluginId, int64_t lib) {
     return guarded([&] {
         std::vector<PluginChange> all;
         Stmt st = db_.prepare(std::string("SELECT ") + kChangeColumns + " FROM plugin_changes WHERE state = 'pending'" +
                               (pluginId.empty() ? "" : " AND pluginId = ?") + " ORDER BY seq");
         if (!pluginId.empty()) st.bind(1, pluginId);
-        while (st.step()) all.push_back(readChange(st));
+        while (st.step()) {
+            PluginChange c = readChange(st);
+            if (lib == kAllLibraries || c.lib == lib) all.push_back(std::move(c));
+        }
         // Creation order already puts a change after what it depends on (that existed first);
         // kept so explicitly, should a dependency ever be queued later.
         std::vector<PluginChange> out;
