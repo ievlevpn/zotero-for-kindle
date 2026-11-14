@@ -22,7 +22,7 @@ using nlohmann::json;
 namespace {
 
 constexpr int kPad = 40, kTitleH = 90, kGroupH = 170, kGroupLabelH = 56, kChipH = 80, kButtonH = 100, kButtonW = 260;
-constexpr int kOptionH = 100;
+constexpr int kOptionH = 100, kChipRowGap = 16;
 constexpr int kCellH = 100, kCellMinH = 80, kCellGap = 14, kCellMinW = 110, kJumpLabelH = 56, kGroupGap = 16, kSheetPagerH = 56;
 const TextStyle kSheetTitle{kSans, 11, 700}, kGroupLabel{kSans, 7.5, 400, false, kSecondary}, kCell{kSans, 9.5, 700};
 
@@ -222,13 +222,35 @@ Rect sheetRectIn(Rect area, int height) {
 // ---- Filter --------------------------------------------------------------------------------
 
 Rect FilterSheet::sheetRect(Rect area) const {
-    return sheetRectIn(area, kPad + kTitleH + groups() * kGroupH + 20 + kButtonH + kPad);
+    return sheetRectIn(area, kPad + kTitleH + groups() * kGroupH + libraryExtraH(area) + 20 + kButtonH + kPad);
 }
 
 Rect FilterSheet::chipsArea(Rect area, int group) const {
     const Rect s = sheetRect(area);
-    const int row = group + (hasLibraries() ? 1 : 0);  // the Library group first
-    return {s.x + kMargin, s.y + kPad + kTitleH + row * kGroupH + kGroupLabelH, s.w - 2 * kMargin, kChipH};
+    const int row = group + (hasLibraries() ? 1 : 0);  // the Library group first, with its extra rows
+    const int extra = group >= 0 ? libraryExtraH(area) : 0;
+    return {s.x + kMargin, s.y + kPad + kTitleH + row * kGroupH + extra + kGroupLabelH, s.w - 2 * kMargin, kChipH};
+}
+
+std::vector<std::vector<size_t>> FilterSheet::libraryRows(Rect area) const {
+    std::vector<std::vector<size_t>> rows;
+    const auto labels = libraryLabels();
+    const Rect row{area.x + kMargin, 0, area.w - 2 * kMargin, kChipH};  // the sheet is as wide as the area
+    // As many rows as the area has room for beside the rest of the sheet (3 at most).
+    const int rest = kPad + kTitleH + groups() * kGroupH + 20 + kButtonH + kPad;
+    const size_t most = static_cast<size_t>(std::clamp(1 + (area.h - rest) / (kChipH + kChipRowGap), 1, 3));
+    for (size_t at = 0; at < labels.size() && rows.size() < most;) {
+        const size_t n = std::max<size_t>(1, chipRects(row, {labels.begin() + static_cast<long>(at), labels.end()}).size());
+        rows.emplace_back();
+        for (size_t i = at; i < std::min(labels.size(), at + n); ++i) rows.back().push_back(i);
+        at += n;
+    }
+    return rows;
+}
+
+int FilterSheet::libraryExtraH(Rect area) const {
+    if (!hasLibraries()) return 0;
+    return static_cast<int>(libraryRows(area).size() - 1) * (kChipH + kChipRowGap);
 }
 
 std::vector<std::string> FilterSheet::libraryLabels() const {
@@ -240,7 +262,16 @@ std::vector<std::string> FilterSheet::libraryLabels() const {
 
 std::vector<Rect> FilterSheet::libraryRects(Rect area) const {
     if (!hasLibraries()) return {};
-    return chipRects(chipsArea(area, -1), libraryLabels());
+    const auto labels = libraryLabels();
+    std::vector<Rect> out;
+    Rect row = chipsArea(area, -1);
+    for (const auto& indices : libraryRows(area)) {
+        std::vector<std::string> these;
+        for (size_t i : indices) these.push_back(labels[i]);
+        for (const Rect& r : chipRects(row, these)) out.push_back(r);
+        row.y += kChipH + kChipRowGap;
+    }
+    return out;
 }
 
 std::vector<std::string> FilterSheet::tagLabels() const {
@@ -272,10 +303,21 @@ void FilterSheet::draw(cairo_t* cr, Rect area) const {
         drawText(cr, names[g + 1], kGroupLabel, {chips.x, chips.y - kGroupLabelH, chips.w, kGroupLabelH - 6}, 1);
     }
     if (hasLibraries()) {
-        int active = 0;
+        size_t active = 0;
         for (size_t i = 0; i < libraries_.size(); ++i)
-            if (libraries_[i].id == draft_.lib) active = static_cast<int>(i) + 1;
-        drawChips(cr, chipsArea(area, -1), libraryLabels(), active);
+            if (libraries_[i].id == draft_.lib) active = i + 1;
+        const auto labels = libraryLabels();
+        Rect row = chipsArea(area, -1);
+        for (const auto& indices : libraryRows(area)) {  // a row per what fits
+            std::vector<std::string> these;
+            int on = -1;
+            for (size_t i : indices) {
+                if (i == active) on = static_cast<int>(these.size());
+                these.push_back(labels[i]);
+            }
+            drawChips(cr, row, these, on);
+            row.y += kChipH + kChipRowGap;
+        }
     }
     const int type = static_cast<int>(std::find(std::begin(kTypes), std::end(kTypes), draft_.type) - std::begin(kTypes));
     const int read = static_cast<int>(std::find(std::begin(kReads), std::end(kReads), draft_.read) - std::begin(kReads));

@@ -173,6 +173,15 @@ TEST_CASE("group UI: Collections lists the shown groups under a heading; a group
     CHECK(rig.nav.syncFake.keptRuns == 1);
 }
 
+TEST_CASE("group UI: a group's collection pinned to the top says which group it is in") {
+    Rig rig;
+    rig.lib.setCollectionPinned("LABCOLL1", true);
+    CollectionsScreen screen(nullptr);
+    screen.onShow(rig.nav);
+    REQUIRE(screen.entries().front().collection.key == "LABCOLL1");
+    CHECK(screen.rowNote(0) == "in Lab");
+}
+
 TEST_CASE("group UI: a switched-off group leaves the Collections tab") {
     Rig rig;
     rig.lib.setLibraryEnabled(kReaders, false);
@@ -209,6 +218,26 @@ TEST_CASE("group UI: the Filter sheet has a Library group only when there are gr
     // Type and the rest still answer below it.
     CHECK(sheet.onGesture(tapAt(sheet.typeRects(area)[2].center()), area) == FilterSheet::Action::Changed);
     CHECK(sheet.draft().type == TypeFilter::Pdf);
+}
+
+TEST_CASE("group UI: the Library chips wrap onto a second row where one is too narrow (KT4)") {
+    ScopedMetrics kt4(kKt4);
+    std::vector<LibraryInfo> libs(3);
+    libs[0].name = "My Library";
+    libs[1].id = 1;
+    libs[1].name = "Economics seminar";
+    libs[2].id = 2;
+    libs[2].name = "Reading group";
+    const Rect area = LibraryScreen::sheetArea();
+    FilterSheet sheet(LibraryView{}, libs);
+    const auto rects = sheet.libraryRects(area);
+    REQUIRE(rects.size() == 4);  // every group can be chosen
+    CHECK(rects[3].y > rects[0].y);
+    CHECK(sheet.typeRects(area)[0].y > rects[3].y + rects[3].h);
+    CHECK(sheet.sheetRect(area).h <= area.h);
+    CHECK(sheet.doneRect(area).y > sheet.tagRects(area)[0].y + sheet.tagRects(area)[0].h);
+    CHECK(sheet.onGesture(tapAt(rects[3].center()), area) == FilterSheet::Action::Changed);
+    CHECK(sheet.draft().lib == 2);
 }
 
 TEST_CASE("group UI: the Library filter names the library, is remembered, and falls back when the group goes") {

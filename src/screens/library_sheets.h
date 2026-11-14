@@ -79,7 +79,7 @@ public:
     Rect sheetRect(Rect area) const;
     bool hasLibraries() const { return !libraries_.empty(); }
     std::vector<std::string> libraryLabels() const;   // All · My Library · the groups (names shortened)
-    std::vector<Rect> libraryRects(Rect area) const;  // the same; none without groups
+    std::vector<Rect> libraryRects(Rect area) const;  // the same (on as many rows as they need); none without groups
     std::vector<Rect> typeRects(Rect area) const;  // Any · With a file · PDF · EPUB
     std::vector<Rect> readRects(Rect area) const;  // Any · Unread · Read
     std::vector<Rect> tagRects(Rect area) const;   // None · the tag (or "Choose a tag…")
@@ -87,7 +87,11 @@ public:
     Rect doneRect(Rect area) const;
 
 private:
-    Rect chipsArea(Rect area, int group) const;  // 0 Type, 1 Read, 2 Tag, -1 Library
+    Rect chipsArea(Rect area, int group) const;  // 0 Type, 1 Read, 2 Tag, -1 Library (its first row)
+    // The Library chips' rows: the labels' indices on each (as many as fit a row; as many rows as the
+    // area has room for, 3 at most).
+    std::vector<std::vector<size_t>> libraryRows(Rect area) const;
+    int libraryExtraH(Rect area) const;  // what rows after the first add to the sheet
     int groups() const { return hasLibraries() ? 4 : 3; }
     std::vector<std::string> tagLabels() const;
     LibraryView draft_;

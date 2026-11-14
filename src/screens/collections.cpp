@@ -140,7 +140,11 @@ void CollectionsScreen::loadKept(Nav& nav) { kept_ = keptStatuses(all_, nav); }
 
 std::string CollectionsScreen::rowNote(size_t i) const {
     const auto& e = entries_.at(i);
-    return joinNotes(e.parentName.empty() ? "" : "in " + e.parentName, keptNote(statusOf(kept_, e.collection.key)));
+    std::string where = e.parentName;
+    if (where.empty() && e.collection.lib != kMyLibrary)  // a group's pinned top-level collection: its group
+        for (const auto& g : groups_)
+            if (g.id == e.collection.lib) where = g.name;
+    return joinNotes(where.empty() ? "" : "in " + where, keptNote(statusOf(kept_, e.collection.key)));
 }
 
 Rect CollectionsScreen::searchRect() { return {W() - kMargin - 100, 20, 100, 100}; }
