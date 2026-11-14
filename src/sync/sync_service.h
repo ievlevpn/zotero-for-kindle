@@ -55,6 +55,7 @@ public:
     void stop();
 
     void syncNow() override;
+    uint64_t syncNowTracked() override;
     void pushSoon() override;
     void syncWhenOnline() override;
     void openBook(const std::string& itemKey, const std::string& attachmentKey) override;
@@ -65,22 +66,28 @@ public:
     bool busy() const override { return busy_; }
     void downloadKept() override;
     std::optional<KeptStatus> keptStatus(const std::string& collectionKey) const override;
+    void removeLibrary(int64_t lib, bool evenUnsent) override;
 
 private:
     struct Command {
         // KeepDownloads: one file of the kept collections, then itself again (flag: a fresh start).
-        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push, KeepDownloads } kind;
+        enum class Kind { Sync, SyncWhenOnline, OpenBook, SetAllOffline, RemoveDownloads, Push, KeepDownloads, RemoveLibrary } kind;
         std::string itemKey, attachmentKey;
         bool flag = false;
+        int64_t lib = 0;  // RemoveLibrary's (flag: even with unsent changes)
+        uint64_t request = 0;  // syncNowTracked(), removeLibrary(): told back on SyncStarted/SyncFinished
     };
     struct Worker;
 
-    void enqueue(Command);
+    uint64_t enqueue(Command);  // the request id of the command that will run it (0: none)
     void run();
     void emit(SyncEvent);
     bool sleepFor(int seconds);  // false when stopping
     bool sleepForMs(int ms);
-    void pushChanges(Worker&);  // PushStarted/PushFinished around SyncEngine::push, if anything is unsent
+    // PushStarted/PushFinished around SyncEngine::push, if anything is unsent; first the refusal of
+    // plugin changes no group can take. Returns the merged report (groups' errors scoped to them);
+    // `passed` gains the groups pushed to.
+    SyncReport pushChanges(Worker&, std::vector<int64_t>* passed = nullptr);
     // The file into filesDir (DownloadProgress on the way) and marked Local; false with *err if not.
     // onTotal: once, when the size is known.
     bool download(Worker&, const std::string& itemKey, const AttachmentRecord&, UserError* err,
@@ -102,6 +109,7 @@ private:
     std::map<std::string, KeptStatus> kept_;  // guarded by mutex_: collections catching up
     // Guarded by mutex_: a kept file is downloading; openBook() cancels it (yield), as it goes first.
     bool keptRunning_ = false, keptYield_ = false;
+    uint64_t nextRequest_ = 0;  // guarded by mutex_
 };
 
 }  // namespace zk

@@ -444,3 +444,139 @@ TEST_CASE("guard: a plugin PATCH or DELETE against another version than the libr
     CHECK(rig.inner.sent.empty());
     CHECK_FALSE(blocked(rig.send("PATCH", "items/BOOK0002", R"({"deleted":1})", true, "7")));
 }
+
+// ---- Group libraries: /groups/<id>/ under the same rules, for that library's objects only ----
+
+namespace {
+
+// My Library: ANNO0001, ATTKEY01, BOOK0001, COLLMINE. Group 4242 (editable): ANNOGRP1, ATTGRP01,
+// BOOKGRP1 (a read mark pending), COLLGRP1, and ANNOOTH1 (another member's annotation). Group 777
+// (read-only): ANNORO01, ATTRO001.
+struct GroupRig {
+    FakeHttp inner;
+    std::map<std::string, int64_t> libs{{"ANNO0001", 0},    {"ATTKEY01", 0},    {"BOOK0001", 0},    {"COLLMINE", 0},
+                                        {"ANNOGRP1", 4242}, {"ATTGRP01", 4242}, {"BOOKGRP1", 4242}, {"COLLGRP1", 4242},
+                                        {"ANNORO01", 777},  {"ATTRO001", 777},  {"ANNOOTH1", 4242}};
+    bool setLibraries = true;
+    WriteGuard guard{inner, [](const std::string& k) { return k.rfind("ANNO", 0) == 0; },
+                     [](const std::string& k) { return k.rfind("ATT", 0) == 0; },
+                     [](const std::string& k) -> std::optional<std::vector<std::string>> {
+                         if (k.rfind("BOOK", 0) == 0) return std::vector<std::string>{"birds"};
+                         return std::nullopt;
+                     },
+                     [](const std::string& k) -> std::optional<PluginChangeShape> {
+                         if (k.rfind("BOOK", 0) != 0) return std::nullopt;
+                         PluginChangeShape s;
+                         s.item = true;
+                         s.version = 7;
+                         s.readMarks = {{"read", true}};
+                         return s;
+                     }};
+    GroupRig() {
+        guard.setLibraries(
+            [this](const std::string& k) -> std::optional<int64_t> {
+                auto it = libs.find(k);
+                if (it == libs.end()) return std::nullopt;
+                return it->second;
+            },
+            [](int64_t g) { return g == 4242; }, [](const std::string& k) { return k != "ANNOOTH1"; });
+    }
+    bool allowed(const std::string& method, const std::string& path, const std::string& body = "") {
+        HttpRequest r;
+        r.method = method;
+        r.url = "https://api.zotero.org" + path;
+        r.body = body;
+        r.headers = {{"If-Unmodified-Since-Version", "7"}};
+        inner.expect(method, r.url, FakeHttp::status(method == "POST" ? 200 : 204));
+        HttpResponse out = guard.send(r);
+        if (blocked(out)) inner.queue.clear();
+        return !blocked(out);
+    }
+};
+
+}  // namespace
+
+TEST_CASE("guard: a group's annotations go to /groups/<id>/ as My Library's go to /users/<id>/") {
+    GroupRig rig;
+    CHECK(rig.allowed("DELETE", "/groups/4242/items/ANNOGRP1"));
+    CHECK(rig.allowed("DELETE", "/groups/4242/items?itemKey=ANNOGRP1"));
+    CHECK(rig.allowed("PATCH", "/groups/4242/items/ANNOGRP1", R"({"annotationColor":"#ff0000"})"));
+    CHECK(rig.allowed("POST", "/groups/4242/items",
+                      R"([{"itemType":"annotation","key":"ANNOGRP1","parentItem":"ATTGRP01","annotationType":"highlight"}])"));
+    CHECK(rig.allowed("PATCH", "/groups/4242/items/BOOKGRP1", R"({"tags":[{"tag":"birds"},{"tag":"read"}]})"));
+    // My Library's still go to the user's.
+    CHECK(rig.allowed("DELETE", "/users/1/items/ANNO0001"));
+    CHECK(rig.allowed("PATCH", "/users/1/items/BOOK0001", R"({"tags":[{"tag":"birds"},{"tag":"read"}]})"));
+}
+
+TEST_CASE("guard: an object is only written to its own library's path") {
+    GroupRig rig;
+    CHECK_FALSE(rig.allowed("DELETE", "/users/1/items/ANNOGRP1"));  // a group's, sent to the user's library
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/4242/items/ANNO0001"));  // the user's, sent to a group
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/4242/items?itemKey=ANNOGRP1,ANNO0001"));
+    CHECK_FALSE(rig.allowed("PATCH", "/users/1/items/BOOKGRP1", R"({"tags":[{"tag":"birds"},{"tag":"read"}]})"));
+    CHECK_FALSE(rig.allowed("POST", "/groups/4242/items", R"([{"itemType":"annotation","key":"ANNO0001","parentItem":"ATTGRP01"}])"));
+    // A new annotation (no key yet) on a file of another library.
+    CHECK_FALSE(rig.allowed("POST", "/groups/4242/items", R"([{"itemType":"annotation","parentItem":"ATTKEY01"}])"));
+    CHECK_FALSE(rig.allowed("POST", "/users/1/items", R"([{"itemType":"annotation","parentItem":"ATTGRP01"}])"));
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/9999/items/ANNOGRP1"));  // an unknown group
+    CHECK(rig.inner.sent.empty());
+}
+
+TEST_CASE("guard: nothing is written to a group the Kindle can't edit, or without a library lookup") {
+    GroupRig rig;
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/777/items/ANNORO01"));
+    CHECK_FALSE(rig.allowed("POST", "/groups/777/items", R"([{"itemType":"annotation","parentItem":"ATTRO001"}])"));
+    CHECK_FALSE(rig.allowed("POST", "/groups/777/settings", R"({"lastPageIndex_g777_ATTRO001":{"value":5,"version":3}})"));
+    CHECK_FALSE(rig.allowed("POST", "/groups/4242/settings", R"({"lastPageIndex_g4242_ATTGRP01":{"value":5,"version":3}})"));
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/4242/collections/COLLGRP1"));
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/4242"));
+    CHECK_FALSE(rig.allowed("POST", "/groups", "{}"));
+    // A guard that was never told about libraries lets no group write out.
+    FakeHttp inner;
+    WriteGuard plain{inner, [](const std::string&) { return true; }};
+    HttpRequest r;
+    r.method = "DELETE";
+    r.url = "https://api.zotero.org/groups/4242/items/ANNOGRP1";
+    CHECK(blocked(plain.send(r)));
+    CHECK(rig.inner.sent.empty());
+}
+
+TEST_CASE("guard: a group file's reading position is the user's setting lastPageIndex_g<id>_<key>") {
+    GroupRig rig;
+    CHECK(rig.allowed("POST", "/users/1/settings",
+                      R"({"lastPageIndex_u_ATTKEY01":{"value":5,"version":3},"lastPageIndex_g4242_ATTGRP01":{"value":"/6/2","version":0}})"));
+    // Read-only groups too: the position is the user's own setting, as Zotero desktop writes it.
+    CHECK(rig.allowed("POST", "/users/1/settings", R"({"lastPageIndex_g777_ATTRO001":{"value":5,"version":3}})"));
+    CHECK_FALSE(rig.allowed("POST", "/users/1/settings", R"({"lastPageIndex_g777_ATTGRP01":{"value":5,"version":3}})"));  // wrong group
+    CHECK_FALSE(rig.allowed("POST", "/users/1/settings", R"({"lastPageIndex_u_ATTGRP01":{"value":5,"version":3}})"));
+    CHECK_FALSE(rig.allowed("POST", "/users/1/settings", R"({"lastPageIndex_g4242_ATTKEY01":{"value":5,"version":3}})"));
+    CHECK_FALSE(rig.allowed("POST", "/users/1/settings", R"({"lastPageIndex_g0_ATTKEY01":{"value":5,"version":3}})"));
+    CHECK_FALSE(rig.allowed("POST", "/users/1/settings", R"({"lastPageIndex_g4242_ATTGRP01":{"value":5}})"));  // no version
+    CHECK_FALSE(rig.allowed("POST", "/users/1/settings", R"({"lastRead_g4242_ATTGRP01":{"value":5,"version":3}})"));
+    CHECK(rig.inner.sent.size() == 2);
+}
+
+TEST_CASE("guard: in a group only the user's own annotations are edited or deleted, never another member's") {
+    GroupRig rig;
+    // The user's own: allowed.
+    CHECK(rig.allowed("PATCH", "/groups/4242/items/ANNOGRP1", R"({"annotationColor":"#ff0000"})"));
+    CHECK(rig.allowed("DELETE", "/groups/4242/items/ANNOGRP1"));
+    // Another member's: refused, whichever way it would go.
+    CHECK_FALSE(rig.allowed("PATCH", "/groups/4242/items/ANNOOTH1", R"({"annotationColor":"#ff0000"})"));
+    CHECK_FALSE(rig.allowed("PUT", "/groups/4242/items/ANNOOTH1", R"({"annotationColor":"#ff0000"})"));
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/4242/items/ANNOOTH1"));
+    CHECK_FALSE(rig.allowed("DELETE", "/groups/4242/items?itemKey=ANNOGRP1,ANNOOTH1"));
+    CHECK_FALSE(rig.allowed("POST", "/groups/4242/items",
+                            R"([{"itemType":"annotation","key":"ANNOOTH1","parentItem":"ATTGRP01","annotationType":"highlight"}])"));
+    CHECK(rig.inner.sent.size() == 2);
+    // A guard told about libraries but not about authorship writes no group annotation at all.
+    FakeHttp inner;
+    WriteGuard bare{inner, [](const std::string&) { return true; }};
+    bare.setLibraries([](const std::string&) -> std::optional<int64_t> { return 4242; }, [](int64_t) { return true; });
+    HttpRequest r;
+    r.method = "DELETE";
+    r.url = "https://api.zotero.org/groups/4242/items/ANNOGRP1";
+    r.headers = {{"If-Unmodified-Since-Version", "7"}};
+    CHECK(blocked(bare.send(r)));
+}

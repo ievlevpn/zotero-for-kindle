@@ -19,6 +19,8 @@ empty are `null`; lists are empty arrays.
 | <a id="extra"></a> `extra` | `string` \| `null` | Zotero's *Extra* field. |
 | <a id="isbn"></a> `isbn` | `string` \| `null` | - |
 | <a id="key"></a> `key` | `string` | Zotero's key, e.g. `"ABCD2345"`. |
+| <a id="libraryid"></a> `libraryId` | `number` | Its library: 0 My Library, else the Zotero group's id. Needs app 0.8.0. |
+| <a id="libraryname"></a> `libraryName` | `string` | Its library's name: `"My Library"` or the group's name. Needs app 0.8.0. |
 | <a id="publication"></a> `publication` | `string` \| `null` | Journal, book, proceedings or website title. |
 | <a id="read"></a> `read` | `boolean` | Whether it is marked read. |
 | <a id="tags"></a> `tags` | `string`[] | Tag names. |

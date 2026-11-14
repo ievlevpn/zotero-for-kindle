@@ -29,6 +29,7 @@ public:
         bool header = false;  // the item's title above its notes
         std::string itemKey, itemTitle;
         NoteRow note;
+        std::string author;  // another member's (a group's annotation): "by Anna" under the comment
     };
 
     void draw(Canvas&) override;

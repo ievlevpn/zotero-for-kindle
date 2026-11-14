@@ -317,7 +317,21 @@ Rect ReaderScreen::footerArea() { return {0, H() - kFooterH, W(), kFooterH}; }
 
 bool ReaderScreen::wantsKeyboard() const { return note_.has_value() || (editor_ && editor_->wantsKeyboard()); }
 
+void ReaderScreen::readLibrary(Nav& nav) {
+    const auto att = nav.library().attachment(row_.attachmentKey);
+    const int64_t lib = att ? att->lib : row_.lib;
+    readOnly_ = lib != kMyLibrary && !nav.library().libraryEditable(lib);
+}
+
+bool ReaderScreen::refuseReadOnly(Nav& nav, bool always) {
+    if (!readOnly_) return false;
+    if (always || !readOnlyTold_) nav.toast(std::string(kReadOnlyGroup) + ".");
+    readOnlyTold_ = true;
+    return true;
+}
+
 void ReaderScreen::onShow(Nav& nav) {
+    readLibrary(nav);
     if (worker_) {  // back from a pushed panel: the book stays open (its notes may have changed)
         refreshHighlights(nav);
         return;
@@ -839,7 +853,7 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
     for (const auto& h : highlights_)
         if (h.annotationKey == key) anchor = anchor.united(h.rect);
     linkId_ = 0;
-    editor_ = std::make_unique<AnnotationEditor>(*a, anchor, recentChips(nav.library()));
+    editor_ = std::make_unique<AnnotationEditor>(*a, anchor, recentChips(nav.library()), annotationReadOnly(nav.library(), *a));
     nav.damage(editor_->rect(), Waveform::Ui);
     if (a->type == "image")  // its frame turns to ink while selected
         for (const Rect& r : frameEdges(anchor, 3)) nav.damage(r.intersected(pageArea()), Waveform::Ui);
@@ -892,6 +906,7 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
     // was pressed to where the finger is now.
     if (type_ == DocType::Pdf && !selection_ && (!e.selection || e.selection->text.empty())) {
         selecting_ = false;
+        if (refuseReadOnly(nav, false)) return;  // no area in a read-only group
         const bool lifted = selReleased_;
         beginArea(selAnchor_, selLast_, nav);
         if (lifted) endArea(selLast_, nav);
@@ -923,8 +938,10 @@ void ReaderScreen::showBar(Nav& nav) {
     if (!selection_) return;
     PluginEntries* e = nav.pluginEntries();
     const bool more = e && !e->actions("selectionAction").empty();
-    // A web snapshot: nothing is highlighted, so no colours and no tag row (Search and More… only).
-    bar_ = web_ ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
+    // A web snapshot or a read-only group: nothing is highlighted, so no colours and no tag row
+    // (Search and More… only); in a group, the first time, a toast says why.
+    if (!web_) refuseReadOnly(nav, false);
+    bar_ = web_ || readOnly_ ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
                 : std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
                                                   TagRow(selectionChips(nav), selTags_));
     bar_->setWorking(result_ && result_->running());
@@ -1004,7 +1021,7 @@ void ReaderScreen::onBarTap(Point p, Nav& nav) {
             }
             if (!e || !selection_ || !item || !att) break;
             nlohmann::ordered_json target = {{"text", selection_->text},
-                                             {"item", plugins::itemJson(*item, nav.library().isRead(row_.key))},
+                                             {"item", plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib))},
                                              {"attachment", plugins::attachmentJson(*att)},
                                              {"pageLabel", selection_->pageLabel.empty() ? nlohmann::ordered_json(nullptr)
                                                                                          : nlohmann::ordered_json(selection_->pageLabel)}};
@@ -1426,7 +1443,7 @@ Rect ReaderScreen::areaCancelRect() {
 
 void ReaderScreen::markArea(Nav& nav) {
     closeMenus(nav);
-    if (type_ != DocType::Pdf || !ready()) return;
+    if (type_ != DocType::Pdf || !ready() || refuseReadOnly(nav, true)) return;
     linkId_ = 0;
     noteArmed_ = false;
     areaArmed_ = true;
@@ -1545,7 +1562,7 @@ void ReaderScreen::onArea(const RenderEvent& e, Nav& nav) {
 
 void ReaderScreen::addNote(Nav& nav) {
     closeMenus(nav);
-    if (type_ != DocType::Pdf || !ready()) return;
+    if (type_ != DocType::Pdf || !ready() || refuseReadOnly(nav, true)) return;
     linkId_ = 0;
     areaArmed_ = false;
     noteArmed_ = true;
@@ -1591,7 +1608,8 @@ bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
     auto a = nav.library().annotation(best->annotationKey);
     if (!a) return false;
     linkId_ = 0;
-    notePopup_ = std::make_unique<NotePopup>(*a, noteIcon(best->rect), pageArea(), recentChips(nav.library()));
+    notePopup_ = std::make_unique<NotePopup>(*a, noteIcon(best->rect), pageArea(), recentChips(nav.library()),
+                                             annotationReadOnly(nav.library(), *a));
     nav.damage(notePopup_->rect(), Waveform::Ui);
     return true;
 }
@@ -1668,7 +1686,7 @@ bool ReaderScreen::penAllowed() const {
 }
 
 bool ReaderScreen::wantsSystemInk() const {
-    return type_ == DocType::Pdf && penWrites_ && penAllowed() && !eraserNear_ && !buttonHeld_;
+    return type_ == DocType::Pdf && penWrites_ && !readOnly_ && penAllowed() && !eraserNear_ && !buttonHeld_;
 }
 
 void ReaderScreen::setPenWidth(int i, Nav& nav) {
@@ -1773,8 +1791,11 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         // EPUB (Zotero has no ink there), menus, selection, the footer, the reading-position
         // question's banner, the pen set to tap or its side button held: the pen is a finger.
         const bool onBanner = question_ && positionBannerRect().contains(p.pos);
+        // A read-only group: no ink, nothing erased; the pen taps (the first time, a toast says why).
+        const bool readOnly = type_ == DocType::Pdf && penWrites_ && !p.button && penAllowed() &&
+                              pageArea().contains(p.pos) && !onBanner && refuseReadOnly(nav, false);
         if (type_ != DocType::Pdf || !penWrites_ || p.button || !penAllowed() || !pageArea().contains(p.pos) ||
-            onBanner) {
+            onBanner || readOnly) {
             if (nav.systemInk()) wipeFrom_ = p.pos;  // the system may have inked it: repaint on lift
             return false;
         }
@@ -1922,6 +1943,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
     for (const auto& [key, h] : hits) {
         auto rec = nav.library().annotation(key);
         if (!rec || rec->deletedHere) continue;
+        if (!nav.library().annotationEditable(*rec)) continue;  // another member's ink (or a read-only group's): theirs
         const auto& [crossed, strokes] = h;
         if (crossed.size() < strokes) {
             nlohmann::json pos = nlohmann::json::parse(rec->position, nullptr, false);
@@ -1931,7 +1953,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
                 if (!crossed.count(i)) kept.push_back(pos["paths"][i]);
             pos["paths"] = kept;
             rec->position = pos.dump();
-            nav.library().editAnnotation(*rec);
+            if (!nav.library().editAnnotation(*rec)) continue;
             plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", key);
         } else if (!rec->comment.empty() || !rec->tags.empty()) {
             nav.toast("This handwriting has a comment or tags: delete it in Notes.");
@@ -1939,7 +1961,7 @@ void ReaderScreen::eraseAlong(const std::vector<Point>& path, Nav& nav) {
         } else {
             const bool told = nav.plugins().listening();
             const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), *rec) : plugins::AnnotationRef{};
-            nav.library().deleteAnnotation(key);
+            if (!nav.library().deleteAnnotation(key)) continue;
             if (told) plugins::annotationDeleted(nav.plugins(), ref);
         }
         saved = true;

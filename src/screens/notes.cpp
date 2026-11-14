@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "screens/annotation_bar.h"
 #include "screens/book.h"
 #include "screens/collections.h"
 #include "screens/read_tag.h"
@@ -75,9 +76,10 @@ void NotesScreen::load(Library& lib) {
     for (auto& n : lib.recentAnnotations(static_cast<int>(pager_.offset()), perPage(), query_, tag_)) {
         if (n.itemKey != current) {
             current = n.itemKey;
-            lines_.push_back({true, n.itemKey, n.itemTitle, {}});
+            lines_.push_back({true, n.itemKey, n.itemTitle, {}, {}});
         }
-        lines_.push_back({false, n.itemKey, n.itemTitle, std::move(n)});
+        std::string author = annotationAuthor(lib, n.annotation);
+        lines_.push_back({false, n.itemKey, n.itemTitle, std::move(n), std::move(author)});
     }
 }
 
@@ -174,7 +176,7 @@ void NotesScreen::draw(Canvas& canvas) {
             drawText(cr, lines_[i].itemTitle.empty() ? "Untitled" : lines_[i].itemTitle, {kSans, 7.5, 700, false, kSecondary},
                      {rects[i].x, rects[i].y + 22, rects[i].w, 44}, 1);
         else
-            drawNoteRow(cr, rects[i], lines_[i].note.annotation, true);
+            drawNoteRow(cr, rects[i], lines_[i].note.annotation, true, lines_[i].author);
     }
     if (searching_) drawPageIndicator(cr, footerRect(), pager_.page(), pager_.pages());
     else drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());

@@ -8,6 +8,8 @@
 //
 // Edit, Delete and the tag row (the annotation bar's) are the reader's to do (the annotation
 // editor's comment and its confirmation; a chip toggles its tag); any tap outside, or Close, closes it.
+// A note the Kindle may not change (another member's, or in a read-only group): the tag row's place
+// says so ("by Anna"), and Close is the only button.
 
 #include <string>
 #include <vector>
@@ -28,7 +30,9 @@ public:
     enum class Action { None, Edit, Delete, Close, Tag, AddTag };
 
     // `icon`: the note as drawn; `area`: where the pop-up may go (the page area); `chips`: the tag row's.
-    NotePopup(AnnotationRecord note, Rect icon, Rect area, std::vector<std::string> chips = {});
+    // `readOnly` (annotationReadOnly()): "" when the note may be changed here.
+    NotePopup(AnnotationRecord note, Rect icon, Rect area, std::vector<std::string> chips = {}, std::string readOnly = "");
+    bool readOnly() const { return !readOnly_.empty(); }
 
     const std::string& key() const { return note_.key; }
     const AnnotationRecord& note() const { return note_; }
@@ -54,6 +58,7 @@ private:
     int page_ = 0;
     TagRow tags_;
     int chip_ = -1;
+    std::string readOnly_;
 };
 
 }  // namespace zk

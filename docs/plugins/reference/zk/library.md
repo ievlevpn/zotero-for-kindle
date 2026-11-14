@@ -15,6 +15,7 @@ Everything comes back as plain objects; nothing is live.
 - [fullText](library/fullText.md)
 - [item](library/item.md)
 - [items](library/items.md)
+- [libraries](library/libraries.md)
 - [notes](library/notes.md)
 - [recentAnnotations](library/recentAnnotations.md)
 - [search](library/search.md)

@@ -83,6 +83,7 @@ const Op kOps[] = {
     {"search", Permission::LibraryRead, "zk.library.search()"},
     {"find", Permission::LibraryRead, "zk.library.findByIdentifier()"},
     {"collections", Permission::LibraryRead, "zk.library.collections()"},
+    {"libraries", Permission::LibraryRead, "zk.library.libraries()"},
     {"feeds", Permission::LibraryRead, "zk.library.feeds()"},
     {"tags", Permission::LibraryRead, "zk.library.tags()"},
     {"attachments", Permission::LibraryRead, "zk.library.attachments()"},
@@ -141,7 +142,7 @@ std::string lowerOf(std::string s) {
 
 json nullable(const std::string& s) { return s.empty() ? json(nullptr) : json(s); }
 
-json itemOf(Library& lib, const ItemRecord& r) { return itemJson(r, lib.isRead(r.key)); }
+json itemOf(Library& lib, const ItemRecord& r) { return itemJson(r, lib.isRead(r.key), lib.libraryName(r.lib)); }
 
 void rebuildIndex(LibState& st) {
     st.dataVersion = st.lib->dataVersion();
@@ -184,20 +185,26 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (!st) return JS_EXCEPTION;
     Library& lib = *st->lib;
     std::string a, b, d;
+    // A key of a hidden group (switched off, gone, unreadable): as if it weren't there.
+    auto hidden = [&lib](const std::string& key) {
+        const auto in = lib.libraryOf(key);
+        return in && !lib.libraryShown(*in);
+    };
 
     if (op == "item") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
-        auto r = lib.item(a);
+        auto r = hidden(a) ? std::nullopt : lib.item(a);
         return toJs(c, r ? itemOf(lib, *r) : json(nullptr));
     }
-    if (op == "page") {  // collection, tag, offset, limit
-        int offset = 0, limit = 0;
+    if (op == "page") {  // collection, tag, offset, limit, library (-1 all)
+        int offset = 0, limit = 0, library = -1;
         if (!arg(c, argc, argv, 1, a) || !arg(c, argc, argv, 2, b) || !intArg(c, argc, argv, 3, offset) ||
-            !intArg(c, argc, argv, 4, limit))
+            !intArg(c, argc, argv, 4, limit) || (argc > 5 && !intArg(c, argc, argv, 5, library)))
             return JS_EXCEPTION;
         ListQuery q;
         q.collectionKey = a;
         q.tag = b;
+        q.lib = library < 0 ? kAllLibraries : library;
         q.offset = std::max(0, offset);
         q.limit = std::clamp(limit, 1, 200);
         const auto rows = lib.rows(q);
@@ -227,7 +234,7 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         for (const std::string& isbn : isbnKeys(d)) add(st->byIsbn, isbn);
         json items = json::array();
         for (const std::string& key : keys)
-            if (auto r = lib.item(key)) items.push_back(itemOf(lib, *r));
+            if (auto r = lib.item(key); r && lib.libraryShown(r->lib)) items.push_back(itemOf(lib, *r));
         return toJs(c, items);
     }
     if (op == "feeds") {  // Zotero's "feeds" setting as sync keeps it: {url: [name, ...]}
@@ -243,6 +250,13 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         for (const auto& [name, url] : rows) out.push_back({{"url", url}, {"name", name}});
         return toJs(c, out);
     }
+    if (op == "libraries") {  // My Library, then the groups shown (switched on, still there), by name
+        json out = json::array();
+        for (const LibraryInfo& l : lib.libraries(false))
+            out.push_back({{"id", l.id}, {"name", l.name}, {"editable", l.id == kMyLibrary || lib.libraryEditable(l.id)},
+                           {"items", l.items}});
+        return toJs(c, out);
+    }
     if (op == "collections") {
         std::map<std::string, CollectionRecord> byKey;
         const auto all = lib.allCollections();
@@ -250,10 +264,13 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         struct Row {
             std::vector<std::string> path, sortPath;
             CollectionRecord c;
+            std::string library;  // its library's name
         };
+        std::map<int64_t, std::string> names;
         std::vector<Row> rows;
         for (const CollectionEntry& e : all) {
-            Row row{{}, {}, e.collection};
+            if (!names.count(e.collection.lib)) names[e.collection.lib] = lib.libraryName(e.collection.lib);
+            Row row{{}, {}, e.collection, names[e.collection.lib]};
             std::set<std::string> seen;
             for (const CollectionRecord* cur = &e.collection; cur;) {
                 if (!seen.insert(cur->key).second) break;  // a loop in the data: stop
@@ -264,12 +281,16 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
             for (const std::string& n : row.path) row.sortPath.push_back(lowerOf(n));
             rows.push_back(std::move(row));
         }
-        std::sort(rows.begin(), rows.end(), [](const Row& x, const Row& y) {
-            return std::tie(x.sortPath, x.path, x.c.key) < std::tie(y.sortPath, y.path, y.c.key);
+        // My Library's first, then each group's (by its name), each by path.
+        auto order = [](const Row& r) { return std::make_tuple(r.c.lib != kMyLibrary, lowerOf(r.library), r.c.lib); };
+        std::sort(rows.begin(), rows.end(), [&](const Row& x, const Row& y) {
+            return std::tuple_cat(order(x), std::tie(x.sortPath, x.path, x.c.key)) <
+                   std::tuple_cat(order(y), std::tie(y.sortPath, y.path, y.c.key));
         });
         json out = json::array();
         for (const Row& row : rows)
-            out.push_back({{"key", row.c.key}, {"name", row.c.name}, {"parent", nullable(row.c.parentKey)}, {"path", row.path}});
+            out.push_back({{"key", row.c.key}, {"name", row.c.name}, {"parent", nullable(row.c.parentKey)}, {"path", row.path},
+                           {"libraryId", row.c.lib}, {"libraryName", row.library}});
         return toJs(c, out);
     }
     if (op == "tags") {
@@ -285,15 +306,17 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     if (op == "attachments") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
         json out = json::array();
-        for (const AttachmentRecord& at : lib.attachmentsOf(a)) out.push_back(attachmentJson(at));
+        if (!hidden(a))
+            for (const AttachmentRecord& at : lib.attachmentsOf(a)) out.push_back(attachmentJson(at));
         return toJs(c, out);
     }
     if (op == "annotations") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
         const std::string itemKey = itemKeyOfAttachment(lib, a);
         json out = json::array();
+        if (hidden(a)) return toJs(c, out);
         for (const AnnotationRecord& an : lib.annotationsFor(a))
-            if (an.conflictOf.empty()) out.push_back(annotationJson(an, itemKey));
+            if (an.conflictOf.empty()) out.push_back(annotationJson(an, itemKey, lib.libraryName(an.lib)));
         return toJs(c, out);
     }
     if (op == "recent") {  // offset, limit
@@ -302,12 +325,13 @@ JSValue callNative(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         const auto rows = lib.recentAnnotations(std::max(0, offset), std::clamp(limit, 1, 200));
         json items = json::array();
         for (const NoteRow& row : rows)
-            if (row.annotation.conflictOf.empty()) items.push_back(annotationJson(row.annotation, row.itemKey));
+            if (row.annotation.conflictOf.empty())
+                items.push_back(annotationJson(row.annotation, row.itemKey, lib.libraryName(row.annotation.lib)));
         return toJs(c, json{{"rows", rows.size()}, {"items", items}});
     }
     if (op == "notes") {
         if (!arg(c, argc, argv, 1, a)) return JS_EXCEPTION;
-        auto notes = lib.notes(a);
+        auto notes = hidden(a) ? decltype(lib.notes(a)){} : lib.notes(a);
         std::vector<std::pair<std::string, const NoteRecord*>> order;  // oldest first
         for (const NoteRecord& n : notes) order.emplace_back(createdOf(n.json, n.dateModified), &n);
         std::stable_sort(order.begin(), order.end(), [](const auto& x, const auto& y) { return x.first < y.first; });
@@ -443,10 +467,13 @@ const library = {
     const q = query || {};
     for (const f of ["collection", "tag"])
       if (q[f] !== undefined && typeof q[f] !== "string") throw new TypeError(`zk.library.items: ${f} must be a string`);
+    if (q.library !== undefined && !(Number.isInteger(q.library) && q.library >= 0))
+      throw new TypeError("zk.library.items: library must be a library's id (0 for My Library)");
     const limit = limitOf(q.limit, "items");
     const collection = q.collection === undefined ? "" : q.collection;
     const tag = q.tag === undefined ? "" : q.tag;
-    return paged((offset, size) => n.call("page", collection, tag, offset, size), limit);
+    const lib = q.library === undefined ? -1 : q.library;
+    return paged((offset, size) => n.call("page", collection, tag, offset, size, lib), limit);
   },
   async item(k) { n.need("item"); return n.call("item", key(k, "item")); },
   async findByIdentifier(id) {
@@ -457,6 +484,7 @@ const library = {
     return n.call("find", id.doi || "", id.arxiv || "", id.isbn || "");
   },
   async collections() { n.need("collections"); return n.call("collections"); },
+  async libraries() { n.need("libraries"); return n.call("libraries"); },
   async feeds() { n.need("feeds"); return n.call("feeds"); },
   async tags() { n.need("tags"); return n.call("tags"); },
   async search(text) {
@@ -497,7 +525,7 @@ void installLibrary(PluginCtx& p) {
     JSContext* c = p.cx.raw();
     js::Value natives(c, JS_NewObject(c));
     defineFunction<needNative>(c, natives.raw(), "need", 1);
-    defineFunction<callNative>(c, natives.raw(), "call", 5);
+    defineFunction<callNative>(c, natives.raw(), "call", 6);
     defineFunction<fullTextNative>(c, natives.raw(), "fullText", 1);
 
     const char* name = "<zk library>";

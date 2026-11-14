@@ -1,6 +1,6 @@
 #pragma once
 // The Library tab's view (All | Downloaded, the filter, the sort; remembered on this Kindle) and
-// the sheets that change it: Filter (Type · Read · Tag, Reset, Done), Sort, and the jump sheet the
+// the sheets that change it: Filter (Library when there are groups · Type · Read · Tag, Reset, Done), Sort, and the jump sheet the
 // page footer opens (the initials, years or months there are; by Recent, First page and Go to page).
 // Each sheet draws over the bottom of an area and takes the gestures while it is open; a tap
 // outside it closes it.
@@ -25,8 +25,9 @@ struct LibraryView {
     ReadFilter read = ReadFilter::Any;
     std::string tag;  // "" none
     SortBy sort = SortBy::Recent;
+    int64_t lib = kAllLibraries;  // the Library filter: all, My Library (0) or a group's ID
 
-    bool filtered() const;           // the filter (Type, Read, Tag) differs from the default
+    bool filtered() const;           // the filter (Library, Type, Read, Tag) differs from the default
     LibraryView cleared() const;     // the filter back to the default; All | Downloaded and the sort stay
     ListQuery query() const;
     bool operator==(const LibraryView&) const = default;
@@ -36,8 +37,9 @@ struct LibraryView {
 LibraryView loadLibraryView(Library&);
 void saveLibraryView(Library&, const LibraryView&);
 
-// "2,153 items", or what is applied first: "PDF · Unread · tag: to-read · 412 items".
-std::string filterLine(const LibraryView&, int64_t count);
+// "2,153 items", or what is applied first: "PDF · Unread · tag: to-read · 412 items"; with a
+// library chosen, its name leads ("Lab group · 120 items").
+std::string filterLine(const LibraryView&, int64_t count, const std::string& libraryName = "");
 std::string withThousands(int64_t);  // 2153 -> "2,153"
 const char* sortLabel(SortBy);       // "Recent", "Date added", "Title", "Author", "Year"
 // A section's heading: "A", "#", "2025", "No year", "March 2025", "No date".
@@ -62,7 +64,12 @@ Rect sheetRectIn(Rect area, int height);
 class FilterSheet {
 public:
     enum class Action { None, Close, Changed, PickTag, Apply };
-    explicit FilterSheet(LibraryView draft) : draft_(std::move(draft)) {}
+    // `libraries`: those shown (Library::libraries(false)); with more than My Library, the sheet
+    // has a Library group first: All · My Library · each group.
+    explicit FilterSheet(LibraryView draft, std::vector<LibraryInfo> libraries = {})
+        : draft_(std::move(draft)), libraries_(std::move(libraries)) {
+        if (libraries_.size() < 2) libraries_.clear();
+    }
     void draw(cairo_t*, Rect area) const;
     Action onGesture(const Gesture&, Rect area);
 
@@ -70,6 +77,9 @@ public:
     void setTag(const std::string& tag) { draft_.tag = tag; }
 
     Rect sheetRect(Rect area) const;
+    bool hasLibraries() const { return !libraries_.empty(); }
+    std::vector<std::string> libraryLabels() const;   // All · My Library · the groups (names shortened)
+    std::vector<Rect> libraryRects(Rect area) const;  // the same (on as many rows as they need); none without groups
     std::vector<Rect> typeRects(Rect area) const;  // Any · With a file · PDF · EPUB
     std::vector<Rect> readRects(Rect area) const;  // Any · Unread · Read
     std::vector<Rect> tagRects(Rect area) const;   // None · the tag (or "Choose a tag…")
@@ -77,9 +87,15 @@ public:
     Rect doneRect(Rect area) const;
 
 private:
-    Rect chipsArea(Rect area, int group) const;
+    Rect chipsArea(Rect area, int group) const;  // 0 Type, 1 Read, 2 Tag, -1 Library (its first row)
+    // The Library chips' rows: the labels' indices on each (as many as fit a row; as many rows as the
+    // area has room for, 3 at most).
+    std::vector<std::vector<size_t>> libraryRows(Rect area) const;
+    int libraryExtraH(Rect area) const;  // what rows after the first add to the sheet
+    int groups() const { return hasLibraries() ? 4 : 3; }
     std::vector<std::string> tagLabels() const;
     LibraryView draft_;
+    std::vector<LibraryInfo> libraries_;
 };
 
 class SortSheet {

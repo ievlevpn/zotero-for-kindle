@@ -9,8 +9,12 @@
 // the bar into a short list of those actions (title, the plugin's name dimmed beside it). While
 // one runs, More… reads "Working…".
 //
-// Text (a web snapshot, where nothing is highlighted): no colours, only Search, and More… when
-// some plugin has selection actions.
+// Text (a web snapshot or a read-only group library, where nothing is highlighted): no colours,
+// only Search, and More… when some plugin has selection actions.
+//
+// View (an annotation the Kindle may not change: another member's in a group, or any in a
+// read-only group): one quiet line, "by Anna" (or why it can't be changed), and its comment under
+// it if it has one; nothing to tap.
 
 #include <array>
 #include <functional>
@@ -67,6 +71,14 @@ private:
     std::vector<Rect> chipRects_;
 };
 
+// Another member's annotation in a group: their name (Zotero's createdByUser), for "by Anna" in
+// lists and on the bar. "" for the user's own, anything in My Library, and an unnamed author.
+std::string annotationAuthor(Library&, const AnnotationRecord&);
+// "" when the Kindle may change the annotation (Library::annotationEditable); otherwise what the
+// bar says instead: "by Anna", or "This group library is read-only".
+std::string annotationReadOnly(Library&, const AnnotationRecord&);
+constexpr const char* kReadOnlyGroup = "This group library is read-only";
+
 // The chips' tags: the first TagRow::kChips of the tags put on annotations most recently here.
 std::vector<std::string> recentChips(Library&);
 // Adds `tag` to the annotation as it is now in the library (on), or takes it off; an added tag
@@ -79,7 +91,7 @@ void pickAnnotationTag(Nav&, std::function<void(const std::string& tag)> chosen,
 
 class AnnotationBar {
 public:
-    enum class Mode { Create, Edit, Text };
+    enum class Mode { Create, Edit, Text, View };
     enum class Action { None, Colour, Highlight, Underline, Note, Comment, Delete, More, Plugin, Tag, AddTag, Search };
     struct Hit {
         Action action = Action::None;
@@ -95,7 +107,10 @@ public:
     Rect rect() const { return rect_; }
     Rect dotRect(int i) const;     // 0..7, Zotero's order (none in Text)
     Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete; Text: 0 Search
-    bool hasColours() const { return mode_ != Mode::Text; }
+    bool hasColours() const { return mode_ == Mode::Create || mode_ == Mode::Edit; }
+    // View: the line it shows ("by Anna"), and the comment under it ("" none).
+    const std::string& label() const { return label_; }
+    void setView(std::string label, std::string comment);
     const std::string& colour() const { return colour_; }
     void setColour(std::string c) { colour_ = std::move(c); }
     // More… tapped: the bar lists these instead (empty: back to the buttons).
@@ -117,13 +132,19 @@ public:
     static constexpr int kTextH = 124;  // Text: the buttons' row alone
 
 private:
-    int buttons() const { return mode_ == Mode::Create ? 3 + more_ : mode_ == Mode::Text ? 1 + more_ : 2; }
-    int height() const { return mode_ == Mode::Text ? kTextH : kH; }
+    int buttons() const {
+        return mode_ == Mode::Create ? 3 + more_ : mode_ == Mode::Text ? 1 + more_ : mode_ == Mode::View ? 0 : 2;
+    }
+    int height() const {
+        return mode_ == Mode::Text ? kTextH : mode_ == Mode::View ? (comment_.empty() ? kTextH : kViewLabelH + commentH_ + 44) : kH;
+    }
+    static constexpr int kViewLabelH = 90;  // View with a comment: the label's row above it
     void place(int h);
 
     Mode mode_;
     Rect anchor_, rect_;
-    std::string colour_;
+    std::string colour_, label_, comment_;
+    int commentH_ = 0;  // View: the comment's height (two lines at most)
     bool more_ = false, working_ = false;
     std::vector<PluginAction> actions_;
     TagRow tags_;
@@ -137,13 +158,15 @@ class AnnotationEditor {
 public:
     enum class Result { Open, Closed };
 
-    // `chips`: the tag row's (recentChips()).
-    AnnotationEditor(AnnotationRecord, Rect anchor, std::vector<std::string> chips = {});
+    // `chips`: the tag row's (recentChips()). `readOnly` (annotationReadOnly()): the annotation can't
+    // be changed here; the bar only says so ("by Anna"), and the comment and Delete don't open.
+    AnnotationEditor(AnnotationRecord, Rect anchor, std::vector<std::string> chips = {}, std::string readOnly = "");
     ~AnnotationEditor();
 
     const std::string& key() const { return annotation_.key; }
     const AnnotationBar& bar() const { return bar_; }
     const AnnotationRecord& annotation() const { return annotation_; }
+    bool readOnly() const { return bar_.mode() == AnnotationBar::Mode::View; }
     bool confirming() const { return state_ == State::Confirm; }
     bool commenting() const { return state_ == State::Comment; }
     bool wantsKeyboard() const { return commenting(); }

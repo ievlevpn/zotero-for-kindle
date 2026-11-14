@@ -3,6 +3,7 @@
 #include "core/log.h"
 
 #include <chrono>
+#include <cstdio>
 #include <random>
 #include <thread>
 
@@ -71,6 +72,23 @@ std::string ZoteroApi::userUrl(const std::string& path) const {
     return std::string(kBase) + "/users/" + std::to_string(userId_) + path;
 }
 
+std::string ZoteroApi::libraryUrl(const std::string& path) const {
+    if (library_ == 0) return userUrl(path);
+    return std::string(kBase) + "/groups/" + std::to_string(library_) + path;
+}
+
+KeyInfo::Access KeyInfo::groupAccess(int64_t groupId) const {
+    if (auto it = groups.find(groupId); it != groups.end()) return it->second;
+    return allGroups.value_or(Access{});
+}
+
+bool KeyInfo::anyGroupAccess() const {
+    if (allGroups && allGroups->read) return true;
+    for (const auto& [id, a] : groups)
+        if (a.read) return true;
+    return false;
+}
+
 HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
     req.headers.emplace_back("Zotero-API-Version", "3");
     req.headers.emplace_back("Zotero-API-Key", apiKey_);
@@ -89,7 +107,7 @@ HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
             sleeper_(headerInt(r, "retry-after", 60));
             continue;
         }
-        if (r.curlCode != 0 || r.status < 200 || r.status >= 300) {
+        if (r.curlCode != 0 || ((r.status < 200 || r.status >= 300) && r.status != 304)) {
             if (!(r.status == 412 && (req.method == "POST" || req.method == "DELETE" || req.method == "PATCH"))) {
                 UserError e = classify(r, r.curlCode ? probeNetState() : NetState{}, kHost, false, req.method);
                 log(LogLevel::Warn, "zotero: %s %s -> %s (%s)", req.method.c_str(), req.url.c_str(), e.message.c_str(),
@@ -99,6 +117,17 @@ HttpResponse ZoteroApi::send(HttpRequest req, UserError* err) {
         }
         return r;
     }
+}
+
+std::string ZoteroApi::keyFingerprint() const {
+    uint64_t h = 1469598103934665603ull;  // FNV-1a 64
+    for (unsigned char c : std::to_string(userId_) + ":" + apiKey_) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    char buf[17];
+    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(h));
+    return buf;
 }
 
 std::optional<KeyInfo> ZoteroApi::keyInfo(UserError* err) {
@@ -114,15 +143,84 @@ std::optional<KeyInfo> ZoteroApi::keyInfo(UserError* err) {
     info.canRead = user.is_object() && user.value("library", false);
     info.canWrite = user.is_object() && user.value("write", false);
     info.canReadFiles = user.is_object() && user.value("files", false);
+    if (j.contains("username") && j["username"].is_string()) info.username = j["username"].get<std::string>();
+    if (j.contains("displayName") && j["displayName"].is_string()) info.displayName = j["displayName"].get<std::string>();
+    // {"access": {"groups": {"all": {"library": true, "write": false}, "12345": {...}}}}
+    const json groups = j.contains("access") && j["access"].is_object() ? j["access"].value("groups", json::object())
+                                                                         : json::object();
+    if (groups.is_object())
+        for (const auto& [id, a] : groups.items()) {
+            if (!a.is_object()) continue;
+            KeyInfo::Access access{a.value("library", false), a.value("write", false)};
+            if (id == "all") {
+                info.allGroups = access;
+                continue;
+            }
+            try {
+                info.groups[std::stoll(id)] = access;
+            } catch (...) {
+            }
+        }
     return info;
 }
 
-std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t since, UserError* err,
-                                              const std::string& itemType) {
+std::optional<std::map<int64_t, int64_t>> ZoteroApi::groupVersions(UserError* err) {
     HttpRequest req;
-    req.url = userUrl("/" + kind + "?since=" + std::to_string(since) + "&format=versions" +
-                      (kind == "items" ? "&includeTrashed=1" : "") + (itemType.empty() ? "" : "&itemType=" + itemType));
+    req.url = userUrl("/groups?format=versions");
     HttpResponse r = send(req, err);
+    if (r.curlCode || r.status != 200) return std::nullopt;
+    auto j = json::parse(r.body, nullptr, false);
+    if (!j.is_object()) return setError(err, badBody("groups versions: not an object")), std::nullopt;
+    std::map<int64_t, int64_t> out;
+    for (const auto& [id, v] : j.items()) {
+        try {
+            const int64_t group = std::stoll(id);
+            if (v.is_number_integer()) out[group] = v.get<int64_t>();
+            else if (v.is_string()) out[group] = std::stoll(v.get<std::string>());
+        } catch (...) {
+        }
+    }
+    return out;
+}
+
+std::optional<GroupInfo> ZoteroApi::group(int64_t groupId, UserError* err) {
+    HttpRequest req;
+    req.url = std::string(kBase) + "/groups/" + std::to_string(groupId);
+    HttpResponse r = send(req, err);
+    if (r.curlCode || r.status != 200) return std::nullopt;
+    auto j = json::parse(r.body, nullptr, false);
+    if (!j.is_object()) return setError(err, badBody("group: not an object")), std::nullopt;
+    const json d = j.contains("data") && j["data"].is_object() ? j["data"] : json::object();
+    auto num = [](const json& o, const char* k) -> int64_t {
+        auto it = o.find(k);
+        return it != o.end() && it->is_number_integer() ? it->get<int64_t>() : 0;
+    };
+    GroupInfo g;
+    g.id = num(d, "id") ? num(d, "id") : groupId;
+    g.version = num(j, "version") ? num(j, "version") : num(d, "version");
+    g.owner = num(d, "owner");
+    g.name = d.value("name", "");
+    g.libraryEditing = d.value("libraryEditing", "admins");
+    g.fileEditing = d.value("fileEditing", "admins");
+    if (auto it = d.find("admins"); it != d.end() && it->is_array())
+        for (const auto& a : *it)
+            if (a.is_number_integer()) g.admins.push_back(a.get<int64_t>());
+    return g;
+}
+
+std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t since, UserError* err,
+                                              const std::string& itemType, int64_t ifModifiedSince) {
+    HttpRequest req;
+    req.url = libraryUrl("/" + kind + "?since=" + std::to_string(since) + "&format=versions" +
+                      (kind == "items" ? "&includeTrashed=1" : "") + (itemType.empty() ? "" : "&itemType=" + itemType));
+    if (ifModifiedSince > 0) req.headers.emplace_back("If-Modified-Since-Version", std::to_string(ifModifiedSince));
+    HttpResponse r = send(req, err);
+    if (!r.curlCode && r.status == 304 && ifModifiedSince > 0) {
+        VersionMap unchanged;
+        unchanged.notModified = true;
+        unchanged.libraryVersion = ifModifiedSince;
+        return unchanged;
+    }
     if (r.curlCode || r.status != 200) return std::nullopt;
     auto j = json::parse(r.body, nullptr, false);
     if (!j.is_object()) return setError(err, badBody(kind + " versions: not an object")), std::nullopt;
@@ -135,7 +233,7 @@ std::optional<VersionMap> ZoteroApi::versions(const std::string& kind, int64_t s
 
 std::optional<VersionMap> ZoteroApi::annotationVersions(const std::string& parentKey, int64_t since, UserError* err) {
     HttpRequest req;
-    req.url = userUrl("/items/" + parentKey + "/children?format=versions&itemType=annotation&includeTrashed=1" +
+    req.url = libraryUrl("/items/" + parentKey + "/children?format=versions&itemType=annotation&includeTrashed=1" +
                       (since > 0 ? "&since=" + std::to_string(since) : ""));
     HttpResponse r = send(req, err);
     if (r.curlCode || r.status != 200) return std::nullopt;
@@ -153,7 +251,7 @@ std::optional<std::vector<json>> ZoteroApi::fetch(const std::string& kind, const
     if (keys.empty()) return std::vector<json>{};
     HttpRequest req;
     const std::string param = kind == "collections" ? "collectionKey" : "itemKey";
-    req.url = userUrl("/" + kind + "?" + param + "=" + joinKeys(keys) + "&format=json" +
+    req.url = libraryUrl("/" + kind + "?" + param + "=" + joinKeys(keys) + "&format=json" +
                       (kind == "items" ? "&includeTrashed=1" : ""));
     HttpResponse r = send(req, err);
     if (r.curlCode || r.status != 200) return std::nullopt;
@@ -164,7 +262,7 @@ std::optional<std::vector<json>> ZoteroApi::fetch(const std::string& kind, const
 
 std::optional<Deleted> ZoteroApi::deleted(int64_t since, UserError* err) {
     HttpRequest req;
-    req.url = userUrl("/deleted?since=" + std::to_string(since));
+    req.url = libraryUrl("/deleted?since=" + std::to_string(since));
     HttpResponse r = send(req, err);
     if (r.curlCode || r.status != 200) return std::nullopt;
     auto j = json::parse(r.body, nullptr, false);
@@ -184,7 +282,7 @@ std::optional<Deleted> ZoteroApi::deleted(int64_t since, UserError* err) {
 std::optional<WriteResult> ZoteroApi::createItems(const json& array, int64_t ifUnmodifiedSince, UserError* err) {
     HttpRequest req;
     req.method = "POST";
-    req.url = userUrl("/items");
+    req.url = libraryUrl("/items");
     req.body = array.dump();
     req.headers = {{"Content-Type", "application/json"},
                    {"Zotero-Write-Token", writeToken()},
@@ -258,7 +356,7 @@ std::optional<WriteResult> ZoteroApi::patchItem(const std::string& key, const js
                                                 UserError* err) {
     HttpRequest req;
     req.method = "PATCH";
-    req.url = userUrl("/items/" + key);
+    req.url = libraryUrl("/items/" + key);
     req.body = data.dump();
     req.headers = {{"Content-Type", "application/json"},
                    {"If-Unmodified-Since-Version", std::to_string(itemVersion)}};
@@ -285,7 +383,7 @@ std::optional<WriteResult> ZoteroApi::patchItem(const std::string& key, const js
 std::optional<WriteResult> ZoteroApi::deleteItem(const std::string& key, int64_t itemVersion, UserError* err) {
     HttpRequest req;
     req.method = "DELETE";
-    req.url = userUrl("/items/" + key);
+    req.url = libraryUrl("/items/" + key);
     req.headers = {{"If-Unmodified-Since-Version", std::to_string(itemVersion)}};
     HttpResponse r = send(req, err);
     WriteResult out;
@@ -311,7 +409,7 @@ std::optional<WriteResult> ZoteroApi::deleteItems(const std::vector<std::string>
                                                   UserError* err) {
     HttpRequest req;
     req.method = "DELETE";
-    req.url = userUrl("/items?itemKey=" + joinKeys(keys));
+    req.url = libraryUrl("/items?itemKey=" + joinKeys(keys));
     req.headers = {{"If-Unmodified-Since-Version", std::to_string(ifUnmodifiedSince)}};
     HttpResponse r = send(req, err);
     WriteResult out;

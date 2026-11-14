@@ -44,6 +44,7 @@ std::string citationKeyOf(const ItemRecord&);  // Zotero's citationKey, else Bet
 // The Item of zk.d.ts: { key, type, title, creators, year, date, publication, doi, arxiv, isbn,
 // url, abstract, tags, collections, read, extra, citationKey }. Empty fields are null.
 // Keys come out in that order (an ordered_json), which is what a plugin sees in JSON.stringify.
-nlohmann::ordered_json itemJson(const ItemRecord&, bool read);
+// libraryName: of the item's library (Library::libraryName(r.lib)), with libraryId (0 My Library, else the group's ID).
+nlohmann::ordered_json itemJson(const ItemRecord&, bool read, const std::string& libraryName);
 
 }  // namespace zk::plugins

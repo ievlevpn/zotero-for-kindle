@@ -7,6 +7,11 @@
 // change (zk.zotero.*) goes out only in exactly the shape of a pending plugin change for that key,
 // one narrow rule per kind (see PluginChangeShape). Every other write is refused and never reaches
 // the network.
+// Group libraries: the same rules hold under /groups/<id>/ as under /users/<id>/, for objects of that
+// library only, and only for a group the Kindle may edit (setLibraries); without setLibraries, no
+// group write goes out. In a group an annotation is written only if it is the user's own (another
+// member's is never edited or deleted from the Kindle). Settings are the user's alone: /users/<id>/settings, where a group file's
+// reading position is lastPageIndex_g<groupID>_<attachmentKey> (as Zotero names it).
 
 #include "net/http.h"
 #include "store/plugin_changes.h"
@@ -55,12 +60,27 @@ public:
                std::function<bool(const std::string& key)> isAttachment = nullptr, ItemTags itemTags = nullptr,
                PluginChanges pluginChanges = nullptr);
     HttpResponse send(const HttpRequest&) override;
+    // Which library holds a key (0 My Library, a group ID; nullopt: none), and whether a group may be
+    // written to (its key access and editing rules). Unset: only My Library's objects, by the
+    // callbacks above, and nothing under /groups/.
+    // annotationEditable: under /groups/<id>/, an annotation may be edited, deleted or posted only
+    // when this says so (the user's own: Library::annotationEditable); unset, none may.
+    using LibraryOf = std::function<std::optional<int64_t>(const std::string& key)>;
+    void setLibraries(LibraryOf libraryOf, std::function<bool(int64_t groupId)> groupWritable,
+                      std::function<bool(const std::string& key)> annotationEditable = nullptr) {
+        libraryOf_ = std::move(libraryOf);
+        groupWritable_ = std::move(groupWritable);
+        annotationEditable_ = std::move(annotationEditable);
+    }
 
 private:
     Http& inner_;
     std::function<bool(const std::string&)> isAnnotation_, isAttachment_;
     ItemTags itemTags_;
     PluginChanges pluginChanges_;
+    LibraryOf libraryOf_;
+    std::function<bool(int64_t)> groupWritable_;
+    std::function<bool(const std::string&)> annotationEditable_;
 };
 
 }  // namespace zk

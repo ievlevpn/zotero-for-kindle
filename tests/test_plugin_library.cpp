@@ -196,7 +196,7 @@ TEST_CASE("identifiers: the Item shape") {
     r.publication = "J";
     r.tags = {"a"};
     r.collections = {"C1"};
-    json j = itemJson(r, true);
+    json j = itemJson(r, true, "My Library");
     CHECK(j["key"] == "AAAAAAA1");
     CHECK(j["type"] == "journalArticle");
     CHECK(j["title"] == "T");
@@ -214,10 +214,12 @@ TEST_CASE("identifiers: the Item shape") {
     CHECK(j["read"] == true);
     CHECK(j["extra"] == "e");
     CHECK(j["citationKey"].is_null());
-    CHECK(j.size() == 17);
+    CHECK(j["libraryId"] == 0);
+    CHECK(j["libraryName"] == "My Library");
+    CHECK(j.size() == 19);
     ItemRecord empty = record("EEEEEEE1", "", {});
     empty.itemType = "book";
-    json e = itemJson(empty, false);
+    json e = itemJson(empty, false, "My Library");
     CHECK(e["year"].is_null());
     CHECK(e["date"].is_null());
     CHECK(e["publication"].is_null());
@@ -297,7 +299,7 @@ TEST_CASE("library: item(), search(), tags(), attachments()") {
         out(await zk.library.attachments("DDDDDDD1"));
     )"), {"library:read"});
     const std::string log = env.run("a");
-    CHECK(contains(log, R"(OUT {"key":"AAAAAAA1","type":"journalArticle","title":"Gaussian random fields","creators":[{"first":"Robert","last":"Adler","type":"author"},{"name":"Some Institute","type":"editor"}],"year":1981,"date":"1981","publication":"Annals","doi":"10.1214/AOP/1176990650","arxiv":null,"isbn":null,"url":null,"abstract":"Fields.","tags":["to-read","probability"],"collections":["COLLSUB1"],"read":false,"extra":null,"citationKey":null})"));
+    CHECK(contains(log, R"(OUT {"key":"AAAAAAA1","type":"journalArticle","title":"Gaussian random fields","creators":[{"first":"Robert","last":"Adler","type":"author"},{"name":"Some Institute","type":"editor"}],"year":1981,"date":"1981","publication":"Annals","doi":"10.1214/AOP/1176990650","arxiv":null,"isbn":null,"url":null,"abstract":"Fields.","tags":["to-read","probability"],"collections":["COLLSUB1"],"read":false,"extra":null,"citationKey":null,"libraryId":0,"libraryName":"My Library"})"));
     CHECK(contains(log, "OUT null"));
     CHECK(contains(log, R"(OUT [true,"vaswani2017","2401.01234"])"));
     CHECK(contains(log, R"(OUT ["AAAAAAA1"])"));
@@ -389,7 +391,101 @@ TEST_CASE("library: collections() carry their path") {
         out(await zk.library.collections());
     )"), {"library:read"});
     const std::string log = env.run("a");
-    CHECK(contains(log, R"(OUT [{"key":"COLLOTH1","name":"Archive","parent":null,"path":["Archive"]},{"key":"COLLTOP1","name":"Reading","parent":null,"path":["Reading"]},{"key":"COLLSUB1","name":"arXiv","parent":"COLLTOP1","path":["Reading","arXiv"]}])"));
+    CHECK(contains(log, R"(OUT [{"key":"COLLOTH1","name":"Archive","parent":null,"path":["Archive"],"libraryId":0,"libraryName":"My Library"},{"key":"COLLTOP1","name":"Reading","parent":null,"path":["Reading"],"libraryId":0,"libraryName":"My Library"},{"key":"COLLSUB1","name":"arXiv","parent":"COLLTOP1","path":["Reading","arXiv"],"libraryId":0,"libraryName":"My Library"}])"));
+}
+
+TEST_CASE("library: group libraries — libraries(), libraryId and libraryName, items({ library })") {
+    Env env;
+    fill(env.lib);
+    Library::GroupMeta g;
+    g.id = 4242;
+    g.version = 1;
+    g.name = "Lab";
+    g.libraryEditing = g.fileEditing = "admins";  // read-only for this user
+    env.lib.upsertGroup(g);
+    env.lib.setGroupAccess(4242, true, true);
+    g.id = 31;
+    g.name = "Off group";
+    env.lib.upsertGroup(g);
+    env.lib.setGroupAccess(31, true, true);
+    env.lib.setLibraryEnabled(31, false);
+    CollectionRecord c{"LABCOLL1", "Papers", "", 1};
+    c.lib = 4242;
+    env.lib.upsertCollection(c);
+    ItemRecord item = record("LABITEM1", "Lab paper", {});
+    item.lib = 4242;
+    item.collections = {"LABCOLL1"};
+    env.lib.upsertItem(item);
+    env.fp.add("a", pluginWith(R"(
+        out(await zk.library.libraries());
+        const lab = await zk.library.item("LABITEM1");
+        out([lab.libraryId, lab.libraryName]);
+        const mine = await zk.library.item("AAAAAAA1");
+        out([mine.libraryId, mine.libraryName]);
+        const keys = [];
+        for await (const i of zk.library.items({ library: 4242 })) keys.push(i.key);
+        out(keys);
+        out((await zk.library.collections()).map((c) => c.key + ":" + c.libraryName));
+        try { zk.library.items({ library: "Lab" }); } catch (e) { out(e.message); }
+        try { await zk.zotero.addTag("LABITEM1", "x"); } catch (e) { out(e.message); }
+    )"), {"library:read", "zotero:tags"});
+    const std::string log = env.run("a");
+    CHECK(contains(log, R"(OUT [{"id":0,"name":"My Library","editable":true,"items":4},{"id":4242,"name":"Lab","editable":false,"items":1}])"));
+    CHECK(contains(log, R"(OUT [4242,"Lab"])"));
+    CHECK(contains(log, R"(OUT [0,"My Library"])"));
+    CHECK(contains(log, R"(OUT ["LABITEM1"])"));
+    CHECK(contains(log, R"(OUT ["COLLOTH1:My Library","COLLTOP1:My Library","COLLSUB1:My Library","LABCOLL1:Lab"])"));
+    CHECK(contains(log, "OUT zk.library.items: library must be a library's id (0 for My Library)"));
+    CHECK(contains(log, "OUT zk.zotero.addTag: the group library \"Lab\" is read-only"));
+}
+
+TEST_CASE("library: a switched-off or gone group's item, files and annotations aren't returned by key") {
+    Env env;
+    fill(env.lib);
+    Library::GroupMeta g;
+    g.id = 31;
+    g.version = 1;
+    g.name = "Off group";
+    g.libraryEditing = g.fileEditing = "members";
+    env.lib.upsertGroup(g);
+    env.lib.setGroupAccess(31, true, true);
+    ItemRecord item = record("OFFITEM1", "Off paper", {});
+    item.lib = 31;
+    env.lib.upsertItem(item);
+    AttachmentRecord file;
+    file.key = "OFFFILE1";
+    file.parentKey = "OFFITEM1";
+    file.contentType = "application/pdf";
+    file.lib = 31;
+    env.lib.upsertAttachment(file);
+    AnnotationRecord a;
+    a.key = "OFFANNO1";
+    a.parentKey = "OFFFILE1";
+    a.type = "highlight";
+    a.text = "hidden";
+    a.lib = 31;
+    env.lib.upsertAnnotation(a);
+    const std::string script = R"(
+        const it = await zk.library.item("OFFITEM1");
+        out(it ? it.key : null);
+        out((await zk.library.annotations("OFFFILE1")).length);
+        out((await zk.library.attachments("OFFITEM1")).length);
+    )";
+    env.fp.add("on", pluginWith(script), {"library:read", "annotations:read"});
+    std::string log = env.run("on");
+    CHECK(contains(log, "OUT OFFITEM1"));
+    CHECK(contains(log, "OUT 1"));
+    env.lib.setLibraryEnabled(31, false);
+    env.fp.add("off", pluginWith(script), {"library:read", "annotations:read"});
+    log = env.run("off");
+    CHECK(contains(log, "OUT null"));
+    CHECK_FALSE(contains(log, "OUT 1"));
+    env.lib.setLibraryEnabled(31, true);
+    env.lib.setGroupGone(31, true);
+    env.fp.add("gone", pluginWith(script), {"library:read", "annotations:read"});
+    log = env.run("gone");
+    CHECK(contains(log, "OUT null"));
+    CHECK_FALSE(contains(log, "OUT 1"));
 }
 
 TEST_CASE("library: feeds() lists the Zotero feed subscriptions by name") {
@@ -438,7 +534,7 @@ TEST_CASE("library: annotations, recentAnnotations and notes") {
     )"), {"annotations:read", "notes:read"});
     const std::string log = env.run("a");
     CHECK(contains(log, R"(OUT ["ANNOTAT2","ANNOTAT1"])"));
-    CHECK(contains(log, R"(OUT {"key":"ANNOTAT1","attachmentKey":"PDFPDFP1","itemKey":"AAAAAAA1","type":"highlight","text":"random fields","comment":"nice","color":"#ffd400","pageLabel":"12","tags":["idea"],"created":"2025-03-01T10:00:00Z","modified":"2025-03-02T10:00:00Z"})"));
+    CHECK(contains(log, R"(OUT {"key":"ANNOTAT1","attachmentKey":"PDFPDFP1","itemKey":"AAAAAAA1","type":"highlight","text":"random fields","comment":"nice","color":"#ffd400","pageLabel":"12","tags":["idea"],"created":"2025-03-01T10:00:00Z","modified":"2025-03-02T10:00:00Z","libraryId":0,"libraryName":"My Library"})"));
     CHECK(contains(log, R"("key":"ANNOTAT2","attachmentKey":"PDFPDFP1","itemKey":"AAAAAAA1","type":"note","text":null,"comment":null)"));
     CHECK(contains(log, "OUT 0\n"));
     CHECK(contains(log, R"(OUT ["recent",["ANNOTAT2","ANNOTAT1"]])"));

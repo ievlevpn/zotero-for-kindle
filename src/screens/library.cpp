@@ -42,16 +42,29 @@ Rect LibraryScreen::footerRect() {
 }
 Rect LibraryScreen::sheetArea() { return {0, kTitleRowH, W(), H() - kTabBarH - kTitleRowH}; }
 
-std::string LibraryScreen::filterLine() const { return zk::filterLine(view_, list_.pager().total()); }
+std::string LibraryScreen::filterLine() const { return zk::filterLine(view_, list_.pager().total(), libraryName_); }
+
+bool LibraryScreen::readLibraries(Nav& nav) {
+    libraries_ = nav.library().libraries(false);
+    libraryName_.clear();
+    if (view_.lib == kAllLibraries) return false;
+    for (const auto& l : libraries_)
+        if (l.id == view_.lib) libraryName_ = l.name;
+    if (!libraryName_.empty()) return false;
+    view_.lib = kAllLibraries;
+    saveLibraryView(nav.library(), view_);
+    apply(nav);
+    return true;
+}
 
 void LibraryScreen::onShow(Nav& nav) {
     if (!loaded_) {
         view_ = loadLibraryView(nav.library());
         loaded_ = true;
-        apply(nav);
+        if (!readLibraries(nav)) apply(nav);
         return;
     }
-    list_.refresh(nav.library());
+    if (!readLibraries(nav)) list_.refresh(nav.library());
 }
 
 void LibraryScreen::apply(Nav& nav) {
@@ -76,7 +89,7 @@ void LibraryScreen::setView(const LibraryView& v, Nav& nav) {
     closeSheets();
     view_ = v;
     saveLibraryView(nav.library(), view_);
-    apply(nav);
+    if (!readLibraries(nav)) apply(nav);
     changed(nav);
 }
 
@@ -201,7 +214,7 @@ void LibraryScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap) {
         if (filterButtonRect().contains(g.pos)) {
-            filter_.emplace(view_);
+            filter_.emplace(view_, libraries_);
             nav.damage(sheetArea(), Waveform::Ui);
             return;
         }
@@ -232,7 +245,7 @@ void LibraryScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
     list_.onDownloadEvent(e, listArea(), nav);
     if (e.kind == SyncEvent::Kind::DownloadFinished) nav.damage(filterLineRect(), Waveform::Ui);  // Downloaded's count
     if (e.kind != SyncEvent::Kind::SyncFinished) return;
-    list_.refresh(nav.library());
+    if (!readLibraries(nav)) list_.refresh(nav.library());  // a group may have gone meanwhile
     nav.damage({0, kLineY, W(), H() - kTabBarH - kLineY}, Waveform::Quality);
 }
 

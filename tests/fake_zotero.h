@@ -32,6 +32,7 @@ public:
     std::map<std::string, int64_t> deletedSettings;  // key -> version of deletion
     std::set<std::string> answerUnchanged;   // POST: written, but answered as "unchanged"
     bool omitSuccessful = false;             // POST: "success" without the "successful" copies
+    std::string libraryPath = "users/1/";    // a group's: "groups/<id>/" (FakeZoteroHub)
 
     // A setting changed elsewhere (the desktop's reader): bumps the library version.
     void putSetting(const std::string& key, json value) {
@@ -92,12 +93,17 @@ public:
             r.curlError = "Operation timed out";
             return r;
         }
-        const std::string prefix = "https://api.zotero.org/users/1/";
+        const std::string prefix = "https://api.zotero.org/" + libraryPath;
         if (req.url.rfind(prefix, 0) != 0) return status(r, 404);
         std::string rest = req.url.substr(prefix.size());
         std::string path = rest.substr(0, rest.find('?'));
         std::map<std::string, std::string> q = query(rest);
         r.headers["last-modified-version"] = std::to_string(libraryVersion);
+        if (req.method == "GET")  // nothing changed since the version asked about: 304
+            for (const auto& [name, value] : req.headers)
+                if (name == "If-Modified-Since-Version" && std::stoll(value) >= libraryVersion) return status(r, 304);
+        // The user's groups (FakeZoteroHub has some): none here.
+        if (req.method == "GET" && path == "groups") return ok(r, json::object());
 
         // /settings[?since=N]; POST /settings {key: {value, version}} (per-setting version check)
         if (req.method == "GET" && path == "settings") {

@@ -50,6 +50,7 @@ std::vector<Rect> ItemDetailsScreen::actionRects() const { return actionRects_; 
 
 void ItemDetailsScreen::onShow(Nav& nav) {
     if (auto d = nav.library().details(row_.key)) details_ = std::move(*d);
+    library_ = details_.item.lib != kMyLibrary ? nav.library().libraryName(details_.item.lib) : "";
     if (auto r = nav.library().rowFor(row_.key)) row_ = std::move(*r);
     PluginEntries* e = nav.pluginEntries();
     entriesVersion_ = e ? e->version() : 0;
@@ -109,6 +110,7 @@ void ItemDetailsScreen::draw(Canvas& canvas) {
     std::string collections;
     for (const auto& c : details_.collectionPaths) collections += (collections.empty() ? "" : "\n") + c;
     section("Collections", collections, 3);
+    if (item.lib != kMyLibrary) section("Library", library_, 1);  // a group's item
     std::string tags;
     for (const auto& t : item.tags) tags += (tags.empty() ? "" : ", ") + t;
     section("Tags", tags, 2);
@@ -205,7 +207,7 @@ void ItemDetailsScreen::onGesture(const Gesture& g, Nav& nav) {
             auto item = nav.library().item(row_.key);
             if (!e || !item) return;
             result_ = std::make_unique<PluginResult>(*e, actions_[i], "itemAction",
-                                                     plugins::itemJson(*item, nav.library().isRead(row_.key)), Rect{0, 0, W(), H()});
+                                                     plugins::itemJson(*item, nav.library().isRead(row_.key), nav.library().libraryName(item->lib)), Rect{0, 0, W(), H()});
             running_ = static_cast<int>(i);
             nav.damage(actionRects_[i], Waveform::Ui);
             return;

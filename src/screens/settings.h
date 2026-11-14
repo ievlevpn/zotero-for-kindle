@@ -1,6 +1,8 @@
 #pragma once
 // Settings (spec §7.7): account, WebDAV, the read tag, sync interval, "Keep all highlights
-// offline", downloaded files, full refresh, plugins, about.
+// offline", downloaded files, full refresh, plugins, about. With group libraries (or a key that
+// can't read them), the account row also names where files come from, and WebDAV's place is the
+// Group libraries row: a summary and "›", opening the list of groups with a switch each.
 
 #include <functional>
 #include <optional>
@@ -16,6 +18,9 @@ namespace zk {
 
 class SettingsScreen final : public Screen {
 public:
+    // Collections kept downloaded that still download: a hidden group's (switched off, gone,
+    // unreadable) aren't counted.
+    static int keptCountFor(Library&);
     // `updater` (may be null): the About row's Check for updates; `openUpdate` pushes the update
     // screen when the check finds a newer release. `pendingUpdate`: a newer version the weekly
     // check found (UpdateNotice), for the About row. `plugins` (may be null, or give null): the
@@ -40,6 +45,10 @@ public:
     Rect flashPlusRect() const;
     Rect updateRect() const;
     Rect pluginsRect() const;  // the whole Plugins row: opens the list
+    bool groupsRow() const { return groupsRow_; }
+    Rect groupsRect() const;  // the whole Group libraries row (in WebDAV's place): opens the list
+    std::string groupsLine() const { return groupsLine_; }  // "2 on · 1 no longer available"
+    std::string accountLine() const;  // the account row's second line
     std::string pluginsLine() const;  // "3 on · 1 needs attention"
     bool pluginsDot() const { return pluginsDot_; }  // plugin updates are waiting (Nav::catalog)
     Rect aboutTextRect() const;  // the About row's second line (two lines at most)
@@ -68,7 +77,9 @@ private:
     std::string readTag_;
     bool confirmRemove_ = false;
     int64_t downloadedBytes_ = 0;
-    int keptCount_ = 0;  // collections kept downloaded
+    int keptCount_ = 0;  // collections kept downloaded (keptCountFor)
+    bool groupsRow_ = false;
+    std::string groupsLine_;
 };
 
 }  // namespace zk

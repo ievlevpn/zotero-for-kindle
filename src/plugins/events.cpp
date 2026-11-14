@@ -74,7 +74,7 @@ std::string itemKeyOfAttachment(Library& lib, const std::string& attachmentKey) 
     return a->parentKey.empty() ? a->key : a->parentKey;
 }
 
-json annotationJson(const AnnotationRecord& a, const std::string& itemKey) {
+json annotationJson(const AnnotationRecord& a, const std::string& itemKey, const std::string& libraryName) {
     json j = json::object();
     j["key"] = a.key;
     j["attachmentKey"] = a.parentKey;
@@ -87,6 +87,8 @@ json annotationJson(const AnnotationRecord& a, const std::string& itemKey) {
     j["tags"] = a.tags;
     j["created"] = createdOf(a.json, a.dateModified);
     j["modified"] = a.dateModified;
+    j["libraryId"] = a.lib;
+    j["libraryName"] = libraryName;
     return j;
 }
 
@@ -110,7 +112,7 @@ void annotationEvent(PluginSink& sink, Library& lib, const char* event, const st
     auto a = lib.annotation(key);
     if (!a || a->deletedHere || !a->conflictOf.empty()) return;
     sink.emit(kindle(event, json{{"origin", "kindle"},
-                                 {"annotations", json::array({annotationJson(*a, itemKeyOfAttachment(lib, a->parentKey))})}}));
+                                 {"annotations", json::array({annotationJson(*a, itemKeyOfAttachment(lib, a->parentKey), lib.libraryName(a->lib))})}}));
 }
 
 void annotationDeleted(PluginSink& sink, const AnnotationRef& r) {
@@ -125,7 +127,7 @@ void itemMarked(PluginSink& sink, Library& lib, const std::string& itemKey, bool
     auto it = lib.item(itemKey);
     if (!it) return;
     sink.emit(kindle(read ? "itemMarkedRead" : "itemMarkedUnread",
-                     json{{"origin", "kindle"}, {"items", json::array({itemJson(*it, lib.isRead(itemKey))})}}));
+                     json{{"origin", "kindle"}, {"items", json::array({itemJson(*it, lib.isRead(itemKey), lib.libraryName(it->lib))})}}));
 }
 
 void bookEvent(PluginSink& sink, Library& lib, const char* event, const std::string& itemKey, const std::string& attachmentKey) {
@@ -133,7 +135,7 @@ void bookEvent(PluginSink& sink, Library& lib, const char* event, const std::str
     auto it = lib.item(itemKey);
     auto att = lib.attachment(attachmentKey);
     if (!it || !att) return;
-    sink.emit(kindle(event, json{{"origin", "kindle"}, {"item", itemJson(*it, lib.isRead(itemKey))}, {"attachment", attachmentJson(*att)}}));
+    sink.emit(kindle(event, json{{"origin", "kindle"}, {"item", itemJson(*it, lib.isRead(itemKey), lib.libraryName(it->lib))}, {"attachment", attachmentJson(*att)}}));
 }
 
 std::vector<std::string> KeySet::ordered() const {
@@ -181,10 +183,16 @@ std::vector<PluginEvent> pulledEvents(Library& lib, const Pulled& p) {
         if (it == itemOfAttachment.end()) it = itemOfAttachment.emplace(attachmentKey, itemKeyOfAttachment(lib, attachmentKey)).first;
         return it->second;
     };
+    std::map<int64_t, std::string> names;  // library names, asked once each
+    auto nameOf = [&](int64_t id) -> const std::string& {
+        auto it = names.find(id);
+        if (it == names.end()) it = names.emplace(id, lib.libraryName(id)).first;
+        return it->second;
+    };
     auto annotation = [&](const std::string& key) -> std::optional<json> {
         auto a = lib.annotation(key);
         if (!a || a->deletedHere || !a->conflictOf.empty() || a->conflict) return std::nullopt;
-        return annotationJson(*a, itemKeyOf(a->parentKey));
+        return annotationJson(*a, itemKeyOf(a->parentKey), nameOf(a->lib));
     };
     batched(out, "highlightCreated", "annotations", p.created.ordered(), annotation);
     batched(out, "highlightChanged", "annotations", p.changed.ordered(), annotation);
@@ -192,7 +200,7 @@ std::vector<PluginEvent> pulledEvents(Library& lib, const Pulled& p) {
         return json{{"key", r.key}, {"attachmentKey", r.attachmentKey}, {"itemKey", r.itemKey}};
     });
     auto item = [&](const std::string& key) -> std::optional<json> {
-        if (auto it = lib.item(key)) return itemJson(*it, lib.isRead(key));
+        if (auto it = lib.item(key)) return itemJson(*it, lib.isRead(key), nameOf(it->lib));
         return std::nullopt;
     };
     batched(out, "itemMarkedRead", "items", p.markedRead.ordered(), item);

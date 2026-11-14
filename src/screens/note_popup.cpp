@@ -20,8 +20,8 @@ const char* kLabels[] = {"Edit", "Delete", "Close"};
 std::string bodyOf(const AnnotationRecord& a) { return a.comment.empty() ? " " : a.comment; }
 }  // namespace
 
-NotePopup::NotePopup(AnnotationRecord note, Rect icon, Rect area, std::vector<std::string> chips)
-    : note_(std::move(note)), icon_(icon), area_(area), tags_(std::move(chips), note_.tags) {
+NotePopup::NotePopup(AnnotationRecord note, Rect icon, Rect area, std::vector<std::string> chips, std::string readOnly)
+    : note_(std::move(note)), icon_(icon), area_(area), tags_(std::move(chips), note_.tags), readOnly_(std::move(readOnly)) {
     const int w = std::min(area.w - kMargin, 900);
     tops_ = lineTops(bodyOf(note_), kBody, w - 2 * kPad);
     const int chrome = kTextTop + kGap + TagRow::kH + kTagGap + kButtonH + kBottom;
@@ -69,6 +69,12 @@ void NotePopup::draw(cairo_t* cr) const {
         drawTextLines(cr, note_.comment, kBody,
                       {r.x + kPad, r.y + kTextTop, r.w - 2 * kPad, r.h - kTextTop - kGap - TagRow::kH - kTagGap - kButtonH - kBottom}, first,
                       end - first);
+    if (readOnly()) {  // in the tag row's place: why nothing here can be changed ("by Anna")
+        const Rect t = tags_.rect();
+        centredText(cr, readOnly_, {kSans, 7.5, 400, false, kSecondary}, t, Align::Left);
+        drawButton(cr, buttonRect(2), kLabels[2], false);
+        return;
+    }
     tags_.draw(cr);
     for (int i = 0; i < 3; ++i) drawButton(cr, buttonRect(i), kLabels[i], i == 0);
 }
@@ -83,6 +89,7 @@ NotePopup::Action NotePopup::onGesture(const Gesture& g, Nav& nav) {
         return Action::None;
     }
     if (g.type != GestureType::Tap) return Action::None;
+    if (readOnly()) return buttonRect(2).contains(g.pos) || !rect_.contains(g.pos) ? Action::Close : Action::None;
     if (const int t = tags_.hit(g.pos); t == TagRow::kAdd) return Action::AddTag;
     else if (t >= 0) {
         chip_ = t;

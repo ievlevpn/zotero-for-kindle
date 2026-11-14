@@ -2,6 +2,7 @@
 
 #include "fake_http.h"
 #include "screens/setup.h"
+#include "sync/config.h"
 #include "sync/webdav.h"
 #include "sync/zotero_storage.h"
 
@@ -169,4 +170,38 @@ TEST_CASE("setup: without WebDAV the key must be able to read files") {
                     FakeHttp::ok(R"({"userID":42,"access":{"user":{"library":true,"files":true}}})"));
         CHECK(checkAccount(http, c).kind == ErrorKind::None);
     }
+}
+
+TEST_CASE("zotero storage: a group's file comes from the group's storage") {
+    Rig rig;
+    rig.http.expect("GET", "https://api.zotero.org/groups/4242/items/ABCD1234/file", FakeHttp::status(302, {{"location", kS3}}));
+    rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
+    AttachmentRecord a = rig.attachment();
+    a.lib = 4242;
+    UserError err;
+    REQUIRE(rig.store.download(a, rig.dest.string(), &err));
+    CHECK(rig.onlyTheBook());
+}
+
+TEST_CASE("file store: with WebDAV set up, My Library's files come from WebDAV and a group's from Zotero storage") {
+    Rig rig;
+    Config c;
+    c.userId = 42;
+    c.apiKey = "abcdefghijklmnopqrstuvwx";
+    c.webdavUrl = "https://dav.example.org/zotero/";
+    auto files = makeFileStore(rig.http, c);
+    rig.http.expect("GET", "https://api.zotero.org/groups/4242/items/ABCD1234/file", FakeHttp::status(302, {{"location", kS3}}));
+    rig.http.expect("GET", kS3, FakeHttp::ok(kBook));
+    AttachmentRecord a = rig.attachment();
+    a.lib = 4242;
+    UserError err;
+    REQUIRE(files->download(a, rig.dest.string(), &err));
+    CHECK(rig.onlyTheBook());
+    // My Library's: from WebDAV (its .prop first).
+    rig.http.sent.clear();
+    a.lib = kMyLibrary;
+    a.key = "MINE0001";
+    files->download(a, rig.dest.string(), &err);
+    REQUIRE_FALSE(rig.http.sent.empty());
+    CHECK(rig.http.sent[0].url.rfind("https://dav.example.org/zotero/MINE0001", 0) == 0);
 }

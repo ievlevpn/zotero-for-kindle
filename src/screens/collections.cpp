@@ -112,13 +112,17 @@ void CollectionsScreen::load(Library& lib) {
     sortByName(pinned, all_.end());
     sections_ = nameSections(namesOf(pinned, all_.end()), &starts_);
     for (auto& s : starts_) s += pinned - all_.begin();
-    pager_ = Pager(static_cast<int64_t>(all_.size()), collectionsPerPage());
-    entries_.assign(all_.begin(), all_.begin() + std::min<size_t>(all_.size(), collectionsPerPage()));
+    groups_.clear();
+    for (auto& l : lib.libraries(false))  // those shown, by name
+        if (l.id != kMyLibrary) groups_.push_back(std::move(l));
+    if (!groups_.empty()) starts_.push_back(static_cast<int64_t>(all_.size()));  // the jump sheet's "Groups": the heading
+    pager_ = Pager(lines(), collectionsPerPage());
+    showPage();
 }
 
 void CollectionsScreen::showPage() {
-    entries_.assign(all_.begin() + pager_.offset(),
-                    all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
+    const auto from = std::min<size_t>(all_.size(), static_cast<size_t>(pager_.offset()));
+    entries_.assign(all_.begin() + from, all_.begin() + std::min<size_t>(all_.size(), pager_.offset() + pager_.perPage()));
 }
 
 void CollectionsScreen::onShow(Nav& nav) {
@@ -136,15 +140,37 @@ void CollectionsScreen::loadKept(Nav& nav) { kept_ = keptStatuses(all_, nav); }
 
 std::string CollectionsScreen::rowNote(size_t i) const {
     const auto& e = entries_.at(i);
-    return joinNotes(e.parentName.empty() ? "" : "in " + e.parentName, keptNote(statusOf(kept_, e.collection.key)));
+    std::string where = e.parentName;
+    if (where.empty() && e.collection.lib != kMyLibrary)  // a group's pinned top-level collection: its group
+        for (const auto& g : groups_)
+            if (g.id == e.collection.lib) where = g.name;
+    return joinNotes(where.empty() ? "" : "in " + where, keptNote(statusOf(kept_, e.collection.key)));
 }
 
 Rect CollectionsScreen::searchRect() { return {W() - kMargin - 100, 20, 100, 100}; }
 
+Rect CollectionsScreen::lineRect(int64_t line) const {
+    return {kMargin, contentArea().y + static_cast<int>(line - pager_.offset()) * kLineH, W() - 2 * kMargin, kLineH};
+}
+
 std::vector<Rect> CollectionsScreen::entryRects() const {
     std::vector<Rect> out;
-    for (size_t i = 0; i < entries_.size(); ++i)
-        out.push_back({kMargin, contentArea().y + static_cast<int>(i) * kLineH, W() - 2 * kMargin, kLineH});
+    for (size_t i = 0; i < entries_.size(); ++i) out.push_back(lineRect(pager_.offset() + static_cast<int64_t>(i)));
+    return out;
+}
+
+std::optional<Rect> CollectionsScreen::groupHeadingRect() const {
+    const auto line = static_cast<int64_t>(all_.size());
+    if (groups_.empty() || line < pager_.offset() || line >= pager_.offset() + pager_.perPage()) return std::nullopt;
+    return lineRect(line);
+}
+
+std::vector<std::pair<LibraryInfo, Rect>> CollectionsScreen::groupRows() const {
+    std::vector<std::pair<LibraryInfo, Rect>> out;
+    for (size_t j = 0; j < groups_.size(); ++j) {
+        const auto line = static_cast<int64_t>(all_.size() + 1 + j);
+        if (line >= pager_.offset() && line < pager_.offset() + pager_.perPage()) out.emplace_back(groups_[j], lineRect(line));
+    }
     return out;
 }
 
@@ -159,7 +185,9 @@ void CollectionsScreen::draw(Canvas& canvas) {
         const auto& e = entries_[i];
         drawCollectionRow(cr, rects[i], e.collection.name, e.items, e.hasChildren, e.pinned, rowNote(i), e.kept);
     }
-    if (all_.empty())
+    if (auto h = groupHeadingRect()) drawSectionHeading(cr, *h, "Group libraries");
+    for (const auto& [g, r] : groupRows()) drawGroupRow(cr, r, g.name, g.items);
+    if (all_.empty() && groups_.empty())
         drawText(cr, "No collections yet.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100}, 1,
                  Align::Center);
     drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());
@@ -207,7 +235,9 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (footerRect().contains(g.pos)) {
         if (pager_.pages() > 1) {
-            jump_.emplace(jumpGroups(SortBy::Title, sections_), pager_.page(), pager_.pages());
+            auto index = jumpGroups(SortBy::Title, sections_);
+            if (!groups_.empty()) index.push_back({"", {{"Groups", sections_.size()}}});  // to the heading's page
+            jump_.emplace(std::move(index), pager_.page(), pager_.pages());
             nav.damage(sheetArea(), Waveform::Ui);
         }
         return;
@@ -215,6 +245,8 @@ void CollectionsScreen::onGesture(const Gesture& g, Nav& nav) {
     auto rects = entryRects();
     for (size_t i = 0; i < rects.size(); ++i)
         if (rects[i].contains(g.pos)) nav.push(std::make_unique<CollectionScreen>(entries_[i], openItem_, status_));
+    for (const auto& [lib, r] : groupRows())
+        if (r.contains(g.pos)) nav.push(std::make_unique<CollectionScreen>(lib, openItem_, status_));
 }
 
 void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
@@ -240,15 +272,23 @@ void CollectionsScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
 CollectionScreen::CollectionScreen(CollectionEntry entry, std::function<void(const ItemRow&)> openItem, StatusFn status)
     : entry_(std::move(entry)), openItem_(std::move(openItem)), status_(std::move(status)) {}
 
+CollectionScreen::CollectionScreen(const LibraryInfo& group, std::function<void(const ItemRow&)> openItem, StatusFn status)
+    : group_(group.id), openItem_(std::move(openItem)), status_(std::move(status)) {
+    entry_.collection.name = group.name;
+    entry_.collection.lib = group.id;
+    entry_.items = group.items;
+}
+
 Rect CollectionScreen::backRect() { return headerBackRect(); }
 Rect CollectionScreen::searchRect() { return CollectionsScreen::searchRect(); }
 
 // Subcollections take kLineH, items kRowH; a page is filled greedily in that order.
 void CollectionScreen::load(Library& lib) {
-    subs_ = lib.childCollections(entry_.collection.key);
+    subs_ = group_ ? lib.childCollections("", group_) : lib.childCollections(entry_.collection.key);
     sortByName(subs_.begin(), subs_.end());
     ListQuery q;
-    q.collectionKey = entry_.collection.key;
+    q.collectionKey = entry_.collection.key;  // a group's list: "", with the library
+    if (group_) q.lib = group_;
     q.sort = SortBy::Title;
     const int64_t items = lib.countRows(q);
     subSections_ = nameSections(namesOf(subs_.begin(), subs_.end()), &starts_);
@@ -304,7 +344,7 @@ void CollectionScreen::draw(Canvas& canvas) {
     fillRect(cr, {0, 0, W(), H()}, 255);
     drawHeader(cr, entry_.collection.name, true, searchRect().w + 20);
     const Rect s = searchRect();
-    searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);
+    if (!group_) searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);  // search is by collection
     auto rects = lineRects();
     for (size_t i = 0; i < page_.size(); ++i) {
         if (page_[i].isCollection)
@@ -315,7 +355,7 @@ void CollectionScreen::draw(Canvas& canvas) {
             drawItemRow(cr, rects[i], page_[i].item, status_ ? status_(page_[i].item.attachmentKey) : "");
     }
     if (page_.empty())
-        drawText(cr, "This collection is empty.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100},
+        drawText(cr, group_ ? "This group library is empty." : "This collection is empty.", {kSerif, 11, 400, false, kSecondary}, {kMargin, 500, W() - 2 * kMargin, 100},
                  1, Align::Center);
     drawJumpIndicator(cr, footerRect(), pager_.page(), pager_.pages());
     if (sheet_) sheet_->draw(cr);
@@ -370,7 +410,7 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type == GestureType::Tap && searchRect().contains(g.pos)) {
-        nav.push(std::make_unique<SearchScreen>(openItem_, status_, entry_.collection.key, entry_.collection.name));
+        if (!group_) nav.push(std::make_unique<SearchScreen>(openItem_, status_, entry_.collection.key, entry_.collection.name));
         return;
     }
     if (g.type == GestureType::Tap && footerRect().contains(g.pos)) {

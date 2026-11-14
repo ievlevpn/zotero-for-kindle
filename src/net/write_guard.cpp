@@ -36,6 +36,19 @@ std::string queryOf(const std::string& url) {
 
 using IsAnnotation = std::function<bool(const std::string&)>;
 
+// The library a request writes to (/users/<id>: 0, /groups/<id>: the group), and whether a key is
+// that library's: with no LibraryOf, every key counts as My Library's.
+struct Scope {
+    int64_t lib = 0;
+    const WriteGuard::LibraryOf* libraryOf = nullptr;
+    bool has(const std::string& key) const { return has(key, lib); }
+    bool has(const std::string& key, int64_t in) const {
+        if (!libraryOf || !*libraryOf) return in == 0;
+        auto l = (*libraryOf)(key);
+        return l && *l == in;
+    }
+};
+
 // Sent against a version: If-Unmodified-Since-Version: <number>.
 bool versioned(const HttpRequest& req) {
     static const std::regex version(R"(^\d+$)");
@@ -57,17 +70,21 @@ std::string bulkDeleteRefusal(const std::string& query, const IsAnnotation& isAn
     return {};
 }
 
-// POST /users/<id>/settings: only {"lastPageIndex_u_<file key>": {"value": <page or CFI>, "version": n}}.
-std::string settingsRefusal(const HttpRequest& req, const IsAnnotation& isAttachment) {
+// POST /users/<id>/settings: only {"lastPageIndex_u_<file key>": {"value": <page or CFI>, "version": n}},
+// or lastPageIndex_g<groupID>_<file key> for a file of that group (Zotero keeps a group file's
+// position in the user's own settings, so a read-only group's too).
+std::string settingsRefusal(const HttpRequest& req, const IsAnnotation& isAttachment, const Scope& scope) {
     if (!isAttachment) return "settings are not writable here";
     if (!queryOf(req.url).empty()) return "POST settings with a query";
     auto body = nlohmann::json::parse(req.body, nullptr, false);
     if (!body.is_object() || body.empty()) return "POST settings body is not a non-empty object";
-    static const std::regex positionKey(R"(^lastPageIndex_u_([A-Z0-9]{8})$)");
+    static const std::regex positionKey(R"(^lastPageIndex_(u|g([1-9]\d{0,17}))_([A-Z0-9]{8})$)");
     for (const auto& [key, setting] : body.items()) {
         std::smatch match;
         if (!std::regex_match(key, match, positionKey)) return "setting " + key + " is not a reading position";
-        if (!isAttachment(match[1].str())) return "setting " + key + " is not for a file of this library";
+        const int64_t lib = match[1].str() == "u" ? 0 : std::stoll(match[2].str());
+        if (!isAttachment(match[3].str()) || !scope.has(match[3].str(), lib))
+            return "setting " + key + " is not for a file of " + (lib == 0 ? std::string("this library") : "group " + std::to_string(lib));
         if (!setting.is_object()) return "setting " + key + " is not an object";
         for (const auto& [field, v] : setting.items())
             if (field != "value" && field != "version") return "setting " + key + " has field " + field;
@@ -157,7 +174,7 @@ bool createField(const std::string& f) {
 }
 
 // POST /items, one object that isn't an annotation: a plugin's pending CreateItem or AddNote, exactly.
-std::string pluginPostRefusal(const nlohmann::json& obj, const WriteGuard::PluginChanges& pluginChanges) {
+std::string pluginPostRefusal(const nlohmann::json& obj, const WriteGuard::PluginChanges& pluginChanges, const Scope& scope) {
     using K = PluginChange::Kind;
     if (!pluginChanges) return "POST object is not an annotation";
     if (!obj.contains("key") || !isKey(obj["key"])) return "POST of a new item without its key";
@@ -175,6 +192,7 @@ std::string pluginPostRefusal(const nlohmann::json& obj, const WriteGuard::Plugi
         if (!obj.contains("parentItem") || !isKey(obj["parentItem"]) || !obj.contains("note") || !obj["note"].is_string())
             return "note " + key + " is not a child note";
         const std::string parent = obj["parentItem"].get<std::string>(), html = obj["note"].get<std::string>();
+        if (!scope.has(parent)) return "note " + key + " goes on an item of another library";
         if (!pendingOf(*shape, K::AddNote, [&](const PluginChange& c) { return c.parentKey == parent && c.value == html; }))
             return "note " + key + " is not the note a plugin is adding";
         return {};
@@ -186,8 +204,10 @@ std::string pluginPostRefusal(const nlohmann::json& obj, const WriteGuard::Plugi
     if (!obj.contains("title") || !obj["title"].is_string()) return "item " + key + " has no title";
     if (obj.contains("collections")) {
         if (!obj["collections"].is_array()) return "item " + key + ": collections is not a list";
-        for (const auto& c : obj["collections"])
+        for (const auto& c : obj["collections"]) {
             if (!isKey(c)) return "item " + key + " has a malformed collection";
+            if (!scope.has(c.get<std::string>())) return "item " + key + " goes into a collection of another library";
+        }
     }
     if (obj.contains("tags")) {
         if (!obj["tags"].is_array()) return "item " + key + ": tags is not a list";
@@ -218,7 +238,7 @@ std::string pluginPostRefusal(const nlohmann::json& obj, const WriteGuard::Plugi
 // PATCH /items/<key> of `collections` (one key in or out) or `deleted` (the trash), for a pending
 // plugin change of the item; against its version.
 std::string pluginPatchRefusal(const HttpRequest& req, const std::string& key, const nlohmann::json& body,
-                               const WriteGuard::PluginChanges& pluginChanges) {
+                               const WriteGuard::PluginChanges& pluginChanges, const Scope& scope) {
     using K = PluginChange::Kind;
     if (!pluginChanges) return "PATCH item " + key + " changes more than its tags";
     const auto shape = pluginChanges(key);
@@ -237,6 +257,7 @@ std::string pluginPatchRefusal(const HttpRequest& req, const std::string& key, c
     std::set<std::string> after;
     for (const auto& c : list) {
         if (!isKey(c)) return "PATCH item " + key + " has a malformed collection";
+        if (!scope.has(c.get<std::string>())) return "PATCH item " + key + " names a collection of another library";
         if (!after.insert(c.get<std::string>()).second) return "PATCH item " + key + " names a collection twice";
     }
     const std::set<std::string> before(shape->collections.begin(), shape->collections.end());
@@ -267,18 +288,47 @@ std::string pluginDeleteRefusal(const HttpRequest& req, const std::string& key,
 }
 
 // Why the request must not go out, or empty if it may.
-std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, const IsAnnotation& isAttachment,
-                    const WriteGuard::ItemTags& itemTags, const WriteGuard::PluginChanges& pluginChanges) {
+std::string refusal(const HttpRequest& req, const IsAnnotation& anyAnnotation, const IsAnnotation& isAttachment,
+                    const WriteGuard::ItemTags& anyItemTags, const WriteGuard::PluginChanges& anyPluginChanges,
+                    const WriteGuard::LibraryOf& libraryOf, const std::function<bool(int64_t)>& groupWritable,
+                    const IsAnnotation& annotationEditable) {
     const std::string& m = req.method;
     if (m == "GET" || m == "HEAD" || m == "PROPFIND")
         return req.body.empty() ? std::string{} : m + " with a body";  // curl would send it as a POST
     if (!isZoteroApi(req.url)) return m + " outside the Zotero API";
 
-    static const std::regex itemPath(R"(^/users/\d+/items/([A-Z0-9]{8})/?$)");
-    static const std::regex itemsPath(R"(^/users/\d+/items/?$)");
+    static const std::regex itemPath(R"(^/(?:users|groups)/\d+/items/([A-Z0-9]{8})/?$)");
+    static const std::regex itemsPath(R"(^/(?:users|groups)/\d+/items/?$)");
+    static const std::regex groupPath(R"(^/groups/([1-9]\d{0,17})/)");
     const std::string path = pathOf(req.url);
     const std::string query = queryOf(req.url);
     std::smatch match;
+    // A group's library: only one the Kindle may edit, and only its own objects.
+    Scope scope{0, &libraryOf};
+    if (std::regex_search(path, match, groupPath)) {
+        scope.lib = std::stoll(match[1].str());
+        if (!libraryOf || !groupWritable || !groupWritable(scope.lib))
+            return "group " + std::to_string(scope.lib) + " is not writable from the Kindle";
+    } else if (path.rfind("/groups", 0) == 0) {
+        return m + " " + path + " is not an allowed write";
+    }
+    // The rules below see only the objects of the library written to.
+    // In a group, only the user's own annotations (another member's are theirs alone).
+    const IsAnnotation isAnnotation = [&](const std::string& key) {
+        return anyAnnotation(key) && scope.has(key) && (scope.lib == 0 || (annotationEditable && annotationEditable(key)));
+    };
+    const WriteGuard::ItemTags itemTags =
+        !anyItemTags ? WriteGuard::ItemTags()
+                     : [&](const std::string& key) -> std::optional<std::vector<std::string>> {
+                           if (!scope.has(key)) return std::nullopt;
+                           return anyItemTags(key);
+                       };
+    const WriteGuard::PluginChanges pluginChanges =
+        !anyPluginChanges ? WriteGuard::PluginChanges()
+                          : [&](const std::string& key) -> std::optional<PluginChangeShape> {
+                                if (!scope.has(key)) return std::nullopt;
+                                return anyPluginChanges(key);
+                            };
     if (m == "DELETE") {
         if (!req.body.empty()) return "DELETE with a body";
         if (std::regex_match(path, match, itemPath) && query.empty())
@@ -291,11 +341,11 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, co
         if (isAnnotation(key)) return {};
         auto body = nlohmann::json::parse(req.body, nullptr, false);
         if (body.is_object() && body.size() == 1 && (body.contains("collections") || body.contains("deleted")))
-            return pluginPatchRefusal(req, key, body, pluginChanges);
+            return pluginPatchRefusal(req, key, body, pluginChanges, scope);
         return tagsRefusal(req, key, itemTags, pluginChanges);
     }
     static const std::regex settingsPath(R"(^/users/\d+/settings/?$)");
-    if (m == "POST" && std::regex_match(path, settingsPath)) return settingsRefusal(req, isAttachment);
+    if (m == "POST" && std::regex_match(path, settingsPath)) return settingsRefusal(req, isAttachment, scope);
     if (m == "POST" && std::regex_match(path, itemsPath)) {
         auto body = nlohmann::json::parse(req.body, nullptr, false);
         if (!body.is_array()) return "POST body is not a JSON array";
@@ -304,9 +354,12 @@ std::string refusal(const HttpRequest& req, const IsAnnotation& isAnnotation, co
             auto type = obj.find("itemType");
             if (type == obj.end() || *type != "annotation") {
                 if (!versioned(req)) return "POST of a plugin's object without If-Unmodified-Since-Version";
-                if (std::string why = pluginPostRefusal(obj, pluginChanges); !why.empty()) return why;
+                if (std::string why = pluginPostRefusal(obj, pluginChanges, scope); !why.empty()) return why;
                 continue;
             }
+            // A new annotation goes on a file of the same library.
+            if (obj.contains("parentItem") && obj["parentItem"].is_string() && !scope.has(obj["parentItem"].get<std::string>()))
+                return "annotation on " + obj["parentItem"].get<std::string>() + ", a file of another library";
             if (!obj.contains("key")) continue;
             if (!obj["key"].is_string()) return "POST object has a non-string key";
             const std::string key = obj["key"].get<std::string>();
@@ -326,7 +379,8 @@ WriteGuard::WriteGuard(Http& inner, std::function<bool(const std::string& key)> 
       itemTags_(std::move(itemTags)), pluginChanges_(std::move(pluginChanges)) {}
 
 HttpResponse WriteGuard::send(const HttpRequest& req) {
-    const std::string why = refusal(req, isAnnotation_, isAttachment_, itemTags_, pluginChanges_);
+    const std::string why =
+        refusal(req, isAnnotation_, isAttachment_, itemTags_, pluginChanges_, libraryOf_, groupWritable_, annotationEditable_);
     if (why.empty()) return inner_.send(req);
     log(LogLevel::Warn, "write guard refused %s %s: %s", req.method.c_str(), pathOf(req.url).c_str(), why.c_str());
     HttpResponse r;

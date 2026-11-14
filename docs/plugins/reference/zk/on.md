@@ -19,7 +19,10 @@ Every event says where the change was made: `origin: "kindle"` (the user did it 
 Kindle, one event per change, as it happens) or `origin: "zotero"` (it came in with a sync:
 one event per kind per sync, listing everything). So events that can arrive with a sync carry
 a list — `annotations` or `items` — with one entry when the change was made on the Kindle.
-The first full sync of a library fires only `syncFinished` (with `initial: true`).
+The first full sync of a library fires only `syncFinished` (with `initial: true`). That holds for
+each group library too: the sync in which a group is first downloaded (newly joined, or switched
+on again after its copy was removed) ends with `initial: true`, even when My Library had synced
+before, so a plugin that keeps an index rebuilds it then.
 
 **Permission**: what the event carries — `annotations:read` for `highlight…` events,
 `library:read` for `book…` and `itemMarked…` events; `syncFinished` needs none.

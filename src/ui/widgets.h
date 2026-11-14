@@ -56,10 +56,13 @@ void drawToast(cairo_t*, Rect, const std::string& text);
 // A highlight or note: shade bar, text (Bookerly, 3 lines), comment, page label, and its sync
 // state ("not synced yet", "on the Kindle only", or a conflict with Re-apply · Discard).
 constexpr int kNoteRowH = 220;
-// conflictButtons: only where a screen handles Re-apply · Discard (the Notes tab).
-void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&, bool conflictButtons = false);
+// conflictButtons: only where a screen handles Re-apply · Discard (the Notes tab). author: another
+// member's name (a group's annotation, annotationAuthor()): "by Anna" in the quiet line under the comment.
+void drawNoteRow(cairo_t*, Rect, const AnnotationRecord&, bool conflictButtons = false, const std::string& author = "");
 std::string noteSyncMark(const AnnotationRecord&);  // "" when it is simply in Zotero
 std::string noteRowTags(const AnnotationRecord&);   // "#method · #to-cite" ("" without tags)
+// The quiet line under a note's comment: "by Anna · #method · #to-cite" ("" with neither).
+std::string noteRowQuietLine(const AnnotationRecord&, const std::string& author);
 std::string noteRowLabel(const AnnotationRecord&);  // "Area · p. 12", a sticky note "Note · p. 12"; else ""
 Rect noteRowButtonRect(Rect row, int i);            // a conflict's 0 Re-apply, 1 Discard
 
@@ -68,6 +71,9 @@ Rect noteRowButtonRect(Rect row, int i);            // a conflict's 0 Re-apply, 
 // `note` (a pinned subcollection's "in Economics", "Downloading 3 of 12") under the name.
 void drawCollectionRow(cairo_t*, Rect, const std::string& name, int64_t items, bool hasChildren, bool pinned = false,
                        const std::string& note = "", bool kept = false);
+// A group library's line in the Collections tab: a group glyph (two people) where a collection has
+// its folder, the name, its item count and "›" (it opens the group's own list).
+void drawGroupRow(cairo_t*, Rect, const std::string& name, int64_t items);
 // Where drawCollectionRow puts the name, and its marks (left to right: kept, pinned).
 Rect collectionRowNameRect(Rect row, bool pinned, bool kept);
 std::vector<Rect> collectionRowMarks(Rect row, bool pinned, bool kept);

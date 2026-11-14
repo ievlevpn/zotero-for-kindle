@@ -114,7 +114,7 @@ TEST_CASE("notes: a version 6 database gains the table and keeps its data") {
     }
     Db db = Db::open(path);
     Library lib(db);
-    CHECK(db.userVersion() == 11);
+    CHECK(db.userVersion() == 12);
     CHECK(lib.annotation("UNSENT01"));
     CHECK(lib.annotation("UNSENT01")->dirty);
     CHECK(lib.countAnnotations("mine") == 1);
