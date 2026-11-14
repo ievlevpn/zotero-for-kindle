@@ -89,13 +89,16 @@ std::string shortened(const std::string& s, size_t max) {
 
 // ---- the view ------------------------------------------------------------------------------
 
-bool LibraryView::filtered() const { return type != TypeFilter::WithFile || read != ReadFilter::Any || !tag.empty(); }
+bool LibraryView::filtered() const {
+    return type != TypeFilter::WithFile || read != ReadFilter::Any || !tag.empty() || lib != kAllLibraries;
+}
 
 LibraryView LibraryView::cleared() const {
     LibraryView v = *this;
     v.type = TypeFilter::WithFile;
     v.read = ReadFilter::Any;
     v.tag.clear();
+    v.lib = kAllLibraries;
     return v;
 }
 
@@ -106,6 +109,7 @@ ListQuery LibraryView::query() const {
     q.read = read;
     q.downloaded = downloaded;
     q.tag = tag;
+    q.lib = lib;
     return q;
 }
 
@@ -118,6 +122,8 @@ LibraryView loadLibraryView(Library& lib) {
     v.read = fromName(kReads, readName, j.value("read", ""), v.read);
     v.tag = j.value("tag", "");
     v.sort = fromName(kSorts, sortName, j.value("sort", ""), v.sort);
+    if (const auto it = j.find("library"); it != j.end() && it->is_number_integer() && it->get<int64_t>() >= 0)
+        v.lib = it->get<int64_t>();
     return v;
 }
 
@@ -126,7 +132,8 @@ void saveLibraryView(Library& lib, const LibraryView& v) {
                                          {"type", typeName(v.type)},
                                          {"read", readName(v.read)},
                                          {"tag", v.tag},
-                                         {"sort", sortName(v.sort)}}
+                                         {"sort", sortName(v.sort)},
+                                         {"library", v.lib == kAllLibraries ? json(nullptr) : json(v.lib)}}
                                         .dump());
 }
 
@@ -139,9 +146,10 @@ std::string withThousands(int64_t n) {
     return n < 0 ? "-" + out : out;
 }
 
-std::string filterLine(const LibraryView& v, int64_t count) {
+std::string filterLine(const LibraryView& v, int64_t count, const std::string& libraryName) {
     std::string s;
     auto add = [&](const std::string& part) { s += part + " · "; };
+    if (v.lib != kAllLibraries && !libraryName.empty()) add(libraryName);
     switch (v.type) {
         case TypeFilter::Any: add("All types"); break;
         case TypeFilter::Pdf: add("PDF"); break;
@@ -214,12 +222,25 @@ Rect sheetRectIn(Rect area, int height) {
 // ---- Filter --------------------------------------------------------------------------------
 
 Rect FilterSheet::sheetRect(Rect area) const {
-    return sheetRectIn(area, kPad + kTitleH + 3 * kGroupH + 20 + kButtonH + kPad);
+    return sheetRectIn(area, kPad + kTitleH + groups() * kGroupH + 20 + kButtonH + kPad);
 }
 
 Rect FilterSheet::chipsArea(Rect area, int group) const {
     const Rect s = sheetRect(area);
-    return {s.x + kMargin, s.y + kPad + kTitleH + group * kGroupH + kGroupLabelH, s.w - 2 * kMargin, kChipH};
+    const int row = group + (hasLibraries() ? 1 : 0);  // the Library group first
+    return {s.x + kMargin, s.y + kPad + kTitleH + row * kGroupH + kGroupLabelH, s.w - 2 * kMargin, kChipH};
+}
+
+std::vector<std::string> FilterSheet::libraryLabels() const {
+    if (!hasLibraries()) return {};
+    std::vector<std::string> out{"All"};
+    for (const auto& l : libraries_) out.push_back(shortened(l.name, 20));
+    return out;
+}
+
+std::vector<Rect> FilterSheet::libraryRects(Rect area) const {
+    if (!hasLibraries()) return {};
+    return chipRects(chipsArea(area, -1), libraryLabels());
 }
 
 std::vector<std::string> FilterSheet::tagLabels() const {
@@ -245,10 +266,16 @@ Rect FilterSheet::doneRect(Rect area) const {
 void FilterSheet::draw(cairo_t* cr, Rect area) const {
     const Rect s = sheetRect(area);
     drawSheet(cr, area, s, "Filter");
-    const char* names[] = {"Type", "Read", "Tag"};
-    for (int g = 0; g < 3; ++g) {
+    const char* names[] = {"Library", "Type", "Read", "Tag"};
+    for (int g = hasLibraries() ? -1 : 0; g < 3; ++g) {
         const Rect chips = chipsArea(area, g);
-        drawText(cr, names[g], kGroupLabel, {chips.x, chips.y - kGroupLabelH, chips.w, kGroupLabelH - 6}, 1);
+        drawText(cr, names[g + 1], kGroupLabel, {chips.x, chips.y - kGroupLabelH, chips.w, kGroupLabelH - 6}, 1);
+    }
+    if (hasLibraries()) {
+        int active = 0;
+        for (size_t i = 0; i < libraries_.size(); ++i)
+            if (libraries_[i].id == draft_.lib) active = static_cast<int>(i) + 1;
+        drawChips(cr, chipsArea(area, -1), libraryLabels(), active);
     }
     const int type = static_cast<int>(std::find(std::begin(kTypes), std::end(kTypes), draft_.type) - std::begin(kTypes));
     const int read = static_cast<int>(std::find(std::begin(kReads), std::end(kReads), draft_.read) - std::begin(kReads));
@@ -267,6 +294,10 @@ FilterSheet::Action FilterSheet::onGesture(const Gesture& g, Rect area) {
             if (rects[i].contains(g.pos)) return static_cast<int>(i);
         return -1;
     };
+    if (int i = hit(libraryRects(area)); i >= 0) {
+        draft_.lib = i == 0 ? kAllLibraries : libraries_[static_cast<size_t>(i - 1)].id;
+        return Action::Changed;
+    }
     if (int i = hit(typeRects(area)); i >= 0) {
         draft_.type = kTypes[i];
         return Action::Changed;

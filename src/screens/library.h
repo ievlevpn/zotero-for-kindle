@@ -48,10 +48,15 @@ private:
     void onSortGesture(const Gesture&, Nav&);
     void onJumpGesture(const Gesture&, Nav&);
     void openJump(Nav&);
+    // The libraries shown, and the chosen one's name; a chosen group no longer shown (switched off,
+    // gone) falls back to All. True if the view changed so (applied and remembered).
+    bool readLibraries(Nav&);
 
     std::function<void(const ItemRow&)> openItem_;
     ItemList list_;
     LibraryView view_;
+    std::vector<LibraryInfo> libraries_;  // shown: My Library, then the groups
+    std::string libraryName_;             // the Library filter's choice
     bool loaded_ = false;
     std::optional<FilterSheet> filter_;
     std::optional<SortSheet> sort_;
