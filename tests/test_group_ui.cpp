@@ -459,6 +459,10 @@ TEST_CASE("group UI: another member's annotation names them and can't be changed
     CHECK(e.bar().mode() == AnnotationBar::Mode::View);
     CHECK(e.bar().label() == "by Anna Weber");
     CHECK_FALSE(e.bar().hasColours());
+    CHECK(e.bar().rect().h > AnnotationBar::kTextH);  // room for the comment ("see Kuhn") under the name
+    AnnotationRecord bare = anna;
+    bare.comment.clear();
+    CHECK(AnnotationEditor(bare, {100, 600, 600, 50}, {}, "by Anna Weber").bar().rect().h == AnnotationBar::kTextH);
     CHECK(e.onTap(e.bar().rect().center(), rig.nav) == AnnotationEditor::Result::Open);
     e.editComment(rig.nav);
     CHECK_FALSE(e.commenting());

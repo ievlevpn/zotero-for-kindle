@@ -3,7 +3,9 @@
 //   zotero --plugins-dir DIR       (desktop) use DIR as the plugins folder; plugin logs go to stderr; a changed main.js reloads
 //          [--enable-plugin ID]... (desktop, with --plugins-dir) turn these plugins on in DIR
 //   zotero --screenshot home|library|collections|notes|settings OUT.png [--db PATH] [--device pw5|scribe|kt4] [--landscape]
-//                                                  render a screen to a PNG and exit
+//                                                  render a screen to a PNG and exit; also library:filter,
+//                                                  collections:group:<id>, settings:groups[:remove:<id>|:off:<id>],
+//                                                  reader:<attachment>[:page][:menus|:annotation:<key>]
 
 #include <atomic>
 #include <chrono>
@@ -38,6 +40,7 @@
 #include "platform/lipc.h"
 #include "platform/power.h"
 #include "screens/collections.h"
+#include "screens/group_libraries.h"
 #include "screens/home.h"
 #include "screens/library.h"
 #include "screens/notes.h"
@@ -157,10 +160,34 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     if (screen == "notes") s = std::make_unique<NotesScreen>();
     if (screen == "settings") s = std::make_unique<SettingsScreen>(loadConfig(defaultPaths().configDir).value_or(Config{}),
                                                                    [](Nav&) {});
+    // What to do once shown (a sheet opened, a row tapped), as a finger would.
+    std::function<void(Nav&)> then;
+    auto tapOn = [&](Rect r, Nav& n) { s->onGesture(Gesture{GestureType::Tap, r.center(), r.center()}, n); };
+    if (screen == "library:filter") {
+        s = std::make_unique<LibraryScreen>(nullptr);
+        then = [&](Nav& n) { tapOn(LibraryScreen::filterButtonRect(), n); };
+    }
+    if (screen.rfind("collections:group:", 0) == 0)  // a group library's own list
+        if (auto g = lib.libraryInfo(std::atoll(screen.c_str() + 18))) s = std::make_unique<CollectionScreen>(*g, nullptr);
+    if (screen.rfind("settings:groups", 0) == 0) {  // Settings → Group libraries; :remove:<id> / :off:<id> taps that row's
+        auto g = std::make_unique<GroupLibrariesScreen>();
+        GroupLibrariesScreen* groups = g.get();
+        s = std::move(g);
+        const size_t colon = screen.find(':', 16);
+        if (colon != std::string::npos) {
+            const std::string what = screen.substr(16, colon - 16);
+            const int64_t id = std::atoll(screen.c_str() + colon + 1);
+            then = [groups, what, id, tapOn](Nav& n) {
+                for (size_t i = 0; i < groups->rows().size(); ++i)
+                    if (groups->rows()[i].group.id == id) tapOn(what == "off" ? groups->toggleRect(i) : groups->removeRect(i), n);
+            };
+        }
+    }
     // reader:<attachmentKey>[:page][:menus] — a downloaded book, as the reader shows it.
     ReaderScreen* reader = nullptr;
     int readerPage = -1;
     bool readerMenus = false;
+    std::string readerAnnotation;
     if (screen.rfind("reader:", 0) == 0) {
         std::vector<std::string> parts;
         for (size_t at = 0, next; at <= screen.size(); at = next + 1) {
@@ -176,6 +203,7 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         }
         if (parts.size() > 2 && !parts[2].empty()) readerPage = std::atoi(parts[2].c_str());
         readerMenus = parts.size() > 3 && parts[3] == "menus";
+        if (parts.size() > 4 && parts[3] == "annotation") readerAnnotation = parts[4];  // tapped: its bar
         auto r = std::make_unique<ReaderScreen>(*row, att->localPath,
                                                 att->contentType == "application/pdf" ? DocType::Pdf : DocType::Epub, [] {
                                                     return std::make_unique<RenderWorker>([](DocType t) {
@@ -210,6 +238,7 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
         const Screen* top() const override { return nullptr; }
     } nav(lib, sync);
     s->onShow(nav);
+    if (then) then(nav);
     if (reader) {
         auto wait = [&](const std::function<bool()>& done) {
             for (int i = 0; i < 1500 && !done(); ++i) {
@@ -223,6 +252,16 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
             wait([&] { return reader->page() == readerPage; });
         }
         if (readerMenus) reader->onGesture(Gesture{GestureType::Tap, {metrics().width / 2, metrics().height / 2}, {}}, nav);
+        if (auto a = readerAnnotation.empty() ? std::nullopt : lib.annotation(readerAnnotation)) {
+            auto box = [&]() -> std::optional<Rect> {
+                for (const auto& h : reader->highlights())
+                    if (h.annotationKey == a->key) return h.rect;
+                return std::nullopt;
+            };
+            if (readerPage < 0) reader->jumpToAnnotation(*a);
+            wait([&] { return box().has_value(); });
+            if (auto r = box()) reader->onGesture(Gesture{GestureType::Tap, r->center(), r->center()}, nav);
+        }
         Canvas c(metrics().width, metrics().height);
         s->draw(c);
         const bool ok = cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS;
@@ -232,8 +271,9 @@ int screenshot(const std::string& screen, const std::string& out, const std::str
     }
     Canvas c(metrics().width, metrics().height);
     s->draw(c);
-    drawTabBar(c.cr(), {0, metrics().height - kTabBarH, metrics().width, kTabBarH}, {"Home", "Library", "Collections", "Notes"},
-               screen == "library" ? 1 : screen == "collections" ? 2 : screen == "notes" ? 3 : 0);
+    if (s->showsTabBar())
+        drawTabBar(c.cr(), {0, metrics().height - kTabBarH, metrics().width, kTabBarH}, {"Home", "Library", "Collections", "Notes"},
+                   screen.rfind("library", 0) == 0 ? 1 : screen.rfind("collections", 0) == 0 ? 2 : screen == "notes" ? 3 : 0);
     return cairo_surface_write_to_png(c.surface(), out.c_str()) == CAIRO_STATUS_SUCCESS ? 0 : 1;
 }
 

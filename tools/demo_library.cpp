@@ -1,8 +1,11 @@
 // zk-demo-library: a small library of public-domain books (the test corpus) for the README's
 // screenshots; no real Zotero data. Highlights are ranges Zotero's own reader made
 // (tests/data/cfi). Run from the repository root:
-//   build-desktop/zk-demo-library local/demo/demo.sqlite
+//   build-desktop/zk-demo-library local/demo/demo.sqlite [--groups]
 //   build-desktop/zotero --screenshot home OUT.png --db local/demo/demo.sqlite
+// --groups adds group libraries (for their screenshots): "Reading group" (editable, a book with
+// another member's highlights), "Economics seminar" (read-only), "Lab archive" (switched off) and
+// "Old project" (no longer available).
 
 #include "store/db.h"
 #include "store/library.h"
@@ -62,7 +65,9 @@ const std::map<std::string, std::vector<std::string>> kHighlights = {
     {"gibbon-footnotes", {"00084|00000064"}},
 };
 
-void addHighlights(Library& lib, const std::string& att, const std::string& file, int64_t& clock) {
+// author: in a group, who made them (Zotero's createdByUser); every other one is the user's.
+void addHighlights(Library& lib, const std::string& att, const std::string& file, int64_t& clock, int64_t group = 0,
+                   const std::string& author = "") {
     auto picks = kHighlights.find(file);
     if (picks == kHighlights.end()) return;
     std::ifstream in("tests/data/cfi/" + file + ".zotero.json");
@@ -86,16 +91,108 @@ void addHighlights(Library& lib, const std::string& att, const std::string& file
         ++clock;
         a.dateModified = mod;
         a.version = 1;
+        a.lib = group;
+        if (group) {
+            a.authorId = made % 2 ? 1 : 77;
+            a.authorName = made % 2 ? "pavel" : author;
+            if (made == 0) a.comment = "Malthus, applied to all of nature";
+        }
         lib.upsertAnnotation(a);
         ++made;
     }
 }
 
+Library::GroupMeta groupMeta(int64_t id, const char* name, const char* editing) {
+    Library::GroupMeta g;
+    g.id = id;
+    g.version = 1;
+    g.name = name;
+    g.libraryEditing = g.fileEditing = editing;
+    g.owner = 2;
+    return g;
+}
+
+ItemRecord paper(const char* key, const char* title, const char* first, const char* last, const char* year, int64_t group,
+                 std::vector<std::string> collections, int day) {
+    ItemRecord r;
+    r.key = key;
+    r.version = 1;
+    r.itemType = "book";
+    r.title = title;
+    r.creators.push_back({first, last, "", "author"});
+    r.date = r.year = year;
+    char added[32];
+    std::snprintf(added, sizeof added, "2026-09-%02dT12:00:00Z", day);
+    r.dateAdded = r.dateModified = added;
+    r.collections = std::move(collections);
+    r.json = "{}";
+    r.lib = group;
+    return r;
+}
+
+// Group libraries for the screenshots (spec: group libraries).
+void addGroups(Library& lib, const fs::path& filesDir, int64_t& clock) {
+    lib.setUser(1, "pavel");
+    lib.setKeyGroupAccess(GroupAccess::All);
+    constexpr int64_t kReading = 5001, kSeminar = 5002, kArchive = 5003, kOld = 5004;
+    lib.upsertGroup(groupMeta(kReading, "Reading group", "members"));
+    lib.upsertGroup(groupMeta(kSeminar, "Economics seminar", "admins"));  // the user isn't an admin: read-only
+    lib.upsertGroup(groupMeta(kArchive, "Lab archive", "members"));
+    lib.upsertGroup(groupMeta(kOld, "Old project", "members"));
+    for (int64_t g : {kReading, kSeminar, kArchive, kOld}) lib.setGroupAccess(g, true, true);
+    lib.setLibraryEnabled(kArchive, false);
+    auto collection = [&](const char* key, const char* name, const char* parent, int64_t group) {
+        CollectionRecord c{key, name, parent, 1};
+        c.lib = group;
+        lib.upsertCollection(c);
+    };
+    collection("GRCWEEK1", "Week 1: Evolution", "", kReading);
+    collection("GRCWEEK2", "Week 2: Political economy", "", kReading);
+    collection("GRCREADS", "Readings", "", kSeminar);
+    collection("GRCOLDPR", "Drafts", "", kOld);
+    lib.upsertItem(paper("GRORIGIN", "On the Origin of Species", "Charles", "Darwin", "1859", kReading, {"GRCWEEK1"}, 1));
+    lib.upsertItem(paper("GRWEALTH", "An Inquiry into the Nature and Causes of the Wealth of Nations", "Adam", "Smith", "1776",
+                         kReading, {"GRCWEEK2"}, 2));
+    lib.upsertItem(paper("GRLEVIAT", "Leviathan", "Thomas", "Hobbes", "1651", kReading, {"GRCWEEK2"}, 3));
+    lib.upsertItem(paper("GRKEYNES", "The General Theory of Employment, Interest and Money", "John Maynard", "Keynes", "1936",
+                         kSeminar, {"GRCREADS"}, 4));
+    lib.upsertItem(paper("GRHAYEK1", "Prices and Production", "Friedrich", "Hayek", "1931", kSeminar, {"GRCREADS"}, 5));
+    lib.upsertItem(paper("GRPRINCE", "The Prince", "Niccolò", "Machiavelli", "1532", kSeminar, {"GRCREADS"}, 6));
+    lib.upsertItem(paper("GRARCHIV", "Lab notebook 2019", "", "Lab", "2019", kArchive, {}, 6));
+    lib.upsertItem(paper("GROLDPR1", "Draft chapter", "", "Team", "2021", kOld, {"GRCOLDPR"}, 7));
+    // The reading group's Darwin: an EPUB on the Kindle, highlighted by Anna and by the user.
+    AttachmentRecord a;
+    a.key = "GRORIEPB";
+    a.parentKey = "GRORIGIN";
+    a.contentType = "application/epub+zip";
+    a.filename = "origin-of-species-se.epub";
+    a.linkMode = "imported_file";
+    a.lib = kReading;
+    lib.upsertAttachment(a);
+    const fs::path local = filesDir / "group-origin-of-species-se.epub";
+    fs::copy_file("tests/data/epub/" + a.filename, local, fs::copy_options::overwrite_existing);
+    lib.setFileState(a.key, AttachmentRecord::State::Local, local.string());
+    lib.trackAttachment(a.key);
+    addHighlights(lib, a.key, "origin-of-species-se", clock, kReading, "Anna Weber");
+    // The seminar's Prince: an EPUB too (a read-only group's book to read).
+    AttachmentRecord k = a;
+    k.key = "GRPRIEPB";
+    k.parentKey = "GRPRINCE";
+    k.filename = "the-prince-notes.epub";
+    k.lib = kSeminar;
+    lib.upsertAttachment(k);
+    const fs::path kLocal = filesDir / "group-the-prince-notes.epub";
+    fs::copy_file("tests/data/epub/" + k.filename, kLocal, fs::copy_options::overwrite_existing);
+    lib.setFileState(k.key, AttachmentRecord::State::Local, kLocal.string());
+    lib.setGroupGone(kOld, true);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        std::fprintf(stderr, "usage: zk-demo-library OUT.sqlite (run from the repository root)\n");
+    const bool groups = argc == 3 && std::string(argv[2]) == "--groups";
+    if (argc != 2 && !groups) {
+        std::fprintf(stderr, "usage: zk-demo-library OUT.sqlite [--groups] (run from the repository root)\n");
         return 2;
     }
     const fs::path out = fs::absolute(argv[1]);
@@ -141,6 +238,7 @@ int main(int argc, char** argv) {
         lib.setFileState(a.key, AttachmentRecord::State::Local, local.string());
         addHighlights(lib, a.key, b.file, clock);
     }
+    if (groups) addGroups(lib, out.parent_path() / "files", clock);
     tx.commit();
     // Recently read, oldest first; Pride and Prejudice last (Continue reading).
     const int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(

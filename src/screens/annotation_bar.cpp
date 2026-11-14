@@ -162,6 +162,18 @@ std::string annotationReadOnly(Library& lib, const AnnotationRecord& a) {
     return author.empty() ? kReadOnlyGroup : "by " + author;
 }
 
+namespace {
+const TextStyle kViewComment{kSerif, 8.5, 400};
+}  // namespace
+
+void AnnotationBar::setView(std::string label, std::string comment) {
+    label_ = std::move(label);
+    comment_ = std::move(comment);
+    const int w = ReaderScreen::pageArea().w - 2 * kSide - 80;
+    commentH_ = comment_.empty() ? 0 : measureText(comment_, kViewComment, w, 2).height;
+    place(height());
+}
+
 AnnotationBar::AnnotationBar(Mode mode, Rect anchor, std::string colour, bool more, TagRow tags)
     : mode_(mode), anchor_(anchor), colour_(std::move(colour)), more_(more && (mode == Mode::Create || mode == Mode::Text)), tags_(std::move(tags)) {
     place(height());
@@ -232,8 +244,11 @@ void AnnotationBar::draw(cairo_t* cr) const {
         }
         return;
     }
-    if (mode_ == Mode::View) {  // "by Anna": nothing here can be changed
-        centredText(cr, label_, {kSans, 8, 500, false, kSecondary}, {rect_.x + 40, rect_.y, rect_.w - 80, rect_.h}, Align::Left);
+    if (mode_ == Mode::View) {  // "by Anna", and the comment: nothing here can be changed
+        const int labelH = comment_.empty() ? kTextH : kViewLabelH;
+        centredText(cr, label_, {kSans, 8, 500, false, kSecondary}, {rect_.x + 40, rect_.y + (comment_.empty() ? 0 : 10), rect_.w - 80, labelH},
+                    Align::Left);
+        if (!comment_.empty()) drawText(cr, comment_, kViewComment, {rect_.x + 40, rect_.y + kViewLabelH, rect_.w - 80, commentH_}, 2);
         return;
     }
     for (int i = 0; i < (hasColours() ? 8 : 0); ++i) {
@@ -289,7 +304,7 @@ AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<
       bar_(readOnly.empty() ? AnnotationBar::Mode::Edit : AnnotationBar::Mode::View, anchor, annotation_.color, false,
            readOnly.empty() ? TagRow(std::move(chips), annotation_.tags) : TagRow()),
       self_(std::make_shared<AnnotationEditor*>(this)) {
-    bar_.setLabel(std::move(readOnly));
+    if (!readOnly.empty()) bar_.setView(std::move(readOnly), annotation_.type == "note" ? "" : annotation_.comment);
 }
 
 AnnotationEditor::~AnnotationEditor() { *self_ = nullptr; }

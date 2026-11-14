@@ -19,7 +19,7 @@ int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kGroupRowH = 170, kButtonRowH = 110, kAccessH = 150;
 constexpr int kSheetPad = 40, kSheetTitleH = 90, kSheetBodyH = 300, kSheetButtonH = 100;
-const TextStyle kLabel{kSans, 8.5, 500}, kValue{kSans, 7.5, 400, false, kSecondary};
+const TextStyle kLabel{kSans, 8.5, 500}, kValue{kSans, 7.5, 400, false, kSecondary}, kSheetBody{kSans, 8, 400};
 
 std::string plural(int n, const char* one, const char* many) { return std::to_string(n) + " " + (n == 1 ? one : many); }
 
@@ -72,8 +72,9 @@ std::string GroupSheet::body() const {
     if (check.downloaded == 0)
         s += "None of its books are downloaded on this Kindle. Removing deletes its items and highlights here;";
     else
-        s += (check.downloaded == 1 ? std::string("1 book from it is downloaded") : plural(check.downloaded, "", "books from it are downloaded")) +
-             " on this Kindle. Removing deletes them, and its items and highlights, here;";
+        s += check.downloaded == 1 ? "1 book from it is downloaded on this Kindle. Removing deletes it, and its items and highlights, here;"
+                                   : plural(check.downloaded, "", "books from it are downloaded") +
+                                         " on this Kindle. Removing deletes them, and its items and highlights, here;";
     s += " nothing changes in Zotero.";
     if (!waiting.empty())
         s += " " + waiting + (group.gone ? " They can't be sent any more: removing loses them." : " Removing loses them.");
@@ -195,7 +196,10 @@ Rect GroupLibrariesScreen::removeRect(size_t i) const {
 }
 
 Rect GroupLibrariesScreen::sheetRect() const {
-    const int h = kSheetPad + kSheetTitleH + kSheetBodyH + 30 + kSheetButtonH + kSheetPad;
+    // As tall as its text (up to 6 lines).
+    const int body = sheet_ ? std::clamp(measureText(sheet_->body(), kSheetBody, W() - 2 * kMargin, 6).height + 10, 60, kSheetBodyH)
+                            : kSheetBodyH;
+    const int h = kSheetPad + kSheetTitleH + body + 40 + kSheetButtonH + kSheetPad;
     return {0, H() - h, W(), h};
 }
 
@@ -236,7 +240,7 @@ void GroupLibrariesScreen::draw(Canvas& canvas) {
     fillRect(cr, s, 255);
     fillRect(cr, {s.x, s.y, s.w, 4}, kInk);
     drawText(cr, sheet_->title(), {kSans, 11, 700}, {s.x + kMargin, s.y + kSheetPad, s.w - 2 * kMargin, kSheetTitleH - 10}, 1);
-    drawText(cr, sheet_->body(), {kSans, 8, 400}, {s.x + kMargin, s.y + kSheetPad + kSheetTitleH, s.w - 2 * kMargin, kSheetBodyH}, 6);
+    drawText(cr, sheet_->body(), kSheetBody, {s.x + kMargin, s.y + kSheetPad + kSheetTitleH, s.w - 2 * kMargin, kSheetBodyH}, 6);
     drawButton(cr, sheetButtonRect(1), GroupSheet::label(sheet_->secondary()), false);
     drawButton(cr, sheetButtonRect(0), GroupSheet::label(sheet_->primary()), true);
 }

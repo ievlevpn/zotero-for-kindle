@@ -13,7 +13,8 @@
 // only Search, and More… when some plugin has selection actions.
 //
 // View (an annotation the Kindle may not change: another member's in a group, or any in a
-// read-only group): one quiet line, "by Anna" (or why it can't be changed), nothing to tap.
+// read-only group): one quiet line, "by Anna" (or why it can't be changed), and its comment under
+// it if it has one; nothing to tap.
 
 #include <array>
 #include <functional>
@@ -107,9 +108,9 @@ public:
     Rect dotRect(int i) const;     // 0..7, Zotero's order (none in Text)
     Rect buttonRect(int i) const;  // Create: 0 Highlight, 1 Underline, 2 Note; Edit: 0 Comment, 1 Delete; Text: 0 Search
     bool hasColours() const { return mode_ == Mode::Create || mode_ == Mode::Edit; }
-    // View: the line it shows ("by Anna").
+    // View: the line it shows ("by Anna"), and the comment under it ("" none).
     const std::string& label() const { return label_; }
-    void setLabel(std::string l) { label_ = std::move(l); }
+    void setView(std::string label, std::string comment);
     const std::string& colour() const { return colour_; }
     void setColour(std::string c) { colour_ = std::move(c); }
     // More… tapped: the bar lists these instead (empty: back to the buttons).
@@ -134,12 +135,16 @@ private:
     int buttons() const {
         return mode_ == Mode::Create ? 3 + more_ : mode_ == Mode::Text ? 1 + more_ : mode_ == Mode::View ? 0 : 2;
     }
-    int height() const { return mode_ == Mode::Text || mode_ == Mode::View ? kTextH : kH; }
+    int height() const {
+        return mode_ == Mode::Text ? kTextH : mode_ == Mode::View ? (comment_.empty() ? kTextH : kViewLabelH + commentH_ + 44) : kH;
+    }
+    static constexpr int kViewLabelH = 90;  // View with a comment: the label's row above it
     void place(int h);
 
     Mode mode_;
     Rect anchor_, rect_;
-    std::string colour_, label_;
+    std::string colour_, label_, comment_;
+    int commentH_ = 0;  // View: the comment's height (two lines at most)
     bool more_ = false, working_ = false;
     std::vector<PluginAction> actions_;
     TagRow tags_;
