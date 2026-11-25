@@ -55,6 +55,13 @@ launcher_alive() {
         tr '\0' ' ' < "$ZK_PROC/$1/cmdline" | grep -qF "$2" || return 1
     fi
 }
+# After SIGWINCH (come to the front), this launcher stays until that app ends, as the one that
+# started it does: the Kindle's library takes a scriptlet that has ended for an app that has closed
+# and comes back to the front, over the window just raised (2026-11-25: a second tap showed the app
+# for a second, then the Kindle home).
+stay_while_running() {
+    while [ "$(running_pid)" = "$1" ]; do sleep 1; done
+}
 me="$$ $(basename "$0")"
 take_lock() {
     mkdir -p "$(dirname "$ZK_LOCK")"
@@ -71,6 +78,7 @@ if ! take_lock; then
     if pid=$(running_pid); then
         kill -WINCH "$pid" 2>/dev/null
         note "already running (pid $pid): brought to the front, no second copy"
+        stay_while_running "$pid"
     else
         note "another launcher (pid $holder) is starting the app: no second copy"
     fi
@@ -96,6 +104,7 @@ if pid=$(running_pid); then
     # where SIGUSR1 would kill it: a new launcher can meet an old app around updates and rollbacks.
     kill -WINCH "$pid" 2>/dev/null
     note "already running (pid $pid): brought to the front, no second copy"
+    stay_while_running "$pid"
     exit 0
 fi
 mkdir -p "$(dirname "$ZK_PIDFILE")"

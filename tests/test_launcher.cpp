@@ -134,25 +134,26 @@ std::string shell(const std::string& cmd) {
 
 }  // namespace
 
-TEST_CASE("launcher: while the app runs, another start brings it to the front instead of a second copy") {
+TEST_CASE("launcher: while the app runs, another start brings it to the front instead of a second copy, and stays while it runs") {
     Kindle k;
     // A running app, as the launcher sees one: its pid in the pid file, its command line bin/zotero.
-    // It notes SIGWINCH, the app's "come to the front" (short sleeps: a trap runs between commands).
+    // It notes SIGWINCH, the app's "come to the front" (short sleeps: a trap runs between commands),
+    // and ends after about 2 s.
     writeFile(k.home / "bin/zotero-running",
               "#!/bin/sh\ntrap 'echo raised >> raised' WINCH\ni=0\n"
-              "while [ $i -lt 300 ]; do sleep 0.1; i=$((i+1)); done\n",
+              "while [ $i -lt 20 ]; do sleep 0.1; i=$((i+1)); done\necho ended > ended\n",
               true);
     const std::string pid =
         shell("cd '" + k.home.string() + "' && { sh ./bin/zotero-running >/dev/null 2>&1 & echo $!; }");
     REQUIRE_FALSE(pid.empty());
     writeFile(k.pidfile(), pid + "\n");
     CHECK(k.launch() == 0);
+    // The Kindle's library takes a scriptlet that has ended for an app that has closed, and comes
+    // back over the window just raised: this launcher returns only once the app has ended.
+    CHECK(fs::exists(k.home / "ended"));
     CHECK_FALSE(fs::exists(k.home / "runs"));
-    CHECK(k.file("run/zotero.pid") == pid + "\n");  // the running copy's file stays
     CHECK(readFile(k.home / "log/zotero.log").find("already running") != std::string::npos);
-    for (int i = 0; i < 50 && !fs::exists(k.home / "raised"); i++) usleep(100 * 1000);
     CHECK(k.file("zotero/raised") == "raised\n");
-    shell("kill " + pid);
 }
 
 TEST_CASE("launcher: a second start while the first is between runs of the app starts no second copy") {
