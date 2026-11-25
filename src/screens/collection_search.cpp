@@ -127,9 +127,36 @@ void CollectionSearchScreen::draw(Canvas& canvas) {
     if (!searched_.empty() && shown_.empty())
         drawText(cr, "No collection called “" + searched_ + "”", {kSerif, 11, 400, false, kSecondary},
                  {kMargin, kHeaderH + 120, W() - 2 * kMargin, 100}, 2, Align::Center);
+    if (sheet_) sheet_->draw(cr);
 }
 
 void CollectionSearchScreen::onGesture(const Gesture& g, Nav& nav) {
+    if (sheet_) {  // any tap closes it; its buttons pin or keep, as in the Collections tab
+        if (g.type != GestureType::Tap) return;
+        sheet_->tap(g.pos, nav);
+        sheet_.reset();
+        const int page = page_;
+        search(nav);  // the kept mark
+        page_ = std::min(page, pages() - 1);
+        nav.redrawAll(Waveform::Quality);
+        return;
+    }
+    if (g.type == GestureType::LongPress) {
+        const auto rects = resultRects();
+        for (size_t i = 0; i < rects.size(); ++i)
+            if (rects[i].contains(g.pos)) {
+                const CollectionEntry& e = shown_[firstShown() + i].entry;
+                const auto pins = nav.library().pinnedCollections();
+                const bool pinned = std::find(pins.begin(), pins.end(), e.collection.key) != pins.end();
+                nav.keyboard().hide();  // the sheet at the bottom, where the keyboard was
+                bottom_ = H();
+                page_ = std::min(page_, pages() - 1);
+                sheet_.emplace(e, pinned, H());
+                nav.redrawAll(Waveform::Ui);
+                return;
+            }
+        return;
+    }
     if (g.type == GestureType::Swipe && (g.dir == Direction::Up || g.dir == Direction::Down)) {
         const int to = page_ + (g.dir == Direction::Up ? 1 : -1);
         if (to >= 0 && to < pages()) {
@@ -141,7 +168,7 @@ void CollectionSearchScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     if (headerBackRect().contains(g.pos) && !SearchScreen::fieldRect().contains(g.pos)) return leave(nav);
     if (SearchScreen::fieldRect().contains(g.pos)) {
-        nav.keyboard().show();
+        onShow(nav);  // the keyboard back (hidden by a sheet), the results above it
         nav.redrawAll(Waveform::Quality);
         return;
     }

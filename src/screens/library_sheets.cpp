@@ -126,6 +126,10 @@ void saveLibraryView(Library& lib, const LibraryView& v) {
                                         .dump());
 }
 
+SortBy loadCollectionSort(Library& lib) { return fromName(kSorts, sortName, lib.metaValue("collectionSort"), SortBy::Title); }
+
+void saveCollectionSort(Library& lib, SortBy s) { lib.setMetaValue("collectionSort", sortName(s)); }
+
 std::string withThousands(int64_t n) {
     std::string digits = std::to_string(n < 0 ? -n : n), out;
     for (size_t i = 0; i < digits.size(); ++i) {
@@ -188,7 +192,7 @@ std::vector<JumpGroup> jumpGroups(SortBy sort, const std::vector<ListSection>& s
         switch (sort) {
             case SortBy::Title:
             case SortBy::Author:
-                into(key.empty() || key[0] == '3' ? "" : key[0] == '1' ? "A–Z" : "А–Я", sectionLabel(sort, key), i);
+                into(key.empty() || key[0] == '0' || key[0] == '3' ? "" : key[0] == '1' ? "A–Z" : "А–Я", sectionLabel(sort, key), i);
                 break;
             case SortBy::Year: into("", sectionLabel(sort, key), i); break;
             case SortBy::Added: {
@@ -598,7 +602,7 @@ std::vector<ListSection> nameSections(const std::vector<std::string>& names, std
     std::vector<ListSection> out;
     if (starts) starts->clear();
     for (size_t i = 0; i < names.size(); ++i) {
-        const std::string sortKey = listSortKey(names[i]);
+        const std::string sortKey = collectionSortKey(names[i]);
         const std::string key = sortKey.substr(0, sortKey.find('\x1f'));
         if (out.empty() || out.back().key != key) {
             out.push_back({key, sectionLabel(SortBy::Title, key), 0});

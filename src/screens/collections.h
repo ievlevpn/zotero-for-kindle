@@ -1,6 +1,7 @@
 #pragma once
-// Collections tab: the pinned collections, then the top-level ones by name; a collection shows its
-// subcollections first, then its items by title, one page at a time. The page pill ("2 / 5 ›")
+// Collections tab: the pinned collections, then the top-level ones by name (Zotero's order); a
+// collection shows its subcollections first, then its items (by title, or as its Sort says), one
+// page at a time. The page pill ("2 / 5 ›")
 // opens the jump sheet: the initials of the names (and of the items' titles), as the Library's.
 // With group libraries, a "Group libraries" heading follows My Library's collections, then a line
 // per group shown (switched on, still there): tapping one opens its own list, its top-level
@@ -19,14 +20,17 @@
 
 namespace zk {
 
-// The long press on a collection: its name, Pin to top (or Unpin), and Keep downloaded (or Stop
-// keeping downloaded), above the tab bar.
+// The long press on a collection, wherever one is listed: its name, Pin to top (or Unpin), and
+// Keep downloaded (or Stop keeping downloaded), its bottom at `bottom` (default: above the tab bar).
 class PinSheet {
 public:
-    PinSheet(CollectionEntry entry, bool pinned) : entry_(std::move(entry)), pinned_(pinned) {}
-    static Rect rect();
-    static Rect buttonRect();
-    static Rect keepButtonRect();
+    static int tabBarTop();
+    PinSheet(CollectionEntry entry, bool pinned, int bottom = tabBarTop())
+        : entry_(std::move(entry)), pinned_(pinned), bottom_(bottom) {}
+    static Rect rect(int bottom = tabBarTop());
+    static Rect buttonRect(int bottom = tabBarTop());
+    static Rect keepButtonRect(int bottom = tabBarTop());
+    int bottom() const { return bottom_; }
     std::string label() const { return pinned_ ? "Unpin" : "Pin to top"; }
     std::string keepLabel() const { return entry_.kept ? "Stop keeping downloaded" : "Keep downloaded"; }
     void draw(cairo_t*) const;
@@ -37,6 +41,7 @@ public:
 private:
     CollectionEntry entry_;
     bool pinned_;
+    int bottom_;
 };
 
 // A collection row's note: how its kept downloads are going ("" when there's nothing to say).
@@ -107,6 +112,9 @@ public:
     int64_t total() const { return pager_.total(); }
     static Rect backRect();
     static Rect searchRect();  // the header's search icon: search in this collection
+    static Rect sortButtonRect();  // the header's Sort: the items' order, as the Library's Sort sheet
+    SortBy sort() const { return sort_; }
+    const SortSheet* sortSheet() const { return sortSheet_ ? &*sortSheet_ : nullptr; }
     Rect lineRect(size_t i) const { return lineRects().at(i); }
     const Pager& pager() const { return pager_; }
     const JumpSheet* jumpSheet() const { return jump_ ? &*jump_ : nullptr; }
@@ -122,11 +130,14 @@ private:
     void load(Library&);
     void loadKept(Nav&);
     void itemSheetGesture(const Gesture&, Nav&);
+    void sortGesture(const Gesture&, Nav&);
     std::vector<Rect> lineRects() const;
     std::vector<JumpGroup> jumpIndex() const;
     std::optional<PinSheet> sheet_;
     std::optional<ItemSheet> itemSheet_;
     std::optional<JumpSheet> jump_;
+    std::optional<SortSheet> sortSheet_;
+    SortBy sort_ = SortBy::Title;  // the items' (subcollections are by name)
     std::vector<ListSection> subSections_, itemSections_;
     std::vector<int64_t> starts_;  // each section's first line: the subcollections', then the items'
     std::map<std::string, KeptStatus> kept_;

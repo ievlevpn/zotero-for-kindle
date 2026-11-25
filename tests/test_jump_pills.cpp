@@ -68,11 +68,11 @@ TEST_CASE("pill: Collections jumps by the initials of the names after the pinned
     screen.onShow(rig.nav);
     REQUIRE(screen.pager().pages() > 1);
     CHECK(screen.entries()[0].collection.name == "Economics");  // pinned: first
-    CHECK(screen.entries()[1].collection.name == "Alpha 0");
+    CHECK(screen.entries()[1].collection.name == "1984 0");  // Zotero's order: digits before letters
     screen.onGesture(tapAt(CollectionsScreen::footerRect().center()), rig.nav);
     REQUIRE(screen.jumpSheet());
     const Rect area = CollectionsScreen::sheetArea();
-    CHECK(cellLabels(*screen.jumpSheet(), area) == std::vector<std::string>{"A", "P", "Ж", "#"});
+    CHECK(cellLabels(*screen.jumpSheet(), area) == std::vector<std::string>{"#", "A", "P", "Ж"});
     for (const auto& [l, r] : screen.jumpSheet()->cells(area))
         if (l == "Ж") screen.onGesture(tapAt(r.center()), rig.nav);
     CHECK_FALSE(screen.jumpSheet());

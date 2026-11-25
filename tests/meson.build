@@ -56,6 +56,7 @@ test_sources = files(
   'test_layout_kt4.cpp',
   'test_fast_fonts.cpp',
   'test_pinned_collections.cpp',
+  'test_collection_order_sort.cpp',
   'test_kept_collections.cpp',
   'test_pdf_columns.cpp',
   'test_reader_columns.cpp',

@@ -36,6 +36,10 @@ struct LibraryView {
 // Kept in the library's meta table (this Kindle's), as JSON; a missing or broken one is the default.
 LibraryView loadLibraryView(Library&);
 void saveLibraryView(Library&, const LibraryView&);
+// How a collection's items are sorted (every collection's, chosen in any): this Kindle's, Title
+// until one is chosen.
+SortBy loadCollectionSort(Library&);
+void saveCollectionSort(Library&, SortBy);
 
 // "2,153 items", or what is applied first: "PDF · Unread · tag: to-read · 412 items"; with a
 // library chosen, its name leads ("Lab group · 120 items").
@@ -162,7 +166,7 @@ private:
 void jumpSheetGesture(std::optional<JumpSheet>& sheet, const Gesture&, Rect area, Nav&, int page, int pages,
                       const std::function<int(size_t section)>& sectionPage, const std::function<void(int page)>& go);
 
-// The jump index of names in listSortKey order (collections): their initials, grouped by script as
+// The jump index of names in collectionSortKey order (collections): their initials, grouped by script as
 // the Library's Title sort. starts: each section's first name (an index into `names`).
 std::vector<ListSection> nameSections(const std::vector<std::string>& names, std::vector<int64_t>* starts);
 

@@ -55,6 +55,11 @@ struct SectionCount {
 // What Title and Author sort by: the initial as SectionCount names it, then 0x1F, then the text
 // folded (case, accents). Leading punctuation is skipped; Ё goes with Е, Œ with O.
 std::string listSortKey(const std::string& text);
+// What collections sort by, in Zotero's order (its Intl.Collator: numeric, case and accents
+// ignored): spaces, then punctuation and symbols, then digits, then letters — "__Inbox" before
+// "2024" before "Articles". The initial is "0#" for a name not starting with a letter, else as
+// listSortKey's; then 0x1F, then the whole name folded.
+std::string collectionSortKey(const std::string& name);
 
 // One line in a list: an item and the file it opens (EPUB preferred over PDF, PDF over a web snapshot).
 struct ItemRow {
@@ -434,7 +439,7 @@ public:
     // lib: only that library's (with parentKey "": a group's top-level collections).
     std::vector<CollectionEntry> childCollections(const std::string& parentKey /* "" = top level */,
                                                   int64_t lib = kAllLibraries);
-    std::vector<CollectionEntry> allCollections();  // every level, by name
+    std::vector<CollectionEntry> allCollections();  // every level, by name in Zotero's order
     // Pinned collections (a long press): kept on the Kindle, in the order pinned.
     std::vector<std::string> pinnedCollections();
     void setCollectionPinned(const std::string& key, bool pinned);

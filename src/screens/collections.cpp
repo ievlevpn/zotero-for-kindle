@@ -25,10 +25,10 @@ Rect contentArea() { return {0, kHeaderH + 10, W(), H() - kTabBarH - kHeaderH - 
 
 int collectionsPerPage() { return (contentArea().h - kPageIndicatorH) / kLineH; }
 
-// By name as the Library sorts titles (listSortKey): the initials run together, # last.
+// By name in Zotero's order (collectionSortKey): "__Inbox" first, then digits, then letters.
 void sortByName(std::vector<CollectionEntry>::iterator from, std::vector<CollectionEntry>::iterator to) {
     std::vector<std::pair<std::string, CollectionEntry>> keyed;
-    for (auto it = from; it != to; ++it) keyed.emplace_back(listSortKey(it->collection.name), std::move(*it));
+    for (auto it = from; it != to; ++it) keyed.emplace_back(collectionSortKey(it->collection.name), std::move(*it));
     std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     for (auto& k : keyed) *from++ = std::move(k.second);
 }
@@ -50,23 +50,24 @@ bool turnPage(const Gesture& g, Pager& pager) {
 
 // ---- the pin sheet ---------------------------------------------------------------------------
 
-Rect PinSheet::rect() { return {0, H() - kTabBarH - 420, W(), 420}; }
-Rect PinSheet::buttonRect() { return {kMargin, rect().y + 150, W() - 2 * kMargin, 100}; }
-Rect PinSheet::keepButtonRect() { return {kMargin, rect().y + 280, W() - 2 * kMargin, 100}; }
+int PinSheet::tabBarTop() { return H() - kTabBarH; }
+Rect PinSheet::rect(int bottom) { return {0, bottom - 420, W(), 420}; }
+Rect PinSheet::buttonRect(int bottom) { return {kMargin, rect(bottom).y + 150, W() - 2 * kMargin, 100}; }
+Rect PinSheet::keepButtonRect(int bottom) { return {kMargin, rect(bottom).y + 280, W() - 2 * kMargin, 100}; }
 
 void PinSheet::draw(cairo_t* cr) const {
-    const Rect r = rect();
+    const Rect r = rect(bottom_);
     fillRect(cr, r, 255);
     fillRect(cr, {r.x, r.y, r.w, 3}, kInk);
     drawText(cr, entry_.collection.name.empty() ? "Untitled" : entry_.collection.name, {kSans, 9.5, 700},
              {kMargin, r.y + 40, r.w - 2 * kMargin, 60}, 1);
-    drawButton(cr, buttonRect(), label(), false);
-    drawButton(cr, keepButtonRect(), keepLabel(), false);
+    drawButton(cr, buttonRect(bottom_), label(), false);
+    drawButton(cr, keepButtonRect(bottom_), keepLabel(), false);
 }
 
 void PinSheet::tap(Point p, Nav& nav) const {
-    if (buttonRect().contains(p)) nav.library().setCollectionPinned(entry_.collection.key, !pinned_);
-    if (keepButtonRect().contains(p)) {
+    if (buttonRect(bottom_).contains(p)) nav.library().setCollectionPinned(entry_.collection.key, !pinned_);
+    if (keepButtonRect(bottom_).contains(p)) {
         nav.library().setCollectionKept(entry_.collection.key, !entry_.kept);
         if (!entry_.kept) nav.sync().downloadKept();  // the missing files, now (if Wi-Fi is up)
     }
@@ -283,6 +284,7 @@ CollectionScreen::CollectionScreen(const LibraryInfo& group, std::function<void(
 
 Rect CollectionScreen::backRect() { return headerBackRect(); }
 Rect CollectionScreen::searchRect() { return CollectionsScreen::searchRect(); }
+Rect CollectionScreen::sortButtonRect() { return {searchRect().x - 20 - 200, 22, 200, 80}; }
 
 // Subcollections take kLineH, items kRowH; a page is filled greedily in that order.
 void CollectionScreen::load(Library& lib) {
@@ -291,16 +293,17 @@ void CollectionScreen::load(Library& lib) {
     ListQuery q;
     q.collectionKey = entry_.collection.key;  // a group's list: "", with the library
     if (group_) q.lib = group_;
-    q.sort = SortBy::Title;
+    q.sort = sort_;
     const int64_t items = lib.countRows(q);
     subSections_ = nameSections(namesOf(subs_.begin(), subs_.end()), &starts_);
     itemSections_.clear();
     int64_t start = static_cast<int64_t>(subs_.size());
-    for (const auto& c : lib.sectionCounts(q)) {
-        itemSections_.push_back({c.key, sectionLabel(SortBy::Title, c.key), c.count});
-        starts_.push_back(start);
-        start += c.count;
-    }
+    if (sort_ != SortBy::Recent)  // by Recent: no sections (the jump sheet has First page and Go to)
+        for (const auto& c : lib.sectionCounts(q)) {
+            itemSections_.push_back({c.key, sectionLabel(sort_, c.key), c.count});
+            starts_.push_back(start);
+            start += c.count;
+        }
     // Pages are filled greedily, subcollections (kLineH) then items (kRowH): where each starts
     // follows from that fill, so every line is on exactly one page.
     const int room = contentArea().h - kPageIndicatorH;
@@ -339,6 +342,8 @@ void CollectionScreen::onShow(Nav& nav) {
     sheet_.reset();
     itemSheet_.reset();
     jump_.reset();
+    sortSheet_.reset();
+    sort_ = loadCollectionSort(nav.library());  // (chosen in another collection meanwhile)
     load(nav.library());
     loadKept(nav);
 }
@@ -359,9 +364,10 @@ std::vector<Rect> CollectionScreen::lineRects() const {
 void CollectionScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, W(), H()}, 255);
-    drawHeader(cr, entry_.collection.name, true, searchRect().w + 20);
+    drawHeader(cr, entry_.collection.name, true, W() - kMargin - sortButtonRect().x + 20);
     const Rect s = searchRect();
     if (!group_) searchIcon(cr, s.x + s.w / 2.0, s.y + s.h / 2.0, kInk);  // search is by collection
+    drawButton(cr, sortButtonRect(), "Sort", false);
     auto rects = lineRects();
     for (size_t i = 0; i < page_.size(); ++i) {
         if (page_[i].isCollection)
@@ -378,11 +384,12 @@ void CollectionScreen::draw(Canvas& canvas) {
     if (sheet_) sheet_->draw(cr);
     if (itemSheet_) itemSheet_->draw(cr, sheetArea());
     if (jump_) jump_->draw(cr, sheetArea());
+    if (sortSheet_) sortSheet_->draw(cr, sheetArea());
 }
 
 // The subcollections' initials, then the items'; under "Collections" and "Items" when there are both.
 std::vector<JumpGroup> CollectionScreen::jumpIndex() const {
-    auto subs = jumpGroups(SortBy::Title, subSections_), items = jumpGroups(SortBy::Title, itemSections_);
+    auto subs = jumpGroups(SortBy::Title, subSections_), items = jumpGroups(sort_, itemSections_);
     for (auto& g : items)
         for (auto& e : g.entries) e.section += subSections_.size();
     if (!subs.empty() && !items.empty()) {
@@ -413,6 +420,7 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (itemSheet_) return itemSheetGesture(g, nav);
+    if (sortSheet_) return sortGesture(g, nav);
     if (g.type == GestureType::LongPress) {
         auto rects = lineRects();
         for (size_t i = 0; i < rects.size(); ++i) {
@@ -431,6 +439,11 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (g.type == GestureType::Tap && backRect().contains(g.pos)) {
         nav.pop();
+        return;
+    }
+    if (g.type == GestureType::Tap && sortButtonRect().contains(g.pos)) {
+        sortSheet_.emplace(sort_);
+        nav.damage(sheetArea(), Waveform::Ui);
         return;
     }
     if (g.type == GestureType::Tap && searchRect().contains(g.pos)) {
@@ -455,6 +468,25 @@ void CollectionScreen::onGesture(const Gesture& g, Nav& nav) {
         if (!rects[i].contains(g.pos)) continue;
         if (page_[i].isCollection) nav.push(std::make_unique<CollectionScreen>(page_[i].collection, openItem_, status_));
         else if (openItem_) openItem_(page_[i].item);
+    }
+}
+
+void CollectionScreen::sortGesture(const Gesture& g, Nav& nav) {
+    switch (sortSheet_->onGesture(g, sheetArea())) {
+        case SortSheet::Action::Close:
+            sortSheet_.reset();
+            nav.damage(sheetArea(), Waveform::Ui);
+            break;
+        case SortSheet::Action::Chosen:
+            sort_ = sortSheet_->chosen();
+            sortSheet_.reset();
+            saveCollectionSort(nav.library(), sort_);
+            pager_ = Pager(0, 1);  // from the first page in the new order
+            load(nav.library());
+            nav.damage(contentArea(), Waveform::Quality);
+            nav.damage(sheetArea(), Waveform::Quality);
+            break;
+        case SortSheet::Action::None: break;
     }
 }
 

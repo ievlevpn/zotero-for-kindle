@@ -1,12 +1,15 @@
 #pragma once
 // Collection search (from the Collections header): find a collection at any depth by part of
-// its name, any case (Cyrillic too); each result shows its path; tapping one opens it. Results
+// its name, any case (Cyrillic too); each result shows its path; tapping one opens it, a long press
+// shows the collection's sheet (Pin to top, Keep downloaded) as in the Collections tab. Results
 // that don't fit above the keyboard are on further pages.
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "screens/collections.h"
 #include "screens/screen.h"
 #include "ui/text_field.h"
 
@@ -35,6 +38,7 @@ public:
     size_t firstShown() const { return static_cast<size_t>(page_ * perPage()); }  // the result in resultRects()[0]
     int page() const { return page_; }
     int pages() const;
+    const PinSheet* pinSheet() const { return sheet_ ? &*sheet_ : nullptr; }  // a long press on a result
 
 private:
     void search(Nav&);
@@ -51,6 +55,7 @@ private:
     int64_t lastKeyMs_ = 0;
     int bottom_;  // above the keyboard (the window's bottom without one)
     int page_ = 0;
+    std::optional<PinSheet> sheet_;
 };
 
 }  // namespace zk

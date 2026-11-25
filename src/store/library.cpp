@@ -485,6 +485,39 @@ std::string listSortKey(const std::string& text) {
     return initialOf(g_utf8_get_char(p)) + "\x1f" + numbersInOrder(folded(p));
 }
 
+// Zotero's (ICU's) order of the ASCII punctuation and symbols, all before digits and letters.
+static constexpr std::string_view kPunctuationOrder = "_-,;:!?.'\"()[]{}@*/\\&#%`^+<=>|~$";
+
+// Punctuation and spaces as bytes below the digits, in that order: a space \x02, ASCII punctuation
+// \x03 + its rank, any other \x04 + itself (then by code point).
+static std::string punctuationFirst(const std::string& text) {
+    std::string out;
+    for (const char* p = text.c_str(); *p; p = g_utf8_next_char(p)) {
+        const gunichar c = g_utf8_get_char(p);
+        const char* next = g_utf8_next_char(p);
+        if (g_unichar_isalnum(c) || isMark(c)) {
+            out.append(p, static_cast<size_t>(next - p));
+        } else if (g_unichar_isspace(c)) {
+            out += '\x02';
+        } else if (const size_t rank = c < 0x80 ? kPunctuationOrder.find(static_cast<char>(c)) : std::string_view::npos;
+                   rank != std::string_view::npos) {
+            out += '\x03';
+            out += static_cast<char>(0x20 + rank);
+        } else {
+            out += '\x04';
+            out.append(p, static_cast<size_t>(next - p));
+        }
+    }
+    return out;
+}
+
+std::string collectionSortKey(const std::string& name) {
+    if (!g_utf8_validate(name.c_str(), static_cast<gssize>(name.size()), nullptr)) return "3#\x1f";
+    const gunichar first = g_utf8_get_char(name.c_str());
+    const bool letter = first && g_unichar_isalpha(first);
+    return (letter ? initialOf(first) : std::string("0#")) + "\x1f" + punctuationFirst(numbersInOrder(folded(name.c_str())));
+}
+
 Library::Library(Db& db) : db_(db) {
     guarded([&] {
         migrate();
@@ -1716,6 +1749,14 @@ namespace {
 void markKept(std::vector<CollectionEntry>& entries, const std::vector<std::string>& kept) {
     for (auto& e : entries) e.kept = std::find(kept.begin(), kept.end(), e.collection.key) != kept.end();
 }
+// In Zotero's order (collectionSortKey), not SQLite's.
+void zoteroOrder(std::vector<CollectionEntry>& entries) {
+    std::vector<std::pair<std::string, CollectionEntry>> keyed;
+    keyed.reserve(entries.size());
+    for (auto& e : entries) keyed.emplace_back(collectionSortKey(e.collection.name), std::move(e));
+    std::stable_sort(keyed.begin(), keyed.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    for (size_t i = 0; i < keyed.size(); ++i) entries[i] = std::move(keyed[i].second);
+}
 }  // namespace
 
 std::vector<CollectionEntry> Library::childCollections(const std::string& parentKey, int64_t lib) {
@@ -1731,6 +1772,7 @@ std::vector<CollectionEntry> Library::childCollections(const std::string& parent
         while (st.step())
             out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3), st.integer(6)}, st.integer(4), st.integer(5) != 0});
         markKept(out, keptCollections());
+        zoteroOrder(out);
         return out;
     });
 }
@@ -1833,6 +1875,7 @@ std::vector<CollectionEntry> Library::allCollections() {
         while (st.step())
             out.push_back({{st.text(0), st.text(1), st.text(2), st.integer(3), st.integer(6)}, st.integer(4), st.integer(5) != 0});
         markKept(out, keptCollections());
+        zoteroOrder(out);
         return out;
     });
 }
