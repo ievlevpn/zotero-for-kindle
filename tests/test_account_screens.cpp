@@ -575,6 +575,29 @@ TEST_CASE("account screens: a PIN entered twice differently is refused; the same
     CHECK(e->lockOnSleep);
 }
 
+TEST_CASE("account screens: a lock with no way back can still close Zotero; with Back, the close button isn't there") {
+    PadRig r;
+    PinPadScreen lock = r.pad();  // no back: the lock on wake, or the only account at startup
+    lock.onShow(r.nav);
+    CHECK_FALSE(lock.canGoBack());
+    lock.onGesture(tapOn(lock.closeRect()), r.nav);
+    CHECK(r.nav.quitted);
+    CHECK(r.pins->entry(22)->pin);  // closing passes no lock
+
+    PadRig r2;
+    bool back = false;
+    PinPadDeps d;
+    d.userId = 22;
+    d.name = "Anna";
+    d.pins = r2.pins.get();
+    d.back = [&](Nav&) { back = true; };
+    PinPadScreen withBack(PinPadScreen::Purpose::Unlock, d);
+    withBack.onShow(r2.nav);
+    CHECK(withBack.canGoBack());
+    withBack.onGesture(tapOn(withBack.closeRect()), r2.nav);
+    CHECK_FALSE(r2.nav.quitted);
+}
+
 TEST_CASE("account screens: the sixth wrong PIN waits 30 s, kept in accounts.json; the keys wait too; then the right PIN opens") {
     PadRig r;
     PinPadScreen pad = r.pad();

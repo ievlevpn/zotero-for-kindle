@@ -77,6 +77,12 @@ Rect PinPadScreen::anotherRect() const {
     return {row.x + row.w / 2, row.y, row.w - row.w / 2, row.h};
 }
 
+bool PinPadScreen::canGoBack() const {
+    return deps_.back || (stage_ == Stage::Forgot && !deps_.keyOnly) || stage_ == Stage::TypeKey || stage_ == Stage::Reset;
+}
+// Top right, where Home has it: a lock with no ‹ (on wake, or the only account at startup) still
+// lets Zotero be closed. Closing passes no lock: the next start asks the PIN again.
+Rect PinPadScreen::closeRect() const { return {W() - kMargin - 80, 34, 80, 96}; }
 Rect PinPadScreen::checkFileRect() const { return {kMargin, kHeaderH + 700, W() - 2 * kMargin, 100}; }
 Rect PinPadScreen::typeKeyRect() const { return {kMargin, kHeaderH + 830, W() - 2 * kMargin, 100}; }
 Rect PinPadScreen::keyFieldRect() const { return {kMargin, kHeaderH + 110, W() - 2 * kMargin, 100}; }
@@ -200,8 +206,11 @@ void PinPadScreen::to(Stage s, Nav& nav) {
 void PinPadScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
     fillRect(cr, {0, 0, W(), H()}, 255);
-    const bool canGoBack = deps_.back || (stage_ == Stage::Forgot && !deps_.keyOnly) || stage_ == Stage::TypeKey || stage_ == Stage::Reset;
-    drawHeader(cr, title(), canGoBack);
+    drawHeader(cr, title(), canGoBack());
+    if (!canGoBack()) {
+        const Rect x = closeRect();
+        closeIcon(cr, x.x + x.w / 2.0, x.y + x.h / 2.0, kSecondary);
+    }
     const int w = W() - 2 * kMargin;
     const TextStyle body{kSans, 8, 400}, quiet{kSans, 7, 400, false, kSecondary}, error{kSans, 7.5, 700};
 
@@ -314,6 +323,11 @@ void PinPadScreen::onGesture(const Gesture& g, Nav& nav) {
                 if (deps_.back) deps_.back(nav);
                 return;
         }
+    }
+    if (!canGoBack() && closeRect().contains(g.pos)) {
+        nav.keyboard().hide();
+        nav.quit();  // the launcher returns to the Kindle home
+        return;
     }
     auto chooseAnother = [&] {
         auto others = deps_.others();

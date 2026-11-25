@@ -173,6 +173,27 @@ TEST_CASE("setup: typing into a field and masking the password") {
     CHECK(setup.shownValue(1) == "••••••••••••cdef");
 }
 
+TEST_CASE("setup: with no back button, the close button quits; with one, back pops and close isn't there") {
+    TempDir dir;
+    Db db = Db::open(":memory:");
+    Library lib(db);
+    FakeNav nav(lib);
+    SetupScreen first(Config{}, false, dir.path.string(), [](const Config&) { return UserError{}; },
+                      [](const Config&, Nav&) {});
+    first.onShow(nav);
+    first.onGesture(tapAt(SetupScreen::fieldRect(0).center()), nav);
+    first.onGesture(tapAt(SetupScreen::closeRect().center()), nav);
+    CHECK(nav.quitted);
+    CHECK_FALSE(nav.keyboardFake.shown);
+
+    FakeNav nav2(lib);
+    SetupScreen add(Config{}, false, dir.path.string(), [](const Config&) { return UserError{}; },
+                    [](const Config&, Nav&) {}, true);
+    add.onShow(nav2);
+    add.onGesture(tapAt(SetupScreen::closeRect().center()), nav2);
+    CHECK_FALSE(nav2.quitted);
+}
+
 TEST_CASE("settings: interval, highlights toggle and removing downloads") {
     Db db = Db::open(":memory:");
     Library lib(db);

@@ -61,6 +61,7 @@ public:
 
     static Rect fieldRect(int i);
     static Rect connectRect();
+    static Rect closeRect();  // shown only without a back button: closes Zotero
 
 private:
     void connect(Nav&);

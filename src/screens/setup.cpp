@@ -72,6 +72,8 @@ SetupScreen::SetupScreen(Config initial, bool imported, std::string configDir, C
 }
 
 Rect SetupScreen::fieldRect(int i) { return {kMargin, kFieldsY + i * kFieldStep + 44, W() - 2 * kMargin, 88}; }
+// Top right, where Home has it: with nothing to go back to (no account yet), the way out of the app.
+Rect SetupScreen::closeRect() { return {W() - kMargin - 80, 34, 80, 96}; }
 Rect SetupScreen::connectRect() { return {kMargin, kFieldsY + kFields * kFieldStep + 20, W() - 2 * kMargin, 100}; }
 
 Config SetupScreen::config() const {
@@ -161,6 +163,10 @@ void SetupScreen::draw(Canvas& canvas) {
     using Kind = SetupPurpose::Kind;
     drawHeader(cr, purpose_.kind == Kind::Add ? "Add an account" : purpose_.kind == Kind::Update ? "Update key" : "Set up Zotero",
                canGoBack_);
+    if (!canGoBack_) {
+        const Rect x = closeRect();
+        closeIcon(cr, x.x + x.w / 2.0, x.y + x.h / 2.0, kSecondary);
+    }
     std::string intro = imported_ ? "Settings loaded from config.json. Connect to check them."
                                   : "Create an API key at zotero.org/settings/keys with access to your library.";
     if (purpose_.kind == Kind::Add) intro = "Another Zotero user's ID and API key (zotero.org/settings/keys). Up to three accounts fit on this Kindle.";
@@ -186,6 +192,11 @@ void SetupScreen::onGesture(const Gesture& g, Nav& nav) {
     if (canGoBack_ && headerBackRect().contains(g.pos)) {
         nav.keyboard().hide();
         nav.pop();
+        return;
+    }
+    if (!canGoBack_ && closeRect().contains(g.pos)) {
+        nav.keyboard().hide();
+        nav.quit();  // the launcher returns to the Kindle home
         return;
     }
     if (checking_) return;

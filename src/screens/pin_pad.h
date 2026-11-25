@@ -78,6 +78,8 @@ public:
     Rect forgotRect() const;   // "Forgot PIN?" (Unlock only)
     Rect anotherRect() const;  // "Use another account" (Unlock, with others; keyOnly: under the key's choices)
     // Forgot PIN?: check the file, type the key; the typed key's field and Check; then Set a new PIN / Remove PIN.
+    Rect closeRect() const;  // shown only without ‹ (a lock with no way back): closes Zotero
+    bool canGoBack() const;
     Rect checkFileRect() const;
     Rect typeKeyRect() const;
     Rect keyFieldRect() const;
