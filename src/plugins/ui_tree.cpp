@@ -223,13 +223,14 @@ struct Parser {
     }
 
     Block card(const json& o, const std::string& where) {
-        onlyFields(o, where, {"title", "meta", "body", "badge"});
+        onlyFields(o, where, {"title", "meta", "body", "badge", "math"});
         Block b;
         b.kind = Block::Kind::Card;
         b.title = str(o, "title", where, true);
         b.meta = str(o, "meta", where, false);
         b.body = str(o, "body", where, false, true);
         b.badge = str(o, "badge", where, false);
+        b.math = flag(o, "math", where);
         return b;
     }
 
@@ -285,7 +286,7 @@ struct Parser {
                 if (b.kind == K::Row && b.children.size() > kMaxRowBlocks) bad(where, "a row holds at most 12 blocks");
                 break;
             case K::Text: {
-                onlyFields(o, where, {"text", "style", "lines", "font", "size", "weight", "tone", "italic", "caps", "align", "id"});
+                onlyFields(o, where, {"text", "style", "lines", "font", "size", "weight", "tone", "italic", "caps", "align", "id", "math"});
                 if (o.contains("id")) b.id = id(o, where);  // a link (0.12)
                 b.font = optChoice<Block::Font>(o, "font", where, {{"serif", Block::Font::Serif}, {"sans", Block::Font::Sans}});
                 b.size = optChoice<Block::Size>(o, "size", where,
@@ -299,6 +300,7 @@ struct Parser {
                                                           {{"start", Block::TextAlign::Start}, {"center", Block::TextAlign::Center}, {"end", Block::TextAlign::End}});
                 b.italic = flag(o, "italic", where);
                 b.caps = flag(o, "caps", where);
+                b.math = flag(o, "math", where);
                 b.style = choice<Block::Style>(o, "style", where, Block::Style::Body,
                                                {{"title", Block::Style::Title}, {"body", Block::Style::Body},
                                                 {"meta", Block::Style::Meta}, {"label", Block::Style::Label}});

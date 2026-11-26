@@ -211,10 +211,11 @@ void PluginEvents::openPreview(App& app, const PluginHostEvent& ev) {
         answer("The reader can't open this right now");
         return;
     }
-    auto closed = [this, instance, name = ev.pluginName] {
+    auto closed = [this, instance, name = ev.pluginName](nlohmann::json result) {
         if (instance == 0 || !screens_.count(instance)) return;
         PluginHostEvent c{PluginHostEvent::Kind::ReaderClosed, "", name, "", {}, 0, ""};
         c.instance = instance;
+        c.value = std::move(result);
         mail_[instance].push_back(std::move(c));  // the screen takes it when it shows again
     };
     log(LogLevel::Info, "plugin %s opens a preview", ev.pluginId.c_str());

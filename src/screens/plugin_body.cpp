@@ -205,9 +205,15 @@ void PluginBody::receive(const PluginHostEvent& ev, Nav& nav) {
             popup_ = std::make_unique<PluginResult>(pluginName_ + " · " + title_, ev.text, sheetArea());
             nav.damage(popup_->rect(), Waveform::Ui);
             break;
-        case PluginHostEvent::Kind::ReaderClosed:  // a preview it opened (zk.reader.open) closed
-            enqueue({{"kind", "reader"}, {"closed", true}}, nav);
+        case PluginHostEvent::Kind::ReaderClosed: {  // a preview it opened (zk.reader.open) closed
+            nlohmann::json payload = {{"kind", "reader"}, {"closed", true}};
+            if (ev.value.is_object()) {
+                if (ev.value.contains("action")) payload["action"] = ev.value["action"];
+                if (ev.value.contains("annotations")) payload["annotations"] = ev.value["annotations"];
+            }
+            enqueue(std::move(payload), nav);
             break;
+        }
         case PluginHostEvent::Kind::ScreenClose:
             closedByPlugin_ = true;
             if (!focus_.focused.empty()) nav.keyboard().hide();

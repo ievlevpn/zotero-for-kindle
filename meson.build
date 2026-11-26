@@ -152,6 +152,93 @@ update_dep = declare_dependency(link_with : [update_lib, monocypher_lib], includ
 cairo_dep = dependency('cairo')
 pango_deps = [dependency('pangocairo'), dependency('pangoft2'), dependency('fontconfig')]
 
+# MicroTeX (MIT): on-device LaTeX math typesetting with built-in Computer Modern/AMS/Euler metrics.
+microtex_src = [
+  'third_party/microtex/src/latex.cpp',
+  'third_party/microtex/src/render.cpp',
+  'third_party/microtex/src/atom/atom_basic.cpp',
+  'third_party/microtex/src/atom/atom_char.cpp',
+  'third_party/microtex/src/atom/atom_impl.cpp',
+  'third_party/microtex/src/atom/atom_matrix.cpp',
+  'third_party/microtex/src/atom/atom_row.cpp',
+  'third_party/microtex/src/atom/atom_space.cpp',
+  'third_party/microtex/src/atom/colors_def.cpp',
+  'third_party/microtex/src/atom/unit_conversion.cpp',
+  'third_party/microtex/src/box/box.cpp',
+  'third_party/microtex/src/box/box_factory.cpp',
+  'third_party/microtex/src/box/box_group.cpp',
+  'third_party/microtex/src/box/box_single.cpp',
+  'third_party/microtex/src/core/core.cpp',
+  'third_party/microtex/src/core/formula.cpp',
+  'third_party/microtex/src/core/formula_def.cpp',
+  'third_party/microtex/src/core/glue.cpp',
+  'third_party/microtex/src/core/localized_num.cpp',
+  'third_party/microtex/src/core/macro.cpp',
+  'third_party/microtex/src/core/macro_def.cpp',
+  'third_party/microtex/src/core/macro_impl.cpp',
+  'third_party/microtex/src/core/parser.cpp',
+  'third_party/microtex/src/fonts/alphabet.cpp',
+  'third_party/microtex/src/fonts/font_basic.cpp',
+  'third_party/microtex/src/fonts/font_info.cpp',
+  'third_party/microtex/src/fonts/fonts.cpp',
+  'third_party/microtex/src/res/builtin/formula_mappings.res.cpp',
+  'third_party/microtex/src/res/builtin/symbol_mapping.res.cpp',
+  'third_party/microtex/src/res/builtin/tex_param.res.cpp',
+  'third_party/microtex/src/res/builtin/tex_symbols.res.cpp',
+  'third_party/microtex/src/res/font/bi10.def.cpp',
+  'third_party/microtex/src/res/font/bx10.def.cpp',
+  'third_party/microtex/src/res/font/cmbsy10.def.cpp',
+  'third_party/microtex/src/res/font/cmbx10.def.cpp',
+  'third_party/microtex/src/res/font/cmbxti10.def.cpp',
+  'third_party/microtex/src/res/font/cmex10.def.cpp',
+  'third_party/microtex/src/res/font/cmmi10.def.cpp',
+  'third_party/microtex/src/res/font/cmmi10_unchanged.def.cpp',
+  'third_party/microtex/src/res/font/cmmib10.def.cpp',
+  'third_party/microtex/src/res/font/cmmib10_unchanged.def.cpp',
+  'third_party/microtex/src/res/font/cmr10.def.cpp',
+  'third_party/microtex/src/res/font/cmss10.def.cpp',
+  'third_party/microtex/src/res/font/cmssbx10.def.cpp',
+  'third_party/microtex/src/res/font/cmssi10.def.cpp',
+  'third_party/microtex/src/res/font/cmsy10.def.cpp',
+  'third_party/microtex/src/res/font/cmti10.def.cpp',
+  'third_party/microtex/src/res/font/cmti10_unchanged.def.cpp',
+  'third_party/microtex/src/res/font/cmtt10.def.cpp',
+  'third_party/microtex/src/res/font/dsrom10.def.cpp',
+  'third_party/microtex/src/res/font/eufb10.def.cpp',
+  'third_party/microtex/src/res/font/eufm10.def.cpp',
+  'third_party/microtex/src/res/font/i10.def.cpp',
+  'third_party/microtex/src/res/font/moustache.def.cpp',
+  'third_party/microtex/src/res/font/msam10.def.cpp',
+  'third_party/microtex/src/res/font/msbm10.def.cpp',
+  'third_party/microtex/src/res/font/r10.def.cpp',
+  'third_party/microtex/src/res/font/r10_unchanged.def.cpp',
+  'third_party/microtex/src/res/font/rsfs10.def.cpp',
+  'third_party/microtex/src/res/font/sb10.def.cpp',
+  'third_party/microtex/src/res/font/sbi10.def.cpp',
+  'third_party/microtex/src/res/font/si10.def.cpp',
+  'third_party/microtex/src/res/font/special.def.cpp',
+  'third_party/microtex/src/res/font/ss10.def.cpp',
+  'third_party/microtex/src/res/font/stmary10.def.cpp',
+  'third_party/microtex/src/res/font/tt10.def.cpp',
+  'third_party/microtex/src/res/parser/parser_stub.cpp',
+  'third_party/microtex/src/res/reg/builtin_font_reg.cpp',
+  'third_party/microtex/src/res/reg/builtin_syms_reg.cpp',
+  'third_party/microtex/src/res/sym/amsfonts.def.cpp',
+  'third_party/microtex/src/res/sym/amssymb.def.cpp',
+  'third_party/microtex/src/res/sym/base.def.cpp',
+  'third_party/microtex/src/res/sym/stmaryrd.def.cpp',
+  'third_party/microtex/src/res/sym/symspecial.def.cpp',
+  'third_party/microtex/src/utils/string_utils.cpp',
+  'third_party/microtex/src/utils/utf.cpp',
+  'third_party/microtex/src/utils/utils.cpp',
+]
+microtex_inc = include_directories('third_party/microtex/src', is_system : true)
+microtex_lib = static_library('zk-microtex', microtex_src,
+  include_directories : microtex_inc,
+  cpp_args : ['-w'],
+  override_options : ['cpp_std=c++17'])
+microtex_dep = declare_dependency(link_with : microtex_lib, include_directories : microtex_inc)
+
 ui_incs = [inc, include_directories('third_party', is_system : true)]  # nlohmann/json.hpp
 if backend == 'kindle'
   # kindle-sdk ships no fontconfig headers; the firmware has fontconfig 2.8.
@@ -166,15 +253,17 @@ ui_lib = static_library('zk-ui',
   'src/ui/metrics.cpp',
   'src/ui/item_icons.cpp',
   'src/ui/text.cpp',
+  'src/ui/math_cairo.cpp',
+  'src/ui/math.cpp',
   'src/ui/paint.cpp',
   'src/ui/widgets.cpp',
   'src/ui/pager.cpp',
   'src/ui/text_field.cpp',
   'src/docs/fonts.cpp',
   include_directories : ui_incs,
-  dependencies : [core_dep, cairo_dep, pango_deps])
+  dependencies : [core_dep, cairo_dep, pango_deps, microtex_dep])
 
-ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps])
+ui_dep = declare_dependency(link_with : ui_lib, dependencies : [core_dep, cairo_dep, pango_deps, microtex_dep])
 
 fs = import('fs')
 cxx = meson.get_compiler('cpp')

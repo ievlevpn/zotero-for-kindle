@@ -33,7 +33,7 @@ JSValue jsReaderOpen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     const auto doc = nlohmann::json::parse(raw, nullptr, false);
     if (!doc.is_object()) return JS_ThrowTypeError(c, "%s", kShape);
     for (auto it = doc.begin(); it != doc.end(); ++it)
-        if (it.key() != "url" && it.key() != "html" && it.key() != "title" && it.key() != "baseUrl")
+        if (it.key() != "url" && it.key() != "html" && it.key() != "title" && it.key() != "baseUrl" && it.key() != "save")
             return JS_ThrowTypeError(c, "zk.reader.open: unknown field \"%s\"", it.key().c_str());
     const auto str = [&](const char* k) -> const nlohmann::json* {
         auto it = doc.find(k);
@@ -43,6 +43,16 @@ JSValue jsReaderOpen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
     const auto* html = str("html");
     const auto* title = str("title");
     const auto* base = str("baseUrl");
+    std::string saveMode;
+    if (auto it = doc.find("save"); it != doc.end() && !it->is_null()) {
+        if (it->is_boolean()) {
+            if (it->get<bool>()) saveMode = "allow";
+        } else if (it->is_string() && it->get<std::string>() == "prompt") {
+            saveMode = "prompt";
+        } else {
+            return JS_ThrowTypeError(c, "zk.reader.open: `save` must be a boolean or \"prompt\"");
+        }
+    }
     if ((!url) == (!html) || (url && !url->is_string()) || (html && !html->is_string()) || (title && !title->is_string()) ||
         (base && (!base->is_string() || url)))
         return JS_ThrowTypeError(c, "%s", kShape);
@@ -73,6 +83,7 @@ JSValue jsReaderOpen(JSContext* c, JSValueConst, int argc, JSValueConst* argv) {
         out["title"] = shownTitle;
         if (base && !base->get_ref<const std::string&>().empty()) out["baseUrl"] = base->get<std::string>();
     }
+    if (!saveMode.empty()) out["save"] = saveMode;
 
     JSValue promise = JS_UNDEFINED;
     auto work = startWork(p, &promise);

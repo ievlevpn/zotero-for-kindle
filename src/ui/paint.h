@@ -44,6 +44,7 @@ void displayIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void lightIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void areaIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 void stickyNoteIcon(cairo_t* cr, double cx, double cy, uint8_t g);
+void saveIcon(cairo_t* cr, double cx, double cy, uint8_t g);
 // The generated covers' painters (widgets.h, drawCover, picks one and its sizes). A book's: `fill`,
 // its title in Bookerly bold in `ink` top-left, `pad` from the edges, a short rule in `rule` and its
 // authors in Ember in `soft` bottom-left; `framed`: a 2 px ink border and a 1.5 px inner frame 5% in.

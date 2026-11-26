@@ -309,10 +309,11 @@ AnnotationBar::Hit AnnotationBar::hit(Point p) const {
     return {};
 }
 
-AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<std::string> chips, std::string readOnly)
+AnnotationEditor::AnnotationEditor(AnnotationRecord a, Rect anchor, std::vector<std::string> chips, std::string readOnly, Store store)
     : annotation_(std::move(a)),
       bar_(readOnly.empty() ? AnnotationBar::Mode::Edit : AnnotationBar::Mode::View, anchor, annotation_.color, false,
            readOnly.empty() ? TagRow(std::move(chips), annotation_.tags) : TagRow()),
+      store_(std::move(store)),
       self_(std::make_shared<AnnotationEditor*>(this)) {
     if (!readOnly.empty()) bar_.setView(std::move(readOnly), annotation_.type == "note" ? "" : annotation_.comment);
 }
@@ -362,7 +363,9 @@ void AnnotationEditor::enter(State s, Nav& nav) {
     nav.damage(rect(), Waveform::Ui);
     if (s == State::Comment) {
         // From the comment as it is now: a sync may have brought one written on the computer.
-        if (auto now = nav.library().annotation(annotation_.key); now && !now->deletedHere) annotation_ = *now;
+        if (!store_.edit) {
+            if (auto now = nav.library().annotation(annotation_.key); now && !now->deletedHere) annotation_ = *now;
+        }
         comment_ = base_ = annotation_.comment;
         nav.keyboard().show();
         commentBox_ = commentRectAbove(nav.keyboard().bounds());
@@ -404,6 +407,11 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
             return saveComment(nav);  // a tap elsewhere keeps what was typed
         case State::Confirm:
             if (confirmRect(0).contains(p)) {
+                if (store_.remove) {
+                    store_.remove(annotation_.key);
+                    changed_ = true;
+                    return Result::Closed;
+                }
                 const bool told = nav.plugins().listening();
                 const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), annotation_) : plugins::AnnotationRef{};
                 if (nav.library().deleteAnnotation(annotation_.key)) {
@@ -425,6 +433,16 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
     const AnnotationBar::Hit hit = bar_.hit(p);
     if (hit.action == AnnotationBar::Action::Colour) {
         const std::string colour = zoteroColours()[hit.colour].hex;
+        if (store_.edit) {
+            if (colour != annotation_.color) {
+                annotation_.color = colour;
+                store_.edit(annotation_);
+                changed_ = true;
+            }
+            bar_.setColour(colour);
+            nav.damage(bar_.rect(), Waveform::Ui);
+            return Result::Open;
+        }
         // Change only the colour, on the annotation as it is now (a sync may have updated it).
         auto now = nav.library().annotation(annotation_.key);
         if (!now || now->deletedHere) return Result::Closed;
@@ -439,6 +457,20 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
         nav.damage(bar_.rect(), Waveform::Ui);
     } else if (hit.action == AnnotationBar::Action::Tag) {
         const std::string tag = bar_.tags().chips()[static_cast<size_t>(hit.colour)];
+        if (store_.edit) {
+            auto& tags = annotation_.tags;
+            const bool on = !bar_.tags().isOn(tag);
+            if (on) {
+                if (!has(tags, tag)) tags.push_back(tag);
+            } else {
+                tags.erase(std::remove(tags.begin(), tags.end(), tag), tags.end());
+            }
+            store_.edit(annotation_);
+            changed_ = true;
+            bar_.tags().setOn(tags);
+            nav.damage(bar_.tags().rect(), Waveform::Ui);
+            return Result::Open;
+        }
         auto tags = setAnnotationTag(nav, annotation_.key, tag, !bar_.tags().isOn(tag));
         if (!tags) return Result::Closed;
         if (auto now = nav.library().annotation(annotation_.key)) annotation_ = *now;
@@ -450,6 +482,18 @@ AnnotationEditor::Result AnnotationEditor::onTap(Point p, Nav& nav) {
         std::weak_ptr<AnnotationEditor*> self = self_;
         Nav* n = &nav;
         const std::string key = annotation_.key;
+        if (store_.edit) {
+            pickAnnotationTag(nav, [self](const std::string& tag) {
+                auto alive = self.lock();
+                AnnotationEditor* e = alive ? *alive : nullptr;
+                if (!e) return;
+                if (!has(e->annotation_.tags, tag)) e->annotation_.tags.push_back(tag);
+                e->store_.edit(e->annotation_);
+                e->changed_ = true;
+                e->bar_.tags().setOn(e->annotation_.tags);
+            });
+            return Result::Open;
+        }
         pickAnnotationTag(nav, [self, n, key](const std::string& tag) {
             auto tags = setAnnotationTag(*n, key, tag, true);
             auto alive = self.lock();
@@ -490,6 +534,12 @@ AnnotationEditor::Result AnnotationEditor::onKey(const KeyEvent& k, Nav& nav) {
 AnnotationEditor::Result AnnotationEditor::saveComment(Nav& nav) {
     nav.keyboard().hide();
     if (comment_ == base_) return Result::Closed;  // nothing typed: nothing to send
+    if (store_.edit) {
+        annotation_.comment = comment_;
+        store_.edit(annotation_);
+        changed_ = true;
+        return Result::Closed;
+    }
     auto now = nav.library().annotation(annotation_.key);
     if (!now || now->deletedHere) return Result::Closed;
     annotation_ = *now;

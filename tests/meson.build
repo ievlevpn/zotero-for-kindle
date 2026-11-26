@@ -8,6 +8,7 @@ test_sources = files(
   'test_color.cpp',
   'test_color_pages.cpp',
   'test_text.cpp',
+  'test_math.cpp',
   'test_x_touch.cpp',
   'test_pen_decoder.cpp',
   'test_pen_ink.cpp',

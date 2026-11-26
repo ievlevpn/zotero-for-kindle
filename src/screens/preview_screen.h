@@ -26,6 +26,7 @@ struct PreviewDoc {
     std::string url;   // a PDF, an EPUB, or a page (opened as html)
     std::string html;  // or the page itself
     std::string title, baseUrl;
+    ReaderScreen::PreviewSaveMode saveMode = ReaderScreen::PreviewSaveMode::None;
 };
 
 class PreviewScreen final : public Screen {
@@ -38,6 +39,7 @@ public:
         std::function<std::unique_ptr<ReaderScreen>(const PreviewEntry&)> makeReader;
         std::function<void(const std::string& error)> answer;
         std::function<void()> closed;
+        std::function<void(ReaderScreen::PreviewCloseResult)> closedWithResult;
     };
     // Opens `doc`: the reader at once for html or a cached document, else this screen over what
     // shows, downloading. The way in (PreviewScreen's constructor is for tests).

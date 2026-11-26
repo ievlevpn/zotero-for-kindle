@@ -118,7 +118,8 @@ std::unique_ptr<ReaderScreen> PreviewScreen::reader(const PreviewEntry& e, const
     if (!r) return nullptr;
     PreviewCache* cache = deps.cache;
     const std::string key = e.key;
-    r->setPreview({e.position, doc.url, [cache, key](const std::string& pos) { cache->savePosition(key, pos); }, deps.closed});
+    r->setPreview({e.position, doc.url, [cache, key](const std::string& pos) { cache->savePosition(key, pos); }, deps.closed,
+                   doc.saveMode, deps.closedWithResult});
     return r;
 }
 

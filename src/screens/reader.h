@@ -10,6 +10,7 @@
 #include <optional>
 
 #include "docs/render_worker.h"
+#include "screens/plugin_confirm.h"
 #include "screens/plugin_result.h"
 #include "screens/screen.h"
 #include "ui/text_field.h"
@@ -110,22 +111,34 @@ public:
     // at marking anything (a selection, an area, a note, the pen) says "This group library is
     // read-only". Annotations there, and other members' anywhere, open as a "by Anna" line.
     bool readOnlyLibrary() const { return readOnly_ && !preview_; }
-    // A preview (zk.reader.open, 0.9): a document that isn't in the library. Nothing is marked
-    // (no highlights, notes, ink or bookmarks: the selection bar offers Search and plugin actions,
-    // as on a web snapshot), nothing is saved to the library or synced, no plugin hears of it as a
-    // book. Its place comes from and goes to `savePosition` (the preview cache); `closed` runs when
-    // the reader closes. The menus' top bar says "Preview"; Back returns to what opened it.
+    // Whether a preview may be highlighted and saved back to the plugin (zk.reader.open `save`).
+    enum class PreviewSaveMode { None, Allow, Prompt };
+    struct PreviewCloseResult {
+        std::string action;  // "" when saveMode == None; else "close", "save", or "discard"
+        std::vector<AnnotationRecord> annotations;
+    };
+    // A preview (zk.reader.open, 0.9): a document that isn't in the library. When `saveMode` is
+    // None (default), nothing is marked (no highlights, notes, ink or bookmarks). With Allow or
+    // Prompt, temporary highlights/notes live in memory while the preview is open, menus offer a
+    // Save button, and Back asks Save/Discard (when annotated, or always under Prompt).
     struct PreviewMode {
         std::string position;  // where to open ("" the start)
         std::string url;       // where it came from ("" an html document), for plugin actions
         std::function<void(const std::string& position)> savePosition;
         std::function<void()> closed;
+        PreviewSaveMode saveMode = PreviewSaveMode::None;
+        std::function<void(PreviewCloseResult)> closedWithResult;
     };
     void setPreview(PreviewMode m) {
         preview_ = std::move(m);
         readOnly_ = true;
     }
     bool preview() const { return preview_.has_value(); }
+    bool previewCanSave() const { return preview_ && preview_->saveMode != PreviewSaveMode::None; }
+    const std::vector<AnnotationRecord>& previewAnnotations() const { return previewAnnotations_; }
+    const PluginConfirm* previewClosePrompt() const { return previewClosePrompt_.get(); }
+    void savePreviewAndClose(Nav&);
+    void requestPreviewClose(Nav&);
     int pageCount() const { return pageCount_; }
     const std::vector<TocEntry>& toc() const { return toc_; }
     const std::string& chapter() const { return chapter_; }
@@ -235,7 +248,14 @@ public:
     void onClose(Nav& nav) override {
         if (result_) result_->stop();
         flushInk(nav);
-        if (preview_ && preview_->closed) std::exchange(preview_->closed, nullptr)();
+        if (preview_) {
+            if (auto cb = std::exchange(preview_->closedWithResult, nullptr)) {
+                std::string action = previewCloseAction_;
+                if (action.empty() && preview_->saveMode != PreviewSaveMode::None) action = "close";
+                cb(PreviewCloseResult{std::move(action), previewAnnotations_});
+            }
+            if (auto cb = std::exchange(preview_->closed, nullptr)) cb();
+        }
     }
 
 private:
@@ -276,6 +296,10 @@ private:
     DocType type_;
     bool web_ = false;
     std::optional<PreviewMode> preview_;
+    std::vector<AnnotationRecord> previewAnnotations_;
+    int previewAnnSeq_ = 0;
+    std::string previewCloseAction_;
+    std::unique_ptr<PluginConfirm> previewClosePrompt_;
     bool readOnly_ = false, readOnlyTold_ = false;  // a read-only group's book; its toast was shown
     // readOnly_: says so (always, or only the first time) and returns true.
     bool refuseReadOnly(Nav&, bool always);

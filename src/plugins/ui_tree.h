@@ -96,7 +96,7 @@ struct Block {
     std::optional<Weight> weight;
     std::optional<Tone> tone;
     std::optional<TextAlign> textAlign;
-    bool italic = false, caps = false;
+    bool italic = false, caps = false, math = false;
     double fraction = 0;           // progress: 0..1
     int columns = 0;               // grid: 0 = auto
     int minWidthPct = 25;          // grid: the narrowest a cell gets when columns is auto

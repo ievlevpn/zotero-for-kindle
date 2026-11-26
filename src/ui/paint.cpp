@@ -330,4 +330,22 @@ void stickyNoteIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
     cairo_restore(cr);
 }
 
+void saveIcon(cairo_t* cr, double cx, double cy, uint8_t g) {
+    cairo_save(cr);
+    iconPen(cr, g);
+    const double hw = 17.5, t = cy - kIconR, b = cy + 16;
+    // Downward arrow into a shallow tray ("Save to Zotero").
+    cairo_move_to(cr, cx, t);
+    cairo_line_to(cr, cx, cy + 5);
+    cairo_move_to(cr, cx - 10, cy - 5);
+    cairo_line_to(cr, cx, cy + 6);
+    cairo_line_to(cr, cx + 10, cy - 5);
+    cairo_move_to(cr, cx - hw, cy + 7);
+    cairo_line_to(cr, cx - hw, b);
+    cairo_line_to(cr, cx + hw, b);
+    cairo_line_to(cr, cx + hw, cy + 7);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+}
+
 }  // namespace zk

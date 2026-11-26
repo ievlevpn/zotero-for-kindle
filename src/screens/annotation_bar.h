@@ -161,10 +161,16 @@ private:
 class AnnotationEditor {
 public:
     enum class Result { Open, Closed };
+    // Optional in-memory store (used by Preview mode so edits/deletes never touch the library DB).
+    struct Store {
+        std::function<void(const AnnotationRecord&)> edit;
+        std::function<void(const std::string& key)> remove;
+    };
 
     // `chips`: the tag row's (recentChips()). `readOnly` (annotationReadOnly()): the annotation can't
     // be changed here; the bar only says so ("by Anna"), and the comment and Delete don't open.
-    AnnotationEditor(AnnotationRecord, Rect anchor, std::vector<std::string> chips = {}, std::string readOnly = "");
+    AnnotationEditor(AnnotationRecord, Rect anchor, std::vector<std::string> chips = {}, std::string readOnly = "",
+                     Store store = {});
     ~AnnotationEditor();
 
     const std::string& key() const { return annotation_.key; }
@@ -204,6 +210,7 @@ private:
     Rect commentBox_;  // placed when the comment opens, above the keyboard as it is then
     bool changed_ = false;
     bool direct_ = false;  // opened at the comment or the confirmation: no bar to go back to
+    Store store_;
     std::shared_ptr<AnnotationEditor*> self_;  // + Tag's picker: this editor, or null once it is gone
 };
 

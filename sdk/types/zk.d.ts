@@ -1640,6 +1640,8 @@ declare namespace zk {
       align?: "start" | "center" | "end";
       /** Makes it tappable (a link): a tap sends a `tap` event with this id. */
       id?: string;
+      /** Typeset inline (`$…$`, `\(…\)`) and display (`$$…$$`, `\[…\]`) LaTeX math on-device via MicroTeX. */
+      math?: boolean;
       width?: Width;
     }
 
@@ -1697,6 +1699,8 @@ declare namespace zk {
       body?: string;
       /** A short mark in the card's corner. */
       badge?: string;
+      /** Typeset inline (`$…$`, `\(…\)`) and display (`$$…$$`, `\[…\]`) LaTeX math in title and body via MicroTeX. */
+      math?: boolean;
     }
 
     /** See {@link deck}. */
@@ -1967,7 +1971,14 @@ declare namespace zk {
       | { kind: "chips"; id: string; chip: string; selected: string[] }
       | { kind: "result"; from: string; value: Json | undefined }
       | { kind: "back" }
-      | { kind: "reader"; closed: true };
+      | {
+          kind: "reader";
+          closed: true;
+          /** Present when `zk.reader.open` was called with `save: true` or `save: "prompt"`. */
+          action?: "save" | "discard" | "close";
+          /** Temporary highlights/underlines made during a saveable preview (non-empty when annotated). */
+          annotations?: zk.reader.PreviewAnnotation[];
+        };
   }
 
   // ───────────────────────────── The reader ─────────────────────────────
@@ -1976,6 +1987,16 @@ declare namespace zk {
    * The app's reader, for documents that aren't in the library. Needs app 0.9.0.
    */
   namespace reader {
+    /** A temporary highlight or underline made while reading a preview opened with `save`. */
+    interface PreviewAnnotation {
+      type: "highlight" | "underline";
+      text: string;
+      comment?: string;
+      color: string;
+      pageLabel?: string;
+      tags?: string[];
+    }
+
     /**
      * Opens a document in the app's reader as a **preview**: nothing is added to the library.
      *
@@ -1986,8 +2007,12 @@ declare namespace zk {
      * - `html`: a page the plugin already has (an article it extracted), opened like a saved web
      *   page. No scripts run; images aren't fetched (`data:` URLs show). `baseUrl` resolves its
      *   relative links.
+     * - `save`: `true` enables temporary highlighting/notes in Preview, adds a **Save** button to
+     *   the reader menu, and asks *Save or Discard?* on Back when annotations exist; `"prompt"`
+     *   always asks *Save or Discard?* on Back. The screen's `reader` close event then carries
+     *   `action` (`"save" | "discard" | "close"`) and `annotations`.
      *
-     * In a preview there is no highlighting, notes or bookmarks: a selection offers Search and
+     * Without `save`, there is no highlighting, notes or bookmarks: a selection offers Search and
      * plugin actions (their {@link TextSelection} has `item: null` and `preview`). The top bar says
      * "Preview". Nothing syncs. The app keeps the last 10 previewed documents (at most 100 MB) with
      * their reading places, so opening one again is instant.
@@ -1999,11 +2024,15 @@ declare namespace zk {
      * was, and the screen gets a `{ kind: "reader", closed: true }` event.
      *
      * @example
-     * if (e.kind === "tap" && e.id === "card") await zk.reader.open({ url: `https://arxiv.org/pdf/${card.arxiv}`, title: card.title });
+     * if (e.kind === "tap" && e.id === "card") await zk.reader.open({ url: `https://arxiv.org/pdf/${card.arxiv}`, title: card.title, save: "prompt" });
      * @example
-     * await zk.reader.open({ html: article, title: card.title, baseUrl: card.link });
+     * await zk.reader.open({ html: article, title: card.title, baseUrl: card.link, save: true });
      */
-    function open(doc: { url: string; title?: string } | { html: string; title: string; baseUrl?: string }): Promise<void>;
+    function open(
+      doc:
+        | { url: string; title?: string; save?: boolean | "prompt" }
+        | { html: string; title: string; baseUrl?: string; save?: boolean | "prompt" },
+    ): Promise<void>;
   }
 
   // ───────────────────────────── Data ─────────────────────────────

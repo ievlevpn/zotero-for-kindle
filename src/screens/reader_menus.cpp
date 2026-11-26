@@ -26,7 +26,7 @@ namespace {
 int W() { return metrics().width; }
 int H() { return metrics().height; }
 constexpr int kTopH = 140, kPanelH = 380, kLightH = 170;
-const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync", "Mark area", "Add note"};
+const char* kButtons[] = {"Contents", "Notes", "Display", "Light", "Sync", "Mark area", "Add note", "Save"};
 constexpr int kMaxLight = 24;  // com.lab126.powerd flIntensity range on the PW5
 constexpr int kDisplayH = 580;
 constexpr int kColorRowH = 110;  // Color, below Orientation, on color panels
@@ -59,7 +59,7 @@ Rect ReaderMenus::buttonRect(int i, int count) {
 }
 int ReaderMenus::buttonCount() const { return static_cast<int>(buttonKinds().size()); }
 std::vector<int> ReaderMenus::buttonKinds() const {
-    if (reader_.preview()) return {0, 2, 3};  // nothing to note or sync: Contents, Display, Light
+    if (reader_.preview()) return reader_.previewCanSave() ? std::vector<int>{0, 2, 3, 7} : std::vector<int>{0, 2, 3};
     return reader_.type() == DocType::Pdf ? std::vector<int>{0, 1, 2, 3, 4, 5, 6} : std::vector<int>{0, 1, 2, 3, 4};
 }
 Rect ReaderMenus::cell(int kind) const {
@@ -532,10 +532,12 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
     if (picker_) return onPickerTap(g.pos, nav);  // over everything: a tap outside only closes it
     if (backRect().contains(g.pos)) {
         reader_.flushInk(nav);  // handwriting becomes annotations first, so the sync sends them
-        if (!reader_.preview()) {  // closing the book: send what was changed in it, and get Zotero's news
-            if (loadSettings(nav.library(), nav.device()).syncIntervalMinutes == 0) nav.sync().pushSoon();  // Sync every Off: only the changes
-            else nav.sync().syncNow();
+        if (reader_.preview()) {
+            reader_.requestPreviewClose(nav);
+            return;
         }
+        if (loadSettings(nav.library(), nav.device()).syncIntervalMinutes == 0) nav.sync().pushSoon();  // Sync every Off: only the changes
+        else nav.sync().syncNow();
         nav.pop();
         return;
     }
@@ -575,6 +577,10 @@ void ReaderMenus::onGesture(const Gesture& g, Nav& nav) {
         syncing_ = true;
         nav.sync().openBook(reader_.row().key, reader_.row().attachmentKey);
         nav.damage(panelRect(), Waveform::Ui);
+        return;
+    }
+    if (cell(7).contains(g.pos)) {
+        reader_.savePreviewAndClose(nav);
         return;
     }
     if (lightOpen_ && lightPanelRect().contains(g.pos)) {
@@ -652,7 +658,7 @@ void ReaderMenus::draw(Canvas& canvas) {
     cairo_arc(cr, s.x + f * s.w, s.y + s.h / 2.0, 18, 0, 2 * M_PI);
     cairo_fill(cr);
     using Icon = void (*)(cairo_t*, double, double, uint8_t);
-    const Icon icons[] = {contentsIcon, notesIcon, displayIcon, lightIcon, syncIcon, areaIcon, stickyNoteIcon};
+    const Icon icons[] = {contentsIcon, notesIcon, displayIcon, lightIcon, syncIcon, areaIcon, stickyNoteIcon, saveIcon};
     const auto kinds = buttonKinds();
     const int n = static_cast<int>(kinds.size());
     for (int slot = 0; slot < n; ++slot) {
@@ -660,6 +666,8 @@ void ReaderMenus::draw(Canvas& canvas) {
         std::string label = kButtons[i];
         if (i == 1) label = notesLabel();
         if (i == 4 && syncing_) label = "Syncing…";
+        if (i == 7 && !reader_.previewAnnotations().empty())
+            label = "Save (" + std::to_string(reader_.previewAnnotations().size()) + ")";
         const Rect r = buttonRect(slot, n);
         if ((i == 3 && lightOpen_) || (i == 2 && displayOpen_)) {  // open: outlined, as a chosen tab
             gray(cr, kInk);

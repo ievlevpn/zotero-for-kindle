@@ -868,9 +868,55 @@ void ReaderScreen::closeMenus(Nav& nav) {
     menus_.reset();
 }
 
+void ReaderScreen::savePreviewAndClose(Nav& nav) {
+    if (!preview_) return;
+    previewCloseAction_ = "save";
+    nav.pop();
+}
+
+void ReaderScreen::requestPreviewClose(Nav& nav) {
+    if (!preview_) {
+        nav.pop();
+        return;
+    }
+    const bool ask = preview_->saveMode == PreviewSaveMode::Prompt ||
+                     (preview_->saveMode == PreviewSaveMode::Allow && !previewAnnotations_.empty());
+    if (!ask) {
+        nav.pop();
+        return;
+    }
+    if (menus_) closeMenus(nav);
+    const size_t n = previewAnnotations_.size();
+    std::vector<std::string> lines;
+    const std::string title = row_.title.empty() ? "this item" : "“" + row_.title + "”";
+    lines.push_back("Save " + title + " to Zotero?");
+    if (n > 0) {
+        lines.push_back(std::to_string(n) + (n == 1 ? " highlight will be attached as a note." : " highlights will be attached as a note."));
+    }
+    const std::string saveLabel = n > 0 ? "Save (" + std::to_string(n) + ")" : "Save";
+    previewClosePrompt_ = std::make_unique<PluginConfirm>("Preview", std::move(lines), saveLabel, "Discard");
+    nav.damage(previewClosePrompt_->rect(), Waveform::Ui);
+}
+
 void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (error_) {
         if (g.type == GestureType::Tap) nav.pop();  // "Back"
+        return;
+    }
+    if (previewClosePrompt_) {
+        if (g.type != GestureType::Tap) return;
+        const Rect r = previewClosePrompt_->rect();
+        if (const auto ans = previewClosePrompt_->onTap(g.pos)) {
+            previewClosePrompt_.reset();
+            previewCloseAction_ = *ans ? "save" : "discard";
+            if (!*ans) previewAnnotations_.clear();
+            nav.pop();
+            return;
+        }
+        if (!r.contains(g.pos)) {  // tap outside: keep reading
+            previewClosePrompt_.reset();
+            nav.damage(r, Waveform::Quality);
+        }
         return;
     }
     if (menus_) {
@@ -958,7 +1004,7 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         if (g.type == GestureType::Tap && editor_->onTap(g.pos, nav) == AnnotationEditor::Result::Open) {
             if (editor_->takeChanged()) {
                 refreshHighlights(nav);
-                nav.sync().pushSoon();
+                if (!previewCanSave()) nav.sync().pushSoon();
                 if (editor_->key() == newAreaKey_ && editor_->bar().colour() != colour_) {  // as a new highlight's
                     colour_ = editor_->bar().colour();
                     nav.device().set(kColourKey, colour_);
@@ -1242,6 +1288,29 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
         }
     }
     if (key.empty()) return false;
+    if (previewCanSave()) {
+        auto it = std::find_if(previewAnnotations_.begin(), previewAnnotations_.end(),
+                               [&](const AnnotationRecord& r) { return r.key == key; });
+        if (it == previewAnnotations_.end()) return false;
+        Rect anchor;
+        for (const auto& h : highlights_)
+            if (h.annotationKey == key) anchor = anchor.united(h.rect);
+        linkId_ = 0;
+        AnnotationEditor::Store store;
+        store.edit = [this](const AnnotationRecord& updated) {
+            for (auto& r : previewAnnotations_)
+                if (r.key == updated.key) r = updated;
+        };
+        store.remove = [this](const std::string& k) {
+            previewAnnotations_.erase(
+                std::remove_if(previewAnnotations_.begin(), previewAnnotations_.end(),
+                               [&](const AnnotationRecord& r) { return r.key == k; }),
+                previewAnnotations_.end());
+        };
+        editor_ = std::make_unique<AnnotationEditor>(*it, anchor, recentChips(nav.library()), "", std::move(store));
+        nav.damage(editor_->rect(), Waveform::Ui);
+        return true;
+    }
     auto a = nav.library().annotation(key);
     if (!a) return false;
     Rect anchor;
@@ -1259,7 +1328,7 @@ void ReaderScreen::closeEditor(Nav& nav) {
     if (!editor_) return;
     if (editor_->takeChanged()) {
         refreshHighlights(nav);
-        nav.sync().pushSoon();
+        if (!previewCanSave()) nav.sync().pushSoon();
     }
     editor_.reset();
     newAreaKey_.clear();
@@ -1272,7 +1341,7 @@ void ReaderScreen::refreshHighlights(Nav& nav) { sendAnnotations(nav, false); }
 // them leaves the page alone (no repaint after every background sync).
 void ReaderScreen::sendAnnotations(Nav& nav, bool onlyIfChanged) {
     if (!worker_) return;
-    std::vector<AnnotationRecord> anns = pageAnnotations(nav.library(), row_.attachmentKey);
+    std::vector<AnnotationRecord> anns = previewCanSave() ? previewAnnotations_ : pageAnnotations(nav.library(), row_.attachmentKey);
     std::string shown;
     for (const auto& a : anns)
         shown += a.key + '\x1f' + a.type + '\x1f' + a.color + '\x1f' + a.comment + '\x1f' + a.position + '\x1e';
@@ -1351,7 +1420,8 @@ void ReaderScreen::showBar(Nav& nav) {
     // A web snapshot or a read-only group: nothing is highlighted, so no colours and no tag row
     // (Search and More… only); in a group, the first time, a toast says why.
     if (!web_ && !preview_) refuseReadOnly(nav, false);
-    bar_ = web_ || readOnly_ ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
+    const bool canHighlight = previewCanSave() || (!web_ && !readOnly_);
+    bar_ = !canHighlight ? std::make_unique<AnnotationBar>(AnnotationBar::Mode::Text, boundsOf(selection_->rects), colour_, more)
                 : std::make_unique<AnnotationBar>(AnnotationBar::Mode::Create, boundsOf(selection_->rects), colour_, more,
                                                   TagRow(selectionChips(nav), selTags_));
     bar_->setWorking(result_ && result_->running());
@@ -1473,6 +1543,20 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     a.pageLabel = selection_->pageLabel;
     a.localOnly = !selection_->roundTrips;  // §7.5: never upload a place that doesn't round-trip
     a.tags = selTags_;  // the chips marked on the bar
+    if (previewCanSave()) {
+        a.key = "preview-ann-" + std::to_string(++previewAnnSeq_);
+        const std::string key = a.key;
+        previewAnnotations_.push_back(a);
+        for (const Rect& r : selection_->rects) {
+            HighlightBox b{key, r, shadeOf(colour_), type == "underline"};
+            b.color = colour_;
+            highlights_.push_back(std::move(b));
+        }
+        nav.device().set(kColourKey, colour_);
+        refreshHighlights(nav);
+        closeSelection(nav);
+        return;
+    }
     for (auto it = selTags_.rbegin(); it != selTags_.rend(); ++it) nav.library().rememberAnnotationTag(*it);
     const std::string key = nav.library().createAnnotation(a);
     // Drawn now, where the selection was (as the page will draw it: Selection::rects): the page
@@ -1712,6 +1796,7 @@ void ReaderScreen::draw(Canvas& canvas) {
             drawButton(cr, button, linkButtonLabel(), false);
     }
     if (result_ && !menus_) result_->draw(cr);
+    if (previewClosePrompt_) previewClosePrompt_->draw(cr);
     if (menus_) menus_->draw(canvas);
 }
 
@@ -2313,7 +2398,7 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         pageArea().contains(p.pos) && !(question_ && positionBannerRect().contains(p.pos))) {
         startSelection(p.pos, nav);
         selDragging_ = true;  // nothing is saved before the pen lifts
-        selAutoHighlight_ = !readOnly_ && !web_ && !preview_;  // else the bar, which says why
+        selAutoHighlight_ = (!readOnly_ && !web_) || previewCanSave();  // else the bar, which says why
         penSelecting_ = true;
         return true;
     }

@@ -638,14 +638,14 @@ zk.screen("deck", {
 });
 )JS", {"net:arxiv.org"});
     struct Shown final : Screen {  // stands in for the reader
-        std::function<void()> closed;
+        std::function<void(nlohmann::json)> closed;
         void draw(Canvas&) override {}
         void onGesture(const Gesture&, Nav&) override {}
-        void onClose(Nav&) override { closed(); }
+        void onClose(Nav&) override { closed(nullptr); }
     };
     nlohmann::json asked;
     r.events->setPreviewOpener([&](App& a, const PluginHostEvent& ev, std::function<void(const std::string&)> answer,
-                                   std::function<void()> closed) {
+                                   std::function<void(nlohmann::json)> closed) {
         asked = ev.value;
         auto s = std::make_unique<Shown>();
         s->closed = std::move(closed);
@@ -659,6 +659,48 @@ zk.screen("deck", {
     CHECK(asked["url"] == "https://arxiv.org/pdf/2401.01234v2");
     r.app.pop();  // Back, out of the reader
     REQUIRE(r.until([&] { return r.shown("back from the reader"); }));
+}
+
+TEST_CASE("plugin screen, end to end: zk.reader.open with save passes action and annotations on close") {
+    if (!fonts()) return;
+    ScopedMetrics m(kPw5);
+    AppRig r(R"JS(
+let said = "-";
+zk.screen("deck", {
+  title: "Gazette",
+  main: true,
+  render: () => zk.ui.column([zk.ui.text(said), zk.ui.button({ id: "read", title: "Read" })]),
+  async onEvent(e) {
+    if (e.kind === "tap") { await zk.reader.open({ html: "<p>Hi</p>", title: "A note", save: "prompt" }); said = "opened"; }
+    if (e.kind === "reader") said = `${e.action}:${(e.annotations || []).length}:${e.annotations?.[0]?.text ?? ""}`;
+  },
+});
+)JS");
+    struct Shown final : Screen {
+        std::function<void(nlohmann::json)> closed;
+        void draw(Canvas&) override {}
+        void onGesture(const Gesture&, Nav&) override {}
+        void onClose(Nav&) override {
+            closed({{"action", "save"},
+                    {"annotations", nlohmann::json::array({{{"type", "highlight"}, {"text", "hello world"}, {"color", "#ffd400"}}})}});
+        }
+    };
+    nlohmann::json asked;
+    r.events->setPreviewOpener([&](App& a, const PluginHostEvent& ev, std::function<void(const std::string&)> answer,
+                                   std::function<void(nlohmann::json)> closed) {
+        asked = ev.value;
+        auto s = std::make_unique<Shown>();
+        s->closed = std::move(closed);
+        a.push(std::move(s));
+        answer("");
+    });
+    r.events->openScreen(r.app, "riffle", "deck");
+    REQUIRE(r.until([&] { return r.shown("-"); }));
+    r.tapButton("read");
+    REQUIRE(r.until([&] { return dynamic_cast<const Shown*>(r.app.top()) != nullptr; }));
+    CHECK(asked["save"] == "prompt");
+    r.app.pop();
+    REQUIRE(r.until([&] { return r.shown("save:1:hello world"); }));
 }
 
 // ---- Items (the `items` block): taps open the item the app's way, long-press shows the sheet -------

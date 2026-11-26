@@ -157,6 +157,32 @@ std::map<std::string, std::weak_ptr<const KeptText>>& keptTexts() {
     return m;
 }
 std::vector<std::shared_ptr<const KeptText>>* gPins = nullptr;
+std::map<std::string, std::weak_ptr<const KeptMathText>>& keptMathTexts() {
+    static std::map<std::string, std::weak_ptr<const KeptMathText>> m;
+    return m;
+}
+std::vector<std::shared_ptr<const KeptMathText>>* gMathPins = nullptr;
+
+std::shared_ptr<const KeptMathText> keptMathText(std::string_view utf8, const TextStyle& st, int w, int lines, Align align) {
+    std::string key = std::string(st.family) + ' ' + std::to_string(st.size_pt) + ' ' + std::to_string(st.weight) + ' ' +
+                      std::to_string(st.italic) + ' ' + std::to_string(st.gray) + ' ' + std::to_string(static_cast<int>(align)) + ' ' +
+                      std::to_string(lines) + ' ' + std::to_string(w) + ' ' + std::string(utf8);
+    auto& cache = keptMathTexts();
+    if (auto it = cache.find(key); it != cache.end())
+        if (auto t = it->second.lock()) {
+            if (gMathPins) gMathPins->push_back(t);
+            return t;
+        }
+    for (auto it = cache.begin(); it != cache.end();)
+        it = it->second.expired() ? cache.erase(it) : std::next(it);
+    ++gTextLayouts;
+    auto t = std::make_shared<const KeptMathText>(utf8, st, std::max(1, w), std::max(0, lines), align);
+    cache[std::move(key)] = t;
+    if (gMathPins) gMathPins->push_back(t);
+    return t;
+}
+
+bool textUsesMath(const Block& b) { return b.math && hasMath(plainText(b)); }
 
 std::shared_ptr<const KeptText> keptText(const Block& b, int w) {
     std::string m = markupOf(b);
@@ -387,7 +413,10 @@ CardHead cardHead(const Block& card, int w) {
     CardHead h;
     const int inner = w - 2 * kCardPad;
     if (!card.badge.empty()) h.badgeW = std::min(inner / 2, measureText(card.badge, kBadge, inner, 1).width + 36);
-    h.titleH = textH(card.title, kCardTitle, inner - (h.badgeW ? h.badgeW + 20 : 0), 3);
+    const int titleW = inner - (h.badgeW ? h.badgeW + 20 : 0);
+    h.titleH = card.math && hasMath(card.title)
+                   ? keptMathText(card.title, kCardTitle, titleW, 3, Align::Left)->height()
+                   : textH(card.title, kCardTitle, titleW, 3);
     h.metaH = card.meta.empty() ? 0 : textH(card.meta, kCardMeta, inner, 1) + 6;
     h.head = kCardPad + h.titleH + h.metaH + (card.body.empty() ? 0 : 24);
     return h;
@@ -438,7 +467,9 @@ std::vector<int> diffs(const std::vector<int>& tops) {
 int naturalW(const Block& b, int w) {
     w = std::max(1, w);
     switch (b.kind) {
-        case K::Text: return std::min(w, measureText(markupOf(b), textStyleOf(b), w, 0).width);
+        case K::Text:
+            if (textUsesMath(b)) return std::min(w, keptMathText(plainText(b), textStyleOf(b), w, 0, alignOf(b))->width());
+            return std::min(w, measureText(markupOf(b), textStyleOf(b), w, 0).width);
         case K::Button: return std::min(w, std::max(200, measureText(b.title, {kSans, 8.5, 700}, w, 1).width + 100));
         case K::Box: {
             const int in = 2 * boxInset(b);
@@ -550,7 +581,9 @@ Units unitsOf(const Block& b, int w) {
     Units u;
     switch (b.kind) {
         case K::Text: {
-            const auto& tops = keptText(b, w)->tops();
+            const auto& tops = textUsesMath(b)
+                                   ? keptMathText(plainText(b), textStyleOf(b), w, std::max(0, b.lines), alignOf(b))->tops()
+                                   : keptText(b, w)->tops();
             if (b.lines > 0) u.head = tops[std::min<size_t>(b.lines, tops.size() - 1)];
             else u.h = diffs(tops);
             break;
@@ -564,7 +597,11 @@ Units unitsOf(const Block& b, int w) {
             const Block& card = b.kind == K::Deck ? b.children[0] : b;
             u.head = cardHead(card, w).head;
             u.tail = kCardPad;
-            if (!card.body.empty()) u.h = diffs(lineTops(card.body, kCardBody, w - 2 * kCardPad));
+            if (!card.body.empty()) {
+                u.h = diffs(card.math && hasMath(card.body)
+                                ? keptMathText(card.body, kCardBody, w - 2 * kCardPad, 0, Align::Left)->tops()
+                                : lineTops(card.body, kCardBody, w - 2 * kCardPad));
+            }
             break;
         }
         case K::Items: {
@@ -697,7 +734,24 @@ Laid place(const Block& b, Rect r, int first, int count) {
     l.count = count;
     switch (b.kind) {
         case K::Column: l.children = stack(b.children, r, gapPx(b.gap)); break;
-        case K::Text: l.text = keptText(b, r.w); break;
+        case K::Text:
+            if (textUsesMath(b)) l.mathText = keptMathText(plainText(b), textStyleOf(b), r.w, std::max(0, b.lines), alignOf(b));
+            else l.text = keptText(b, r.w);
+            break;
+        case K::Card:
+        case K::Deck: {
+            if (b.kind == K::Deck && b.children.empty()) break;
+            const Block& card = b.kind == K::Deck ? b.children[0] : b;
+            if (card.math) {
+                const CardHead h = cardHead(card, r.w);
+                const int inner = r.w - 2 * kCardPad;
+                const int titleW = inner - (h.badgeW ? h.badgeW + 20 : 0);
+                if (hasMath(card.title)) l.cardTitleMath = keptMathText(card.title, kCardTitle, titleW, 3, Align::Left);
+                if (!card.body.empty() && hasMath(card.body))
+                    l.cardBodyMath = keptMathText(card.body, kCardBody, inner, 0, Align::Left);
+            }
+            break;
+        }
         case K::Row: {
             const auto ws = rowWidths(b, r.w);
             const int gap = gapPx(b.gap);
@@ -878,7 +932,7 @@ void pill(cairo_t* cr, Rect r, const std::string& text, bool filled) {
     centredText(cr, text, st, {r.x + 24, r.y, r.w - 48, r.h});
 }
 
-void drawCard(cairo_t* cr, const Block& card, Rect r, int first, int count, bool deck) {
+void drawCard(cairo_t* cr, const Block& card, const Laid& l, Rect r, int first, int count, bool deck) {
     const Rect box = r;
     fillRect(cr, {box.x + 1, box.y + 1, box.w - 2, box.h - 2}, 255);
     border(cr, box, deck ? kSecondary : kTertiary, 16, deck ? 4 : 3);  // a deck's card: a firmer edge
@@ -890,10 +944,19 @@ void drawCard(cairo_t* cr, const Block& card, Rect r, int first, int count, bool
         fillRect(cr, {b.x, b.y, b.w, b.h}, 235);
         centredText(cr, card.badge, kBadge, {b.x + 18, b.y, b.w - 36, b.h});
     }
-    drawText(cr, card.title, kCardTitle, {x, y, w - (h.badgeW ? h.badgeW + 20 : 0), h.titleH + 4}, 3);
+    const int titleW = w - (h.badgeW ? h.badgeW + 20 : 0);
+    if (l.cardTitleMath) {
+        const int n = std::max(0, static_cast<int>(l.cardTitleMath->tops().size()) - 1);
+        l.cardTitleMath->drawLines(cr, {x, y, titleW, h.titleH + 4}, 0, std::min(3, n));
+    } else {
+        drawText(cr, card.title, kCardTitle, {x, y, titleW, h.titleH + 4}, 3);
+    }
     y += h.titleH;
     if (h.metaH) drawText(cr, card.meta, kCardMeta, {x, y + 6, w, h.metaH}, 1);
-    if (!card.body.empty()) drawTextLines(cr, card.body, kCardBody, {x, box.y + h.head, w, box.h}, first, count);
+    if (!card.body.empty()) {
+        if (l.cardBodyMath) l.cardBodyMath->drawLines(cr, {x, box.y + h.head, w, box.h}, first, count);
+        else drawTextLines(cr, card.body, kCardBody, {x, box.y + h.head, w, box.h}, first, count);
+    }
 }
 
 void drawRow(cairo_t* cr, const Block& list, const ListRow& row, Rect r) {
@@ -964,6 +1027,12 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             for (const auto& c : l.children) drawLaid(cr, c, f);
             break;
         case K::Text: {
+            if (l.mathText || textUsesMath(b)) {
+                const auto mt = l.mathText ? l.mathText : keptMathText(plainText(b), textStyleOf(b), r.w, std::max(0, b.lines), alignOf(b));
+                if (b.lines > 0) mt->drawLines(cr, r, 0, b.lines);
+                else mt->drawLines(cr, r, l.first, l.count);
+                break;
+            }
             const auto text = l.text ? l.text : keptText(b, r.w);
             const auto& tops = text->tops();
             if (b.lines > 0 && tops[std::min<size_t>(b.lines, tops.size() - 1)] > r.h)  // cut short: ellipsized to fit
@@ -972,10 +1041,10 @@ void drawLaid(cairo_t* cr, const Laid& l, const FocusState& f) {
             else text->drawLines(cr, r, l.first, l.count);
             break;
         }
-        case K::Card: drawCard(cr, b, r, l.first, l.count, false); break;
+        case K::Card: drawCard(cr, b, l, r, l.first, l.count, false); break;
         case K::Deck:
             if (!b.children.empty()) {
-                drawCard(cr, b.children[0], r, l.first, l.count, true);
+                drawCard(cr, b.children[0], l, r, l.first, l.count, true);
             } else {
                 border(cr, r, 200, 16);
                 drawText(cr, b.empty, kEmpty, {r.x + 40, r.y + r.h / 2 - 30, r.w - 80, r.h / 2}, 2, Align::Center);
@@ -1278,15 +1347,18 @@ static Laid layOut(const Block& root, Rect area, int page) {
 
 Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items, const std::string& package) {
     std::vector<std::shared_ptr<const KeptText>> pins;
+    std::vector<std::shared_ptr<const KeptMathText>> mathPins;
     std::map<const Block*, Resolved> res;
     std::map<const Block*, std::shared_ptr<const PluginImage>> images;
     auto* outer = std::exchange(gPins, &pins);
+    auto* outerMath = std::exchange(gMathPins, &mathPins);
     auto* outerRes = std::exchange(gResolved, &res);
     auto* outerSource = std::exchange(gSource, items);
     auto* outerPackage = std::exchange(gPackage, &package);
     auto* outerImages = std::exchange(gImages, &images);
     Laid out = layOut(root, area, page);
     gPins = outer;
+    gMathPins = outerMath;
     gResolved = outerRes;
     gSource = outerSource;
     gPackage = outerPackage;
@@ -1294,6 +1366,9 @@ Laid layoutTree(const Block& root, Rect area, int page, ItemSource* items, const
     std::sort(pins.begin(), pins.end());
     pins.erase(std::unique(pins.begin(), pins.end()), pins.end());
     out.kept = std::move(pins);
+    std::sort(mathPins.begin(), mathPins.end());
+    mathPins.erase(std::unique(mathPins.begin(), mathPins.end()), mathPins.end());
+    out.keptMath = std::move(mathPins);
     return out;
 }
 

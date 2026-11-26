@@ -469,3 +469,82 @@ TEST_CASE("reader preview: html opens in the reader at once; a url downloads on 
     CHECK(dynamic_cast<ReaderScreen*>(nav.pushed.back().get()));
     CHECK(answers.back() == "");
 }
+
+TEST_CASE("reader preview save mode: temporary highlights, Save menu button, and Save/Discard close prompt") {
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    addFontDir("assets/fonts-device");
+    fillFixtureLibrary(lib, 3);
+
+    auto makeSaveable = [&](ReaderScreen::PreviewSaveMode mode, ReaderScreen::PreviewCloseResult* got) {
+        ItemRow row;
+        row.title = "Fisk Organ in Lausanne";
+        row.attachmentKey = "preview:g1";
+        row.badge = "WEB";  // even HTML previews allow scratch highlights when saveMode != None
+        auto r = std::make_unique<ReaderScreen>(
+            row, "article.html", DocType::Epub,
+            [] { return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(std::make_unique<FakeEngine>()); }); },
+            6);
+        r->setPreview({"", "", {}, {}, mode, [got](ReaderScreen::PreviewCloseResult res) { *got = std::move(res); }});
+        nav.visible = r.get();
+        r->onShow(nav);
+        for (int i = 0; i < 400 && !r->ready(); ++i) {
+            r->onTick(nav);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        REQUIRE(r->ready());
+        return r;
+    };
+
+    // Allow mode: selecting text shows the Create bar, highlighting stays in memory (not in library DB).
+    ReaderScreen::PreviewCloseResult res;
+    auto reader = makeSaveable(ReaderScreen::PreviewSaveMode::Allow, &res);
+    CHECK(reader->previewCanSave());
+    const Point p{400, 400};
+    reader->onGesture(Gesture{GestureType::LongPress, p, p}, nav);
+    reader->onGesture(Gesture{GestureType::LongPressUp, p, p}, nav);
+    for (int i = 0; i < 400 && !reader->annotationBar(); ++i) {
+        reader->onTick(nav);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    REQUIRE(reader->annotationBar() != nullptr);
+    CHECK(reader->annotationBar()->mode() == AnnotationBar::Mode::Create);
+    // Tap Highlight (button 0).
+    reader->onGesture(tapAt(reader->annotationBar()->buttonRect(0).center()), nav);
+    REQUIRE(reader->previewAnnotations().size() == 1);
+    CHECK(lib.annotationsFor("preview:g1").empty());  // nothing written to Zotero DB
+
+    // Menus include Save (kind 7).
+    reader->onGesture(tapAt({ReaderScreen::pageArea().w / 2, ReaderScreen::pageArea().h / 2}), nav);
+    REQUIRE(reader->menus() != nullptr);
+    CHECK(reader->menus()->buttonKinds() == std::vector<int>{0, 2, 3, 7});
+
+    // Back with >=1 highlight opens the Save/Discard prompt instead of silently discarding.
+    const int popsBefore = nav.pops;
+    reader->onGesture(tapAt(ReaderMenus::backRect().center()), nav);
+    CHECK(nav.pops == popsBefore);
+    REQUIRE(reader->previewClosePrompt() != nullptr);
+    // Tap Save on the prompt.
+    reader->onGesture(tapAt(reader->previewClosePrompt()->yesRect().center()), nav);
+    CHECK(nav.pops == popsBefore + 1);
+    reader->onClose(nav);
+    CHECK(res.action == "save");
+    REQUIRE(res.annotations.size() == 1);
+    CHECK_FALSE(res.annotations[0].text.empty());
+
+    // Prompt mode: Back asks Save/Discard even with zero highlights; tapping Discard sends "discard".
+    ReaderScreen::PreviewCloseResult res2;
+    auto reader2 = makeSaveable(ReaderScreen::PreviewSaveMode::Prompt, &res2);
+    reader2->onGesture(tapAt({ReaderScreen::pageArea().w / 2, ReaderScreen::pageArea().h / 2}), nav);
+    REQUIRE(reader2->menus() != nullptr);
+    const int pops2 = nav.pops;
+    reader2->onGesture(tapAt(ReaderMenus::backRect().center()), nav);
+    CHECK(nav.pops == pops2);
+    REQUIRE(reader2->previewClosePrompt() != nullptr);
+    reader2->onGesture(tapAt(reader2->previewClosePrompt()->noRect().center()), nav);
+    CHECK(nav.pops == pops2 + 1);
+    reader2->onClose(nav);
+    CHECK(res2.action == "discard");
+    CHECK(res2.annotations.empty());
+}

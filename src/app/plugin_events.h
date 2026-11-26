@@ -71,9 +71,9 @@ public:
     static constexpr const char* kRefusedWhileSwitching = "Switching accounts";
     // Previews (zk.reader.open, ReaderOpen): main opens the reader (PreviewScreen::show) with these
     // answers: `answer` settles the plugin's promise ("" opened, else why not); `closed` tells the
-    // plugin's screen the reader closed (a {kind: "reader", closed: true} event). Unset: refused.
+    // plugin's screen the reader closed (a {kind: "reader", closed: true, ...} event). Unset: refused.
     using PreviewOpener = std::function<void(App&, const PluginHostEvent&, std::function<void(const std::string& error)> answer,
-                                             std::function<void()> closed)>;
+                                             std::function<void(nlohmann::json)> closed)>;
     void setPreviewOpener(PreviewOpener f) { previewOpener_ = std::move(f); }
     // Library items (zk.library.open, ItemOpen): main resolves the ref (itemToOpen) and opens it the
     // app's way (OpenFlow), at `annotation` if given. `answer` settles the plugin's promise ("" opened,

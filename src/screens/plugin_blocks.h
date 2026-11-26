@@ -24,6 +24,7 @@
 #include "core/geometry.h"
 #include "plugins/ui_tree.h"
 #include "store/library.h"
+#include "ui/math.h"
 #include "ui/text.h"
 
 namespace zk {
@@ -70,8 +71,12 @@ struct Laid {
     int pages = 1, page = 0;     // on the root: the screen's pages and the one laid out (clamped)
     Rect corner;                 // on the root: a filling deck's page indicator, in the card's corner (else empty)
     std::shared_ptr<const KeptText> text;               // a text block's lines, laid out once
+    std::shared_ptr<const KeptMathText> mathText;       // a math-enabled text block's lines, laid out once
+    std::shared_ptr<const KeptMathText> cardTitleMath;  // a math-enabled card's title
+    std::shared_ptr<const KeptMathText> cardBodyMath;   // a math-enabled card's body
     std::shared_ptr<const PluginImage> image;           // an image block's picture (none: it takes no room)
     std::vector<std::shared_ptr<const KeptText>> kept;  // on the root: every text block's, on any page
+    std::vector<std::shared_ptr<const KeptMathText>> keptMath;  // on the root: every math block's, on any page
 };
 
 // How many tiles a shelf (an items block in the "shelf" style) puts in a row `width` wide: tiles of

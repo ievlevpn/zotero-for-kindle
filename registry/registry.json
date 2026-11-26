@@ -17,6 +17,14 @@
       "description": "A Home for reading: the book and the paper you're in, side by side; a row of your pins; your inbox or a passage from your highlights; and Your desk, with everything as covers.",
       "repo": "ievlevpn/zk-reading-desk",
       "publicKey": "KbCPEGIsbdEeBl3ifInAp03rl8aIekqBiarksHbMNEY="
+    },
+    {
+      "id": "gazette",
+      "name": "Gazette",
+      "author": "Pavel Ievlev",
+      "description": "A personal daily e-ink newspaper from any Edition JSON URL or local drop: customizable widgets (weather, calendar, event watches, facts, notes, quotes), server-editable layouts, and preview-first reading with optional Save to Zotero.",
+      "repo": "ievlevpn/zk-gazette",
+      "publicKey": "UbpODj9Of8lRhXwhFDz3j33Wb4f9pv1ELdyDHwFr5bQ="
     }
   ],
   "revoked": []

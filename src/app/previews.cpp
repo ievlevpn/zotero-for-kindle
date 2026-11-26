@@ -48,10 +48,16 @@ std::unique_ptr<ReaderScreen> previewReader(const PreviewEntry& e, const EngineE
 PluginEvents::PreviewOpener previewOpener(std::function<PreviewCache*()> cache, std::function<PluginHost*()> host,
                                           std::function<std::unique_ptr<ReaderScreen>(const PreviewEntry&)> makeReader) {
     return [cache = std::move(cache), host = std::move(host), makeReader = std::move(makeReader)](
-               App& app, const PluginHostEvent& ev, std::function<void(const std::string&)> answer, std::function<void()> closed) {
+               App& app, const PluginHostEvent& ev, std::function<void(const std::string&)> answer,
+               std::function<void(nlohmann::json)> closed) {
         PreviewCache* c = cache();
         if (!c) return answer("The reader can't open this right now");  // no account open
-        PreviewDoc doc{ev.value.value("url", ""), ev.value.value("html", ""), ev.value.value("title", ""), ev.value.value("baseUrl", "")};
+        const std::string saveStr = ev.value.value("save", "");
+        const auto saveMode = saveStr == "prompt" ? ReaderScreen::PreviewSaveMode::Prompt
+                              : saveStr == "allow" ? ReaderScreen::PreviewSaveMode::Allow
+                                                   : ReaderScreen::PreviewSaveMode::None;
+        PreviewDoc doc{ev.value.value("url", ""), ev.value.value("html", ""), ev.value.value("title", ""),
+                       ev.value.value("baseUrl", ""), saveMode};
         PreviewScreen::Deps d;
         d.cache = c;
         PluginHost* h = host();
@@ -61,7 +67,26 @@ PluginEvents::PreviewOpener previewOpener(std::function<PreviewCache*()> cache, 
         };
         d.makeReader = makeReader;
         d.answer = std::move(answer);
-        d.closed = std::move(closed);
+        d.closedWithResult = [closed = std::move(closed)](ReaderScreen::PreviewCloseResult res) {
+            if (!closed) return;
+            if (res.action.empty()) {
+                closed(nullptr);
+                return;
+            }
+            nlohmann::json anns = nlohmann::json::array();
+            for (const auto& a : res.annotations) {
+                nlohmann::json item = {
+                    {"type", a.type.empty() ? "highlight" : a.type},
+                    {"text", a.text},
+                    {"color", a.color},
+                };
+                if (!a.comment.empty()) item["comment"] = a.comment;
+                if (!a.pageLabel.empty()) item["pageLabel"] = a.pageLabel;
+                if (!a.tags.empty()) item["tags"] = a.tags;
+                anns.push_back(std::move(item));
+            }
+            closed(nlohmann::json{{"action", res.action}, {"annotations", std::move(anns)}});
+        };
         PreviewScreen::show(std::move(doc), std::move(d), app);
     };
 }

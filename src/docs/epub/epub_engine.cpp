@@ -620,7 +620,19 @@ int EpubEngine::pageOfZoteroPosition(const std::string& v) {
 
 int EpubEngine::pageOfAnnotation(const AnnotationRecord& a) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
-    if (!view_ || !dom_) return -1;
+    if (!view_) return -1;
+    if (html_ && view_->getDocument()) {
+        const auto j = nlohmann::json::parse(a.position, nullptr, false);
+        if (j.is_object() && j.value("type", "") == "CrengineRange") {
+            const std::string s = j.value("start", "");
+            if (!s.empty()) {
+                ldomXPointer xp = view_->getDocument()->createXPointer(Utf8ToUnicode(s.c_str()));
+                if (!xp.isNull()) return spreadOf(view_->getBookmarkPage(xp));
+            }
+        }
+        return -1;
+    }
+    if (!dom_) return -1;
     auto r = dom_->resolve(cfiOf(a));
     if (!r) return -1;
     return spreadOf(view_->getBookmarkPage(r->start));
@@ -629,9 +641,24 @@ int EpubEngine::pageOfAnnotation(const AnnotationRecord& a) {
 std::vector<HighlightBox> EpubEngine::highlights(int page, const std::vector<AnnotationRecord>& anns) {
     std::lock_guard<std::recursive_mutex> lock(crengineMutex());
     std::vector<HighlightBox> out;
-    if (!view_ || !dom_) return out;
+    if (!view_ || (!dom_ && !html_)) return out;
     view_->goToPage(crPage(page));
     for (const auto& a : anns) {
+        if (html_) {
+            if (!view_->getDocument()) continue;
+            const auto j = nlohmann::json::parse(a.position, nullptr, false);
+            if (!j.is_object() || j.value("type", "") != "CrengineRange") continue;
+            const std::string s = j.value("start", ""), e = j.value("end", "");
+            if (s.empty() || e.empty()) continue;
+            ldomXPointer startXp = view_->getDocument()->createXPointer(Utf8ToUnicode(s.c_str()));
+            ldomXPointer endXp = view_->getDocument()->createXPointer(Utf8ToUnicode(e.c_str()));
+            if (startXp.isNull() || endXp.isNull()) continue;
+            for (const Rect& box : windowRects(startXp, endXp)) {
+                out.push_back({a.key, box, shadeOf(a.color), a.type == "underline"});
+                out.back().color = a.color;
+            }
+            continue;
+        }
         auto r = dom_->resolve(cfiOf(a));
         if (!r) continue;
         for (const Rect& box : windowRects(r->start, r->end)) {
@@ -816,9 +843,13 @@ std::optional<Selection> EpubEngine::select(int page, Point from, Point to) {
     if (!lastRange.isNull() && ldomXPointerEx(end).compare(ldomXPointerEx(lastRange->getEnd())) > 0) end = lastRange->getEnd();
     if (ldomXPointerEx(end).compare(ldomXPointerEx(start)) <= 0) return std::nullopt;
 
-    if (html_) {  // a web page: the words and their lines, nothing to place an annotation with
+    if (html_) {  // a web page: no Zotero CFI, but crengine XPointers place local preview highlights
         Selection sel;
         sel.text = utf8(ldomXRange(start, end).getRangeText(' '));
+        sel.position = nlohmann::json{{"type", "CrengineRange"},
+                                      {"start", utf8(start.toString())},
+                                      {"end", utf8(end.toString())}}
+                           .dump();
         sel.roundTrips = false;
         sel.rects = windowRects(start, end);
         if (sel.text.empty() || sel.rects.empty()) return std::nullopt;

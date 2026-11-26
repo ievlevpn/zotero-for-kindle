@@ -44,10 +44,10 @@ public:
     // A touch going down here drags at once (the app asks): the slider follows the finger.
     bool dragsFrom(Point at) const { return !picker_ && sliderHitRect().contains(at); }
     static constexpr int kDragFrameMs = 100;  // the slider redraws at most ~10 times a second
-    // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync, 5 Mark area, 6 Add note (PDF), of `count`.
+    // 0 Contents, 1 Notes, 2 Display, 3 Light, 4 Sync, 5 Mark area, 6 Add note (PDF), 7 Save (Preview), of `count`.
     static Rect buttonRect(int i, int count = 5);
-    int buttonCount() const;  // 7 on a PDF (Mark area, Add note), else 5; 3 in a preview
-    // The cells shown, in order, by the numbers above (a preview: Contents, Display, Light).
+    int buttonCount() const;  // 7 on a PDF (Mark area, Add note), else 5; 3 in a preview (4 with Save)
+    // The cells shown, in order, by the numbers above (a preview: Contents, Display, Light[, Save]).
     std::vector<int> buttonKinds() const;
     Rect cell(int kind) const;  // where that one is, empty if not shown
     // A cell's label: 6.5 pt, or down to 5.5 pt by halves until it fits `room` px.
