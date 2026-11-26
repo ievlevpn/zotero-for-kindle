@@ -290,9 +290,12 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes, bool colo
     cairo_restore(cr);
 }
 
-void strokePaths(cairo_t* cr, const std::vector<std::vector<Point>>& paths, int widthPx) {
+// Ink in its colour on a color screen (`colour`: 0xRRGGBB), else black.
+void strokePaths(cairo_t* cr, const std::vector<std::vector<Point>>& paths, int widthPx,
+                 std::optional<uint32_t> colour = std::nullopt) {
     if (paths.empty()) return;
-    gray(cr, kInk);
+    if (colour) rgb(cr, *colour);
+    else gray(cr, kInk);
     cairo_set_line_width(cr, widthPx);
     cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
     cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
@@ -372,6 +375,7 @@ Rect boundsOf(const std::vector<Rect>& rects) {
 constexpr const char* kColourKey = "annotationColour";
 constexpr const char* kPenModeKey = "penMode";  // "tap": the pen taps instead of writing
 constexpr const char* kPenButtonKey = "penButton";  // "highlight": the side button highlights
+constexpr const char* kInkColourKey = "inkColour";  // the pen's ink, a Zotero colour or "#000000"
 constexpr const char* kPenOnKindleKey = "penUsed";  // "1": a pen has been used on this Kindle
 constexpr int64_t kPalmTurnWaitMs = 300;  // a page-turn tap waits this long for the pen (a palm's)
 constexpr int64_t kAfterPenMs = 1500;     // no finger page turns this soon after the pen
@@ -425,6 +429,7 @@ void ReaderScreen::onShow(Nav& nav) {
     if (const std::string c = nav.device().get(kColourKey).value_or(""); !c.empty()) colour_ = c;
     penWrites_ = nav.device().get(kPenModeKey).value_or("") != "tap";
     penButtonHighlights_ = nav.device().get(kPenButtonKey).value_or("") == "highlight";
+    if (const std::string c = nav.device().get(kInkColourKey).value_or(""); !c.empty()) inkColour_ = c;
     penOnKindle_ = nav.device().get(kPenOnKindleKey).value_or("") == "1";
     if (const std::string w = nav.device().get(kPenWidthKey).value_or(""); w == "0" || w == "2") penWidth_ = w[0] - '0';
     nav.setSystemInkWidth(inkWidthPx());
@@ -465,6 +470,10 @@ void ReaderScreen::onTick(Nav& nav) {
         nav.wakeAt(palmTurn_->dueMs);
     }
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
+    if (const bool undo = penControls() && canUndoInk(); undo != undoShown_) {  // Undo comes or goes
+        undoShown_ = undo;
+        if (!menus_) nav.damage(footerArea(), Waveform::Ui);
+    }
     if (!inkPending_.empty() && !inkDown_ && nav.nowMs() - inkLastMs_ >= kInkCommitMs) commitInk();
     if (!inkPending_.empty() && !inkDown_) nav.wakeAt(inkLastMs_ + kInkCommitMs);  // handwriting saved after a pause
     pumpEvents(nav, true);
@@ -886,6 +895,16 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (notePopup_) return onNotePopup(g, nav);
+    if (paletteOpen_) {  // any gesture closes it; a tap on a colour chooses it
+        paletteOpen_ = false;
+        if (g.type == GestureType::Tap)
+            for (int row = 0; row < 2; ++row)
+                for (int i = 0; i < (row ? 9 : 8); ++i)
+                    if (paletteDot(row, i).contains(g.pos)) choosePaletteColour(row, i, nav);
+        nav.damage(paletteRect(), Waveform::Quality);
+        nav.damage(footerArea(), Waveform::Ui);
+        return;
+    }
     if (areaDrawing_ && !areaPen_) {  // a finger drawing an area
         switch (g.type) {
             case GestureType::DragStart:
@@ -999,6 +1018,14 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
+    if (penControls() && ready()) {
+        if (colourChipRect().contains(g.pos)) {
+            paletteOpen_ = true;
+            nav.damage(paletteRect(), Waveform::Ui);
+            return;
+        }
+        if (undoShown_ && undoRect().contains(g.pos)) return undoInk(nav);
+    }
     // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens the menus.
     if (ready() && editAt(g.pos, nav)) return;
     const int delta = g.pos.x > W() * 7 / 10 ? +1 : g.pos.x < W() * 3 / 10 ? -1 : 0;
@@ -1013,6 +1040,112 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     }
     if (delta != 0) turn(delta, nav);
     else if (ready()) openMenus(nav);  // not before the first page
+}
+
+// --- Pen controls: the colour chip, its palette, Undo -------------------------------------------
+
+bool ReaderScreen::penControls() const {
+    return type_ == DocType::Pdf && penOnKindle_ && !readOnly_ && !web_ && !preview_ && image_ && !error_;
+}
+Rect ReaderScreen::colourChipRect() { return {W() - kMargin - 260 - 100, H() - kFooterH, 90, kFooterH}; }
+Rect ReaderScreen::undoRect() { return {colourChipRect().x - 150, H() - kFooterH, 140, kFooterH}; }
+Rect ReaderScreen::paletteRect() {
+    const int w = std::min(W() - 2 * kMargin, 1090);
+    return {W() - kMargin - w, H() - kFooterH - 250, w, 240};
+}
+Rect ReaderScreen::paletteDot(int row, int i) {
+    const Rect p = paletteRect();
+    return {p.x + 210 + i * 96, p.y + 20 + row * 110, 96, 100};
+}
+
+std::optional<uint32_t> ReaderScreen::inkRgb(const std::string& colour) const {
+    if (!colorOn_ || colour == "#000000") return std::nullopt;
+    return zoteroRgb(colour);
+}
+
+void ReaderScreen::choosePaletteColour(int row, int i, Nav& nav) {
+    if (row == 0) {
+        colour_ = zoteroColours()[i].hex;
+        nav.device().set(kColourKey, colour_);
+        return;
+    }
+    const std::string hex = i == 0 ? "#000000" : zoteroColours()[i - 1].hex;
+    if (hex == inkColour_) return;
+    commitInk();  // the strokes so far keep their colour: one annotation, one colour
+    inkColour_ = hex;
+    nav.device().set(kInkColourKey, inkColour_);
+}
+
+bool ReaderScreen::canUndoInk() const {
+    if (inkPage_ == page_ && !inkPending_.empty()) return true;
+    for (const auto& [id, s] : inkSent_)
+        if (s.page == page_ && !s.paths.empty()) return true;
+    for (const auto& [key, page] : inkUndo_)
+        if (page == page_) return true;
+    return false;
+}
+
+// The last stroke written on this page goes: not saved yet, being placed, or from the ink
+// annotation it became (rewritten without it, deleted when it was the last, as the eraser does).
+void ReaderScreen::undoInk(Nav& nav) {
+    Rect gone;
+    int pad = inkWidthPx();
+    auto take = [&](std::vector<std::vector<Point>>& paths) {
+        for (const Point& q : paths.back()) gone = gone.united({q.x, q.y, 1, 1});
+        paths.pop_back();
+    };
+    if (inkPage_ == page_ && !inkPending_.empty()) {
+        take(inkPending_);
+    } else if (auto sent = std::find_if(inkSent_.rbegin(), inkSent_.rend(),
+                                        [&](const auto& e) { return e.second.page == page_ && !e.second.paths.empty(); });
+               sent != inkSent_.rend()) {
+        take(sent->second.paths);
+        sent->second.erased = true;  // placed again without it (or not saved at all, if none is left)
+    } else {
+        while (!inkUndo_.empty()) {
+            auto it = std::find_if(inkUndo_.rbegin(), inkUndo_.rend(), [&](const auto& e) { return e.second == page_; });
+            if (it == inkUndo_.rend()) break;
+            const std::string key = it->first;
+            inkUndo_.erase(std::next(it).base());
+            auto rec = nav.library().annotation(key);
+            if (!rec || rec->deletedHere || !nav.library().annotationEditable(*rec)) continue;  // gone meanwhile
+            nlohmann::json pos = nlohmann::json::parse(rec->position, nullptr, false);
+            if (pos.is_discarded() || !pos.contains("paths") || pos["paths"].empty()) continue;
+            const size_t strokes = pos["paths"].size();
+            if (strokes == 1 && (!rec->comment.empty() || !rec->tags.empty())) {
+                inkUndo_.emplace_back(key, page_);  // stays undoable once they're gone
+                nav.toast("This handwriting has a comment or tags: delete it in Notes.");
+                return;
+            }
+            if (strokes > 1) {
+                pos["paths"].erase(strokes - 1);
+                rec->position = pos.dump();
+                if (!nav.library().editAnnotation(*rec)) return;
+                inkUndo_.emplace_back(key, page_);  // its earlier strokes can go next
+                plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", key);
+            } else {
+                const bool told = nav.plugins().listening();
+                const plugins::AnnotationRef ref = told ? plugins::annotationRef(nav.library(), *rec) : plugins::AnnotationRef{};
+                if (!nav.library().deleteAnnotation(key)) return;
+                if (told) plugins::annotationDeleted(nav.plugins(), ref);
+            }
+            // Shown at once: the stroke off the page's drawing and off the strokes kept since saving.
+            for (auto& b : highlights_)
+                if (b.annotationKey == key && b.paths.size() == strokes) {
+                    pad = std::max(pad, b.strokePx);
+                    take(b.paths);
+                }
+            for (auto& s : inkSaved_)
+                if (s.key == key && s.paths.size() == strokes) take(s.paths);
+            highlights_.erase(std::remove_if(highlights_.begin(), highlights_.end(),
+                                             [](const HighlightBox& b) { return b.kind == HighlightBox::Kind::Ink && b.paths.empty(); }),
+                              highlights_.end());
+            nav.sync().pushSoon();
+            refreshHighlights(nav);
+            break;
+        }
+    }
+    if (!gone.empty()) nav.damage(Rect{gone.x - pad - 4, gone.y - pad - 4, gone.w + 2 * pad + 8, gone.h + 2 * pad + 8}.intersected(pageArea()), Waveform::Quality);
 }
 
 // A finger's touch on a PDF page taking handwriting, on a Kindle with a pen: maybe the palm.
@@ -1369,11 +1502,11 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_rectangle(cr, pa.x, pa.y, pa.w, pa.h);
         cairo_clip(cr);
         for (const auto& s : inkSaved_)
-            if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
+            if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx(), inkRgb(s.colour));
         for (const auto& [id, s] : inkSent_)
-            if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx());
-        if (inkPage_ == page_) strokePaths(cr, inkPending_, inkWidthPx());
-        if (inkDown_) strokePaths(cr, {inkStroke_}, inkWidthPx());
+            if (s.page == page_) strokePaths(cr, s.paths, inkWidthPx(), inkRgb(s.colour));
+        if (inkPage_ == page_) strokePaths(cr, inkPending_, inkWidthPx(), inkRgb(inkColour_));
+        if (inkDown_) strokePaths(cr, {inkStroke_}, inkWidthPx(), inkRgb(inkColour_));
         cairo_restore(cr);
     }
     if (selection_) drawSelection(canvas, selection_->rects);
@@ -1396,10 +1529,27 @@ void ReaderScreen::draw(Canvas& canvas) {
         cairo_restore(cr);
     }
     const Rect f = footerArea();
+    const int leftW = W() - 2 * kMargin - 260 - (penControls() ? W() - kMargin - 260 - undoRect().x : 0);
     if (auto b = backLabel())  // after a jump: the way back, where the chapter line was
-        drawText(cr, *b, {kSans, 7, 700}, {kMargin, f.y + 10, W() - 2 * kMargin - 260, 44}, 1);
+        drawText(cr, *b, {kSans, 7, 700}, {kMargin, f.y + 10, leftW, 44}, 1);
     else
-        drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, W() - 2 * kMargin - 260, 40}, 1);
+        drawText(cr, footerLeft(), {kSans, 6.5, 400, false, kTertiary}, {kMargin, f.y + 12, leftW, 40}, 1);
+    if (penControls()) {
+        auto dot = [&](double cx, double cy, double r, const std::string& colour) {
+            const uint32_t v = zoteroRgb(colour);
+            if (colorOn_) rgb(cr, v);
+            else gray(cr, colour == "#000000" ? kInk : shadeOf(colour));
+            cairo_arc(cr, cx, cy, r, 0, 2 * 3.14159265);
+            cairo_fill_preserve(cr);
+            gray(cr, 120);
+            cairo_set_line_width(cr, 2);
+            cairo_stroke(cr);
+        };
+        const Rect c = colourChipRect();  // the highlight colour, then the ink's
+        dot(c.x + 24, c.y + c.h / 2.0, 17, colour_);
+        dot(c.x + 64, c.y + c.h / 2.0, 17, inkColour_);
+        if (undoShown_) centredText(cr, "Undo", {kSans, 7, 700}, undoRect());
+    }
     if (bookmarked()) {  // a ribbon hanging from the top-right corner
         const double x = W() - 110, w = 54, h = 110;
         cairo_move_to(cr, x, 0);
@@ -1416,6 +1566,37 @@ void ReaderScreen::draw(Canvas& canvas) {
     }
     drawText(cr, footerRight(), {kSans, 6.5, 400, false, kTertiary}, {W() - kMargin - 260, f.y + 12, 260, 40}, 1, Align::Right);
     if (bar_) bar_->draw(cr, colorOn_);
+    if (paletteOpen_ && !menus_) {
+        const Rect p = paletteRect();
+        roundedRect(cr, p.x + 1.5, p.y + 1.5, p.w - 3, p.h - 3, 18);
+        gray(cr, 255);
+        cairo_fill_preserve(cr);
+        gray(cr, kInk);
+        cairo_set_line_width(cr, 3);
+        cairo_stroke(cr);
+        for (int row = 0; row < 2; ++row) {
+            const Rect first = paletteDot(row, 0);
+            centredText(cr, row ? "Ink" : "Highlight", {kSans, 7.5, 500}, {p.x + 30, first.y, 180, first.h}, Align::Left);
+            for (int i = 0; i < (row ? 9 : 8); ++i) {
+                const std::string hex = row && i == 0 ? "#000000" : zoteroColours()[row ? i - 1 : i].hex;
+                const Rect d = paletteDot(row, i);
+                const double cx = d.x + d.w / 2.0, cy = d.y + d.h / 2.0;
+                if (colorOn_) rgb(cr, zoteroRgb(hex));
+                else gray(cr, hex == "#000000" ? kInk : shadeOf(hex));
+                cairo_arc(cr, cx, cy, 30, 0, 2 * 3.14159265);
+                cairo_fill_preserve(cr);
+                gray(cr, 120);
+                cairo_set_line_width(cr, 2);
+                cairo_stroke(cr);
+                if ((row ? inkColour_ : colour_) == hex) {  // the chosen one: a ring
+                    gray(cr, kInk);
+                    cairo_set_line_width(cr, 5);
+                    cairo_arc(cr, cx, cy, 40, 0, 2 * 3.14159265);
+                    cairo_stroke(cr);
+                }
+            }
+        }
+    }
     if (notePopup_) notePopup_->draw(cr);
     if (editor_) editor_->draw(cr, colorOn_);
     if (note_) {
@@ -2126,7 +2307,7 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         const Rect r{p.pos.x - inkWidthPx(), p.pos.y - inkWidthPx(), 2 * inkWidthPx() + 1, 2 * inkWidthPx() + 1};
         if (!nav.systemInk())  // the system's wet ink already shows the line
             nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
-                     [&](cairo_t* cr) { strokePaths(cr, {{p.pos}}, inkWidthPx()); });
+                     [&](cairo_t* cr) { strokePaths(cr, {{p.pos}}, inkWidthPx(), inkRgb(inkColour_)); });
         return true;
     }
     // Move.
@@ -2144,14 +2325,14 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     const Rect r{std::min(a.x, b.x) - pad, std::min(a.y, b.y) - pad, std::abs(a.x - b.x) + 2 * pad + 1,
                  std::abs(a.y - b.y) + 2 * pad + 1};
     nav.paintNow(r.intersected(pageArea()), Waveform::Ink,
-                 [&](cairo_t* cr) { strokePaths(cr, {{a, b}}, inkWidthPx()); });
+                 [&](cairo_t* cr) { strokePaths(cr, {{a, b}}, inkWidthPx(), inkRgb(inkColour_)); });
     return true;
 }
 
 void ReaderScreen::commitInk() {
     if (inkPending_.empty() || !worker_ || inkPage_ < 0) return;
     const uint64_t id = worker_->ink(inkPage_, inkPending_, inkWidthPx());
-    inkSent_[id] = SentInk{inkPage_, std::move(inkPending_), false};
+    inkSent_[id] = SentInk{inkPage_, std::move(inkPending_), false, inkColour_};
     inkPending_.clear();
 }
 
@@ -2191,7 +2372,7 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     if (sent.paths.empty()) return;  // all of it erased while it was being placed
     if (sent.erased) {               // placed with strokes since erased: place what is left
         const uint64_t id = worker_->ink(sent.page, sent.paths, inkWidthPx());
-        inkSent_[id] = SentInk{sent.page, std::move(sent.paths), false};
+        inkSent_[id] = SentInk{sent.page, std::move(sent.paths), false, sent.colour};
         return;
     }
     if (!e.ink) {
@@ -2202,14 +2383,15 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     AnnotationRecord a;
     a.parentKey = row_.attachmentKey;
     a.type = "ink";
-    a.color = "#000000";
+    a.color = sent.colour;
     a.position = e.ink->position;
     a.sortIndex = e.ink->sortIndex;
     a.pageLabel = e.ink->pageLabel;
     const std::string key = nav.library().createAnnotation(a);
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
     nav.sync().pushSoon();
-    inkSaved_.push_back(SavedInk{key, sent.page, std::move(sent.paths)});
+    inkUndo_.emplace_back(key, sent.page);
+    inkSaved_.push_back(SavedInk{key, sent.page, std::move(sent.paths), sent.colour});
     refreshHighlights(nav);
 }
 

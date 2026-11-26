@@ -7,8 +7,8 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
 - Strokes made within 1.5 s of each other are one annotation, up to 24 strokes, 2000 points or 10 s
   (`kMaxInk*`); a page turn, a jump, the menus, another screen or the background save at once, and
   closing the book waits (at most 3 s) until every stroke is an annotation (`flushInk`, `onClose`).
-  Strokes are simplified (Douglas-Peucker, 1 px). Ink is black, 7 px wide on the screen
-  (`ReaderScreen::kInkWidthPx`), stored in PDF points.
+  Strokes are simplified (Douglas-Peucker, 1 px). Ink is 4, 7 or 11 px wide on the screen (Display →
+  Thickness, `ReaderScreen::kInkWidthsPx`), stored in PDF points.
 - A quick pen touch that hardly moves, with nothing written before it, is a tap (menus, page turns);
   a dot right after writing stays ink (`kTapSlopPx`, `kTapMs`).
 - The pen writes in the white bands beside a letterboxed page too (room for notes in the margin).
@@ -21,6 +21,14 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
   the same for one stroke: a long press and drag selects text, or on blank space draws an area (a
   Zotero `image` annotation), as with a finger. While the menus' "Mark an area" waits, the pen
   draws the area without the button.
+- Footer, PDF, on a Kindle where a pen was used: a chip with two dots, the highlight colour and
+  the ink colour. Tapped: a palette, Highlight (Zotero's 8 colours) and Ink (black, then the 8).
+  Ink is saved in its colour (`inkColour`, kept on the Kindle) and drawn in it on a color screen,
+  black on a gray one (as wet ink draws). Changing it mid-writing sends the strokes so far first:
+  one annotation, one colour. Beside it, while something written on this page can be taken back,
+  "Undo": the last stroke goes, not saved yet, being placed, or from its ink annotation (rewritten
+  without it, deleted when it was the last; with a comment or tags a toast points to Notes).
+  Repeated, the strokes before it go too, back to the strokes written in this reading.
 - Display panel, PDF, once the pen was used: "Button: Select | Highlight" (kept on the Kindle,
   `penButton`). Highlight: a stroke with the side button held selects from where it starts (no long
   press) and is saved as a highlight in the current colour when the pen lifts, without the bar (in

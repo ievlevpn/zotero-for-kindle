@@ -195,6 +195,19 @@ public:
     // follows) or Highlight (a stroke over text highlights it in the current colour on lift).
     bool penButtonHighlights() const { return penButtonHighlights_; }
     void setPenButtonHighlights(bool on, Nav&);
+    // Pen controls in the footer (PDF, on a Kindle where a pen was used): a colour chip (the
+    // highlight colour and the ink colour; tapped, a palette of both) and Undo (the last stroke
+    // on this page, while there is one written here).
+    bool penControls() const;
+    static Rect colourChipRect();
+    static Rect undoRect();
+    static Rect paletteRect();
+    static Rect paletteDot(int row, int i);  // row 0: highlight, 8 colours; row 1: ink, black then the 8
+    bool paletteOpen() const { return paletteOpen_; }
+    const std::string& inkColour() const { return inkColour_; }
+    const std::string& highlightColour() const { return colour_; }
+    bool canUndoInk() const;
+    void undoInk(Nav&);
     bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
     // commitInk, then waits (at most `timeoutMs`) until every stroke, area and note is an annotation: before
@@ -391,6 +404,11 @@ private:
     bool buttonHeld_ = false;  // the side button: the pen taps, no ink
     bool penWrites_ = true, penSeen_ = false;
     bool penButtonHighlights_ = false;
+    std::string inkColour_ = "#000000";
+    bool paletteOpen_ = false;
+    bool undoShown_ = false;  // the footer shows Undo (repainted when that changes)
+    std::vector<std::pair<std::string, int>> inkUndo_;  // ink annotations saved here, oldest first: key, page
+    void choosePaletteColour(int row, int i, Nav&);
     bool penSelecting_ = false;      // a side-button stroke selecting (Highlight)
     bool selAutoHighlight_ = false;  // the selection is saved as a highlight when it's done
     void selectionDone(Nav&);        // the bar, or that highlight
@@ -405,6 +423,7 @@ private:
     };
     std::optional<PalmTurn> palmTurn_;
     bool palmGuarded(const Gesture&) const;
+    std::optional<uint32_t> inkRgb(const std::string& colour) const;  // nullopt: black
     int penWidth_ = 1;
     bool wantsSystemInk() const override;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given
@@ -417,12 +436,14 @@ private:
         int page = -1;
         std::vector<std::vector<Point>> paths;
         bool erased = false;  // a path was erased while it was being placed: place the rest again
+        std::string colour = "#000000";
     };
     std::map<uint64_t, SentInk> inkSent_;  // sent to the worker, being placed
     struct SavedInk {
         std::string key;  // the annotation it became
         int page = -1;
         std::vector<std::vector<Point>> paths;
+        std::string colour = "#000000";
     };
     std::vector<SavedInk> inkSaved_;  // saved; drawn (and erasable) until the page comes back with it
     int64_t inkFirstMs_ = 0;          // the first pending stroke's start

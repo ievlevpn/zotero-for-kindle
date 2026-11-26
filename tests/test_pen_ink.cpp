@@ -19,6 +19,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <set>
 #include <thread>
 
 using namespace zk;
@@ -877,4 +878,87 @@ TEST_CASE("pen button set to Select (the default): the button makes the pen a fi
     PenEvent down = pen(PenEvent::Type::Down, {130, 210});
     down.button = true;
     CHECK_FALSE(rig.reader->onPen(down, rig.nav));  // App feeds it to the gestures as a finger
+}
+
+// ---- Pen controls in the footer: colours and Undo ----
+
+TEST_CASE("pen controls: the colour chip opens a palette; its ink row colours the next ink, its other row the highlights") {
+    InkRig rig;
+    CHECK_FALSE(rig.reader->penControls());  // no pen yet on this Kindle
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 600}), rig.nav);
+    REQUIRE(rig.reader->penControls());
+    rig.reader->onGesture(tapAt(ReaderScreen::colourChipRect().center()), rig.nav);
+    REQUIRE(rig.reader->paletteOpen());
+    CHECK(rig.reader->page() == 0);  // the chip, not a page turn
+    rig.reader->onGesture(tapAt(ReaderScreen::paletteDot(1, 4).center()), rig.nav);  // ink: blue (black, yellow, red, green, blue)
+    CHECK_FALSE(rig.reader->paletteOpen());
+    CHECK(rig.reader->inkColour() == "#2ea8e5");
+    CHECK(rig.nav.device().get("inkColour").value_or("") == "#2ea8e5");
+    rig.reader->onGesture(tapAt(ReaderScreen::colourChipRect().center()), rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::paletteDot(0, 1).center()), rig.nav);  // highlight: red
+    CHECK(rig.reader->highlightColour() == "#ff6666");
+    CHECK(rig.nav.device().get("annotationColour").value_or("") == "#ff6666");
+
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    CHECK(rig.inks()[0].color == "#2ea8e5");
+
+    // A tap outside the palette closes it without choosing.
+    rig.reader->onGesture(tapAt(ReaderScreen::colourChipRect().center()), rig.nav);
+    rig.reader->onGesture(tapAt({600, 300}), rig.nav);
+    CHECK_FALSE(rig.reader->paletteOpen());
+    CHECK(rig.reader->inkColour() == "#2ea8e5");
+}
+
+TEST_CASE("pen controls: changing the ink colour mid-writing keeps the strokes so far in theirs") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 430}});  // black, not saved yet
+    rig.reader->onGesture(tapAt(ReaderScreen::colourChipRect().center()), rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::paletteDot(1, 2).center()), rig.nav);  // red
+    rig.stroke({{300, 600}, {380, 630}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 2; }));
+    std::set<std::string> colours;
+    for (const auto& a : rig.inks()) colours.insert(a.color);
+    CHECK(colours == std::set<std::string>{"#000000", "#ff6666"});
+}
+
+TEST_CASE("pen controls: Undo takes the last stroke back, written, being saved or saved") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.stroke({{300, 500}, {380, 530}});
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->canUndoInk());
+    // Not saved yet: the strokes go one by one.
+    rig.reader->onGesture(tapAt(ReaderScreen::undoRect().center()), rig.nav);
+    CHECK(rig.reader->pendingInkStrokes() == 1);
+    CHECK(rig.reader->page() == 0);
+    // Saved: the annotation loses its last stroke, then goes.
+    rig.stroke({{300, 600}, {380, 630}});
+    rig.nav.now += ReaderScreen::kInkCommitMs;
+    REQUIRE(rig.settle([&] { return rig.inks().size() == 1; }));
+    REQUIRE(nlohmann::json::parse(rig.inks()[0].position)["paths"].size() == 2);
+    rig.reader->onTick(rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::undoRect().center()), rig.nav);
+    REQUIRE(rig.inks().size() == 1);
+    const auto pos = nlohmann::json::parse(rig.inks()[0].position);
+    REQUIRE(pos["paths"].size() == 1);
+    CHECK(pos["paths"][0][1].get<double>() < 450);  // the first stroke (y 400..430) stays
+    rig.reader->onGesture(tapAt(ReaderScreen::undoRect().center()), rig.nav);
+    CHECK(rig.inks().empty());
+    rig.reader->onTick(rig.nav);
+    CHECK_FALSE(rig.reader->canUndoInk());
+}
+
+TEST_CASE("pen controls: Undo belongs to the page it was written on, and a tap on it isn't a turn") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.reader->onGesture(tapAt({1150, 700}), rig.nav);  // turn: the stroke is sent
+    REQUIRE(rig.settle([&] { return rig.reader->page() == 1 && !rig.inks().empty(); }));
+    CHECK_FALSE(rig.reader->canUndoInk());
+    rig.reader->onGesture(tapAt({100, 700}), rig.nav);  // back
+    REQUIRE(rig.settle([&] { return rig.reader->page() == 0; }));
+    CHECK(rig.reader->canUndoInk());
 }
