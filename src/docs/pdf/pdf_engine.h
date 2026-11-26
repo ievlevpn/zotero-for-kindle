@@ -118,6 +118,17 @@ private:
     std::map<int, std::array<float, 4>> textBoxes_;  // per document
     std::map<int, int64_t> pageWords_;  // per PDF page
     Slices slices_;
+    // The text of the PDF page being selected on, kept between select() calls: a drag asks again
+    // at every step, and extracting a dense page's text takes far longer than the selection.
+    struct SelectPage {
+        int pdfPage = -1;
+        void* text = nullptr;  // fz_stext_page* (an unnamed struct in MuPDF: no forward declaration)
+        std::array<float, 6> userToPage{1, 0, 0, 1, 0, 0};  // fz_matrix a..f
+        std::array<float, 4> media{0, 0, 0, 0};             // fz_rect x0, y0, x1, y1
+        std::string label;
+    } selectPage_;
+    bool loadSelectPage(int pdfPage);  // false: the page can't be read
+    void dropSelectPage();
 };
 
 }  // namespace zk

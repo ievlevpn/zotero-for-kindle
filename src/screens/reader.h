@@ -292,6 +292,8 @@ private:
     bool selecting_ = false, selDragging_ = false, selReleased_ = false;  // the bar waits for the finger to lift
     Point selAnchor_;
     uint64_t selPending_ = 0;
+    uint64_t selShown_ = 0;  // the newest select answer drawn
+    Rect selTouched_;        // every line the selection has covered (repainted when it closes)
     std::optional<Selection> selection_;
     std::unique_ptr<AnnotationBar> bar_;
     std::vector<std::string> selTags_;  // the tags marked on a new selection's bar (kept for its Note)

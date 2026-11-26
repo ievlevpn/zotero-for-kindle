@@ -35,10 +35,12 @@ bool PdfEngine::openForText(const std::string& path, UserError* err) {
 }
 
 void PdfEngine::trimCaches() {
+    dropSelectPage();
     if (ctx_) fz_empty_store(ctx_);
 }
 
 PdfEngine::~PdfEngine() {
+    dropSelectPage();
     if (doc_) fz_drop_document(ctx_, doc_);
     if (ctx_) fz_drop_context(ctx_);
 }
@@ -898,36 +900,59 @@ double round2(double v) { return std::round(v * 100) / 100; }
 
 }  // namespace
 
-std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
-    double scale, dx, dy;
-    if (!doc_ || !fit(page, scale, dx, dy)) return std::nullopt;
-    fz_point a{static_cast<float>((from.x - dx) / scale), static_cast<float>((from.y - dy) / scale)};
-    fz_point b{static_cast<float>((to.x - dx) / scale), static_cast<float>((to.y - dy) / scale)};
+void PdfEngine::dropSelectPage() {
+    if (selectPage_.text) fz_drop_stext_page(ctx_, static_cast<fz_stext_page*>(selectPage_.text));
+    selectPage_ = SelectPage{};
+}
 
+bool PdfEngine::loadSelectPage(int pdfPage) {
+    if (selectPage_.pdfPage == pdfPage && selectPage_.text) return true;
+    dropSelectPage();
     fz_page* p = nullptr;
     fz_stext_page* st = nullptr;
     fz_var(p);
     fz_var(st);
+    SelectPage s;
     fz_matrix userToPage = fz_identity;
     fz_rect media = fz_empty_rect;
     char label[64] = "";
     bool ok = true;
-    const int pdfPage = src(page);
     fz_try(ctx_) {
         p = fz_load_page(ctx_, doc_, pdfPage);
         if (pdf_page* pp = pdf_page_from_fz_page(ctx_, p)) pdf_page_transform(ctx_, pp, &media, &userToPage);
         st = fz_new_stext_page_from_page(ctx_, p, nullptr);
         fz_page_label(ctx_, p, label, sizeof label);
     }
+    fz_always(ctx_) { fz_drop_page(ctx_, p); }
     fz_catch(ctx_) { ok = false; }
-    auto cleanup = [&] {
-        fz_drop_stext_page(ctx_, st);
-        fz_drop_page(ctx_, p);
-    };
     if (!ok) {
-        cleanup();
-        return std::nullopt;
+        fz_drop_stext_page(ctx_, st);
+        return false;
     }
+    s.pdfPage = pdfPage;
+    s.text = st;
+    s.userToPage = {userToPage.a, userToPage.b, userToPage.c, userToPage.d, userToPage.e, userToPage.f};
+    s.media = {media.x0, media.y0, media.x1, media.y1};
+    s.label = label;
+    selectPage_ = std::move(s);
+    return true;
+}
+
+std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
+    double scale, dx, dy;
+    if (!doc_ || !fit(page, scale, dx, dy)) return std::nullopt;
+    fz_point a{static_cast<float>((from.x - dx) / scale), static_cast<float>((from.y - dy) / scale)};
+    fz_point b{static_cast<float>((to.x - dx) / scale), static_cast<float>((to.y - dy) / scale)};
+
+    const int pdfPage = src(page);
+    if (!loadSelectPage(pdfPage)) return std::nullopt;
+    fz_stext_page* st = static_cast<fz_stext_page*>(selectPage_.text);  // kept: the next drag step asks again
+    const auto& m = selectPage_.userToPage;
+    const fz_matrix userToPage{m[0], m[1], m[2], m[3], m[4], m[5]};
+    const fz_rect media{selectPage_.media[0], selectPage_.media[1], selectPage_.media[2], selectPage_.media[3]};
+    const std::string label = selectPage_.label;
+    bool ok = true;
+    auto cleanup = [] {};
 
     int chars = 0;
     bool onText = false;
@@ -992,7 +1017,7 @@ std::optional<Selection> PdfEngine::select(int page, Point from, Point to) {
     std::snprintf(sort, sizeof sort, "%05d|%06d|%05d", pdfPage, startIndex,
                   static_cast<int>(std::max(0.0, std::floor(firstTop))));
     sel.sortIndex = sort;
-    sel.pageLabel = label[0] ? label : std::to_string(pdfPage + 1);
+    sel.pageLabel = !label.empty() ? label : std::to_string(pdfPage + 1);
     // Drawn exactly as the saved highlight will be.
     AnnotationRecord probe;
     probe.position = sel.position;

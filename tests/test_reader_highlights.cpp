@@ -101,18 +101,32 @@ TEST_CASE("reader highlights: a Zotero highlight shades the page under its text;
     (void)sawUnderline;
 }
 
-TEST_CASE("reader highlights: new annotations from Sync repaint the page") {
+TEST_CASE("reader highlights: an annotation changed by Sync repaints where it is drawn, not the whole page") {
     Rig rig;
     REQUIRE(rig.settle([&] { return rig.reader->ready(); }));
     rig.reader->jumpToAnnotation(rig.anns[0]);
     REQUIRE(rig.settle([&] { return !rig.reader->highlights().empty(); }));
-    rig.nav.damages.clear();
+    Rect box;
+    for (const auto& b : rig.reader->highlights())
+        if (b.annotationKey == "PPANN100") box = box.united(b.rect);
+    REQUIRE_FALSE(box.empty());
     SyncEvent e;
     e.kind = SyncEvent::Kind::AnnotationsReady;
     e.attachmentKey = "EP000003";
+    rig.nav.damages.clear();
+    rig.reader->onSyncEvent(e, rig.nav);  // nothing changed: nothing repainted
+    rig.settle([] { return false; });
+    CHECK(rig.nav.damages.empty());
+    AnnotationRecord recoloured = rig.anns[0];
+    recoloured.color = "#ff6666";
+    rig.lib.upsertAnnotation(recoloured);
     rig.reader->onSyncEvent(e, rig.nav);
     REQUIRE(rig.settle([&] { return !rig.nav.damages.empty(); }));
-    CHECK(rig.nav.damages[0].rect == ReaderScreen::pageArea());
+    const Rect reach{box.x - 6, box.y - 6, box.w + 12, box.h + 12};  // the box and its antialiasing margin
+    for (const auto& d : rig.nav.damages) CHECK(d.rect.intersected(reach) == d.rect);
+    Rect all;
+    for (const auto& d : rig.nav.damages) all = all.united(d.rect);
+    CHECK(all.intersected(box) == box);  // the box is repainted
 }
 
 TEST_CASE("reader highlights match the reviewed golden") {

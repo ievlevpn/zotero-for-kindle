@@ -28,6 +28,7 @@ public:
     bool throwOnRender = false;
     bool throwOnSelect = false;
     bool selectRoundTrips = true;
+    int selectDelayMs = 0;  // a slow selection (a dense PDF page)
     int placeDelayMs = 0;  // areaPosition, notePosition: a slow placing (the book closing meanwhile)
     Rect box;  // pageBox(): where the page is drawn (empty: all of it)
     std::atomic<int64_t> wordPagesCounted{0};  // pages whose words were counted
@@ -221,6 +222,7 @@ public:
 
     std::optional<Selection> select(int page, Point from, Point to) override {
         if (throwOnSelect) throw std::runtime_error("select");
+        if (selectDelayMs) std::this_thread::sleep_for(std::chrono::milliseconds(selectDelayMs));
         auto word = [](Point p) -> int {
             const int col = (p.x - 100) / 100, line = (p.y - 200) / 60;
             if (p.x < 100 || p.y < 200 || col > 9 || line > 7 || (p.y - 200) % 60 >= 50) return -1;

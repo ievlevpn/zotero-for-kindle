@@ -14,6 +14,7 @@
 #include "ui/text.h"
 
 #include <chrono>
+#include <set>
 #include <thread>
 
 using namespace zk;
@@ -120,8 +121,14 @@ TEST_CASE("annotation bar: Highlight saves a yellow highlight with the selection
     CHECK_FALSE(anns[0].localOnly);
     CHECK(rig.reader->annotationBar() == nullptr);
     CHECK_FALSE(rig.reader->selection());
-    CHECK(rig.damaged(ReaderScreen::pageArea(), Waveform::Quality));
-    // The new highlight is drawn on the page.
+    // Drawn at once where the selection was; the selection's lines and the bar are repainted,
+    // not the whole page (and not twice when the page comes back with it).
+    int drawn = 0;
+    for (const auto& h : rig.reader->highlights()) drawn += h.annotationKey == anns[0].key;
+    CHECK(drawn == static_cast<int>(sel.rects.size()));
+    for (const Rect& r : sel.rects) CHECK(rig.damaged(r, Waveform::Quality));
+    rig.waitFor([] { return false; });  // the page comes back with the highlight
+    for (const auto& d : rig.nav.damages) CHECK(d.rect != ReaderScreen::pageArea());
     REQUIRE(rig.waitFor([&] {
         for (const auto& h : rig.reader->highlights())
             if (h.annotationKey == anns[0].key) return true;
@@ -192,12 +199,17 @@ TEST_CASE("annotation bar: a tap outside a typed note saves its highlight; an em
 TEST_CASE("annotation bar: a tap outside cancels without saving") {
     Rig rig;
     rig.select({130, 210});
+    const Selection sel = *rig.reader->selection();
+    const Rect bar = rig.reader->annotationBar()->rect();
     rig.nav.damages.clear();
     rig.tap({600, 1300});
     CHECK(rig.annotations().empty());
     CHECK(rig.reader->annotationBar() == nullptr);
     CHECK_FALSE(rig.reader->selection());
-    CHECK(rig.damaged(ReaderScreen::pageArea(), Waveform::Quality));
+    // The selection's lines and the bar go, without the whole page.
+    for (const Rect& r : sel.rects) CHECK(rig.damaged(r, Waveform::Quality));
+    CHECK(rig.damaged(bar, Waveform::Quality));
+    for (const auto& d : rig.nav.damages) CHECK(d.rect != ReaderScreen::pageArea());
     // And the reader is back to normal: a tap on the right turns the page.
     rig.tap({1100, 700});
     REQUIRE(rig.waitFor([&] { return rig.reader->page() == 1; }));
@@ -330,4 +342,47 @@ TEST_CASE("reader: a redraw of part of the screen leaves it as a whole redraw wo
         for (int x = 0; x < 1236; ++x)
             differing += reinterpret_cast<const uint32_t*>(a + y * stride)[x] != reinterpret_cast<const uint32_t*>(b + y * stride)[x];
     CHECK(differing == 0);
+}
+
+TEST_CASE("selection: while the finger keeps moving, each answer is drawn; the bar waits for the last") {
+    // Every answer is overtaken by the next drag step before it arrives: drawing only the answer to
+    // the latest request froze the selection until the finger stopped.
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    fillFixtureLibrary(lib, 10);
+    ReaderScreen reader(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) {
+            auto e = std::make_unique<FakeEngine>();
+            e->selectDelayMs = 40;
+            return std::unique_ptr<DocumentEngine>(std::move(e));
+        });
+    }, 6);
+    nav.visible = &reader;
+    reader.onShow(nav);
+    auto pump = [&](int ms) {
+        for (int i = 0; i < ms / 5; ++i) {
+            reader.onTick(nav);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
+    for (int i = 0; i < 400 && !reader.ready(); ++i) pump(5);
+    REQUIRE(reader.ready());
+    const Point at{130, 210};
+    reader.onGesture(Gesture{GestureType::LongPress, at, at}, nav);
+    pump(100);
+    REQUIRE(reader.selection());
+    reader.onGesture(Gesture{GestureType::DragStart, {140, 215}, at}, nav);
+    std::set<size_t> sizes;  // how many words the drawn selection had, step by step
+    for (int step = 1; step <= 7; ++step) {  // a move every 15 ms, an answer every 40 ms
+        reader.onGesture(Gesture{GestureType::DragMove, {130 + 100 * step, 210 + 60 * (step / 2)}, at}, nav);
+        pump(15);
+        if (reader.selection()) sizes.insert(reader.selection()->text.size());
+        CHECK(reader.annotationBar() == nullptr);
+    }
+    CHECK(sizes.size() >= 3);  // it grew while the finger moved
+    reader.onGesture(Gesture{GestureType::DragEnd, {830, 390}, at}, nav);
+    for (int i = 0; i < 100 && !reader.annotationBar(); ++i) pump(5);
+    REQUIRE(reader.annotationBar());
+    CHECK(reader.selection()->text.find("w37") != std::string::npos);  // the last answer: up to (830, 390)
 }

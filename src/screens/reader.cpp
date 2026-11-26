@@ -115,6 +115,33 @@ std::vector<Rect> frameEdges(Rect r, int w) {
             {r.x + r.w - p, r.y - p, 2 * p, r.h + 2 * p}};
 }
 
+// Where a highlight box draws (a text box's words and a note's icon may reach past its rect), with
+// a little room for antialiasing.
+Rect drawnRect(const HighlightBox& b) {
+    Rect r = b.rect;
+    if (b.kind == HighlightBox::Kind::Text) r = {r.x, r.y, std::max(r.w, 40), std::max(r.h, b.fontPx + 8)};
+    if (b.kind == HighlightBox::Kind::Note) r = r.united(noteIcon(b.rect));
+    return {r.x - 6, r.y - 6, r.w + 12, r.h + 12};
+}
+
+bool sameBox(const HighlightBox& a, const HighlightBox& b) {
+    return a.annotationKey == b.annotationKey && a.rect == b.rect && a.shade == b.shade && a.underline == b.underline &&
+           a.kind == b.kind && a.text == b.text && a.fontPx == b.fontPx && a.paths == b.paths && a.strokePx == b.strokePx &&
+           a.color == b.color;
+}
+
+// What changed between two sets of highlight boxes: the boxes only one of them has, where they draw.
+std::vector<Rect> changedBoxes(const std::vector<HighlightBox>& before, const std::vector<HighlightBox>& after) {
+    std::vector<Rect> out;
+    auto missing = [&](const std::vector<HighlightBox>& from, const std::vector<HighlightBox>& in) {
+        for (const auto& b : from)
+            if (std::none_of(in.begin(), in.end(), [&](const HighlightBox& o) { return sameBox(b, o); })) out.push_back(drawnRect(b));
+    };
+    missing(before, after);
+    missing(after, before);
+    return out;
+}
+
 // A colour (0xRRGGBB) as cairo's source.
 void rgb(cairo_t* cr, uint32_t c) {
     cairo_set_source_rgb(cr, ((c >> 16) & 0xff) / 255.0, ((c >> 8) & 0xff) / 255.0, (c & 0xff) / 255.0);
@@ -454,6 +481,7 @@ void ReaderScreen::dropSelection() {
     }
     selecting_ = selDragging_ = false;
     selection_.reset();
+    selTouched_ = {};
     bar_.reset();
     selTags_.clear();
     note_.reset();
@@ -568,6 +596,13 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     dropSelection();
                 }
                 if (e.page != page_) dropArea();
+                // The same page again (new highlights, a bookmark, the time left): only what changed
+                // is repainted, not the whole page twice over (a saved highlight was drawn already).
+                const bool samePage = !first && !turned && !relaid && e.page == page_ && e.image == image_ &&
+                                      e.pageBox == pageBox_ && !chapterChanged;
+                const std::vector<HighlightBox> highlightsBefore = samePage ? highlights_ : std::vector<HighlightBox>{};
+                const std::string footerBefore = backLabel().value_or("") + '\x1f' + footerLeft() + '\x1f' + footerRight();
+                const bool marksMoved = markPlaces_ != e.bookmarkPlaces;
                 image_ = e.image;
                 highlights_ = e.highlights;
                 pageBox_ = e.pageBox;
@@ -645,6 +680,11 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 if (!turned && chapterChanged) w = Waveform::Full;
                 if (menus_) {
                     menus_->onPage(nav);
+                } else if (samePage) {
+                    for (const Rect& r : changedBoxes(highlightsBefore, highlights_)) nav.damage(r.intersected(pageArea()), Waveform::Quality);
+                    if (marksMoved) nav.damage(bookmarkRect(), Waveform::Quality);
+                    if (backLabel().value_or("") + '\x1f' + footerLeft() + '\x1f' + footerRight() != footerBefore)
+                        nav.damage(footerArea(), Waveform::Quality);
                 } else {
                     nav.damage(pageArea(), w);
                     nav.damage(footerArea(), Waveform::Quality);
@@ -1040,6 +1080,7 @@ void ReaderScreen::startSelection(Point at, Nav&) {
     selDragging_ = selReleased_ = false;
     selAnchor_ = selLast_ = at;
     requestSelection(at);
+    selShown_ = selPending_ - 1;  // answers to an earlier selection's requests are older still
 }
 
 void ReaderScreen::requestSelection(Point to) {
@@ -1048,7 +1089,12 @@ void ReaderScreen::requestSelection(Point to) {
 }
 
 void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
-    if (!selecting_ || e.requestId != selPending_ || e.page != page_) return;
+    // Any answer newer than the one shown is drawn: while the finger keeps moving, each answer is
+    // overtaken by the next request before it arrives, and waiting for the latest would freeze
+    // the selection until the finger stops. The bar waits for the answer to the last request.
+    if (!selecting_ || e.requestId <= selShown_ || e.page != page_) return;
+    selShown_ = e.requestId;
+    const bool latest = e.requestId == selPending_;
     // A PDF long press where there's no text (or on a scan) draws an area instead, from where it
     // was pressed to where the finger is now.
     if (type_ == DocType::Pdf && !selection_ && (!e.selection || e.selection->text.empty())) {
@@ -1061,7 +1107,7 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
     }
     if (!e.selection) {
         if (!selection_) selecting_ = false;    // the long-press wasn't on text
-        else if (!selDragging_ && selReleased_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
+        else if (latest && !selDragging_ && selReleased_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
         return;
     }
     if (e.selection->text.empty()) {
@@ -1076,9 +1122,11 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
     auto has = [](const std::vector<Rect>& v, const Rect& r) { return std::find(v.begin(), v.end(), r) != v.end(); };
     for (const Rect& r : before)
         if (!has(selection_->rects, r)) nav.damage(r, Waveform::Fast);
-    for (const Rect& r : selection_->rects)
+    for (const Rect& r : selection_->rects) {
+        selTouched_ = selTouched_.united(r);
         if (!has(before, r)) nav.damage(r, Waveform::Fast);
-    if (!selDragging_ && selReleased_ && !bar_) showBar(nav);
+    }
+    if (latest && !selDragging_ && selReleased_ && !bar_) showBar(nav);
 }
 
 void ReaderScreen::showBar(Nav& nav) {
@@ -1211,7 +1259,15 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
     a.localOnly = !selection_->roundTrips;  // §7.5: never upload a place that doesn't round-trip
     a.tags = selTags_;  // the chips marked on the bar
     for (auto it = selTags_.rbegin(); it != selTags_.rend(); ++it) nav.library().rememberAnnotationTag(*it);
-    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", nav.library().createAnnotation(a));
+    const std::string key = nav.library().createAnnotation(a);
+    // Drawn now, where the selection was (as the page will draw it: Selection::rects): the page
+    // coming back with it changes nothing on the screen.
+    for (const Rect& r : selection_->rects) {
+        HighlightBox b{key, r, shadeOf(colour_), type == "underline"};
+        b.color = colour_;
+        highlights_.push_back(std::move(b));
+    }
+    plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
     nav.device().set(kColourKey, colour_);
     if (a.localOnly) nav.toast("Saved on the Kindle only — this place can't be synced exactly.");
     else nav.sync().pushSoon();
@@ -1221,8 +1277,15 @@ void ReaderScreen::saveSelection(const std::string& type, const std::string& com
 
 void ReaderScreen::closeSelection(Nav& nav) {
     if (note_) nav.keyboard().hide();
+    // Repainted: every line the selection covered on the way (inverted with the fast waveform, so
+    // without ghosts now), the bar and the note box; not the whole page.
+    std::vector<Rect> gone{selTouched_};
+    if (selection_) gone.insert(gone.end(), selection_->rects.begin(), selection_->rects.end());
+    if (bar_) gone.push_back(bar_->rect());
+    if (note_) gone.push_back(noteRect());
     dropSelection();
-    nav.damage(pageArea(), Waveform::Quality);
+    for (const Rect& r : gone)
+        if (!r.empty()) nav.damage(r, Waveform::Quality);
 }
 
 void ReaderScreen::onSyncEvent(const SyncEvent& e, Nav& nav) {
@@ -1472,6 +1535,7 @@ void ReaderScreen::toggleBookmark(Nav& nav) {
         nav.library().addBookmark(row_.attachmentKey, {position_.value, chapter_, nav.nowMs()});
     }
     marks_ = nav.library().bookmarks(row_.attachmentKey);
+    nav.damage(bookmarkRect(), Waveform::Quality);  // a removed ribbon goes now; an added one with the page
     sendBookmarks();  // the page comes again, with or without its ribbon
 }
 
