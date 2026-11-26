@@ -14,4 +14,10 @@ struct DeviceProfile {
 
 DeviceProfile profileFor(const std::string& fbinkName, int fbinkPpi);
 
+// Page content (Waveform::Quality) with REAGL, the Kindle reader's own page-turn waveform: no
+// flash, less ghosting and quicker to look settled than GC16. On the MediaTek Kindles (PW5 and
+// later, the Scribes, the Colorsoft), where FBInk maps it to the driver's GLR16. `env`: ZK_REAGL
+// (nullptr when unset), "0" turns it off, "1" on elsewhere too.
+bool pageReagl(bool mtk, const char* env);
+
 }  // namespace zk

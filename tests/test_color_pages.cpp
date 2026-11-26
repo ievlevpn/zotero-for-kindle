@@ -128,11 +128,14 @@ TEST_CASE("color pages: a color page counts three bytes a pixel, and fewer of th
     rgb.rgb.assign(1236 * 1487 * 3, 255);
     CHECK(pageBytes(gray) == 1236u * 1487);
     CHECK(pageBytes(rgb) == 3u * 1236 * 1487);
-    // Gray: this page, the next and the previous, as always (on the Scribe too).
-    CHECK(pagesToKeep(5, 100, pageBytes(gray)) == std::vector<int>{5, 6, 4});
-    CHECK(pagesToKeep(5, 100, 1860u * 2319) == std::vector<int>{5, 6, 4});
-    CHECK(pagesToKeep(0, 100, pageBytes(gray)) == std::vector<int>{0, 1});
-    CHECK(pagesToKeep(99, 100, pageBytes(gray)) == std::vector<int>{99, 98});
+    // Gray: this page, the next, the previous and the one after the next (on the Scribe too).
+    CHECK(pagesToKeep(5, 100, pageBytes(gray), true) == std::vector<int>{5, 6, 4, 7});
+    CHECK(pagesToKeep(5, 100, 1860u * 2319, true) == std::vector<int>{5, 6, 4, 7});
+    CHECK(pagesToKeep(5, 100, 1860u * 2480, true) == std::vector<int>{5, 6, 4, 7});
+    CHECK(pagesToKeep(0, 100, pageBytes(gray), true) == std::vector<int>{0, 1, 2});
+    CHECK(pagesToKeep(99, 100, pageBytes(gray), true) == std::vector<int>{99, 98});
+    CHECK(pagesToKeep(98, 100, pageBytes(gray), true) == std::vector<int>{98, 99, 97});
+    CHECK(pageCacheBudget(1860u * 2480, true) == kGrayPageCacheBytes);
     // Color (a Colorsoft's page): this page and the next, within the same memory.
     CHECK(pagesToKeep(5, 100, pageBytes(rgb)) == std::vector<int>{5, 6});
     CHECK(3 * pageBytes(rgb) > kPageCacheBytes);
@@ -208,7 +211,7 @@ TEST_CASE("color pages: the worker opens in color, boosts the page, keeps fewer 
     CHECK(page->page == 5);
     CHECK(page->image->rgb.empty());
     CHECK(page->image->gray[0] == 5);
-    CHECK(rig.settledRenders() == 2 + 3);  // again, gray: 5, then 6 and 4
+    CHECK(rig.settledRenders() == 2 + 4);  // again, gray: 5, then 6, 4 and 7
 }
 
 TEST_CASE("color pages: a burst of turns and jumps with color pages never holds more than the budget") {
@@ -229,11 +232,11 @@ TEST_CASE("color pages: a burst of turns and jumps with color pages never holds 
     CHECK(rig.worker->peakCachedBytes() >= 2 * page);  // the next page is kept ahead
 }
 
-TEST_CASE("color pages: a gray worker keeps three pages as before") {
+TEST_CASE("color pages: a gray worker keeps four pages, two of them ahead") {
     WorkerRig rig;
     rig.worker->open("book.epub", DocType::Epub, Layout{}, DocPosition{"pos:450"});
     REQUIRE(rig.waitPage());
-    CHECK(rig.settledRenders() == 3);
+    CHECK(rig.settledRenders() == 4);
     CHECK_FALSE(rig.engine->color);
 }
 

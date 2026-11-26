@@ -724,20 +724,30 @@ void App::flush() {
     const bool fastApart = visibleTop()->fastPartsApart() && fastParts.size() <= kFastParts && fastParts.size() > 1 &&
                            std::none_of(pending_.begin(), pending_.end(), [](const auto& d) { return d.second == Waveform::Ink; });
     pending_.clear();
-    if (quality == all && ++fullChanges_ % kFlashEvery == 0) {
+    if (quality == all && !visibleTop()->flashesItself() && ++fullChanges_ % kFlashEvery == 0) {
         full = all;
         quality = {};
     }
+    // Only what will be shown is drawn: a tap's feedback doesn't redraw (and on the reader,
+    // re-blit) the whole screen. Outside it the canvas keeps what was drawn there last.
+    const Rect shown = full.united(quality).united(ui).united(fast);
+    if (shown.empty()) return;  // nothing on the screen (an empty paint region would mean all of it)
+    cairo_t* cr = canvas_.cr();
+    cairo_save(cr);
+    cairo_rectangle(cr, shown.x, shown.y, shown.w, shown.h);
+    cairo_clip(cr);
+    canvas_.setPaintRegion(shown);
     guard([&] { visibleTop()->draw(canvas_); });
-    if (visibleTop()->showsTabBar()) drawTabBar(canvas_.cr(), tabBar(), kTabNames, tab_);
+    if (visibleTop()->showsTabBar()) drawTabBar(cr, tabBar(), kTabNames, tab_);
     if (!toast_.empty() && !lock_) {
-        drawToast(canvas_.cr(), toastRect(), toast_);
+        drawToast(cr, toastRect(), toast_);
         toastShown_ = true;
     }
     const PluginConfirm* question = confirmShown();
-    if (question) question->draw(canvas_.cr());
+    if (question) question->draw(cr);
+    canvas_.setPaintRegion({});
+    cairo_restore(cr);
     if (!full.empty()) {
-        const Rect shown = full.united(quality).united(ui).united(fast);
         display_.present(canvas_, shown, Waveform::Full);
         if (shown.united(inkDirty_) == shown) inkDirty_ = {};  // already on screen, in full quality
     } else {

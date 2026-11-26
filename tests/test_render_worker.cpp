@@ -71,6 +71,37 @@ TEST_CASE("render worker: opens, shows a page, then pre-renders its neighbours")
     CHECK(msSince(t1) < 20);  // already rendered
 }
 
+TEST_CASE("render worker: the time left is counted after the page is posted, then corrected") {
+    FakeEngine* engine = nullptr;
+    RenderWorker worker([&](DocType) {
+        auto e = std::make_unique<FakeEngine>();
+        e->pages = 1000;
+        e->chapterEvery = 100000;  // no chapters
+        e->firstPageWords = 100;
+        e->wordsDelayMs = 30;  // 30 pages ahead would hold the page back ~0.9 s
+        engine = e.get();
+        return std::unique_ptr<DocumentEngine>(std::move(e));
+    });
+    worker.open("long.pdf", DocType::Pdf, Layout{}, DocPosition{});
+    const auto t0 = Clock::now();
+    std::optional<RenderEvent> page, words;
+    while (msSince(t0) < 3000 && !words) {
+        RenderEvent e;
+        while (worker.poll(e)) {
+            if (e.kind == RenderEvent::Kind::Page && !page) page = e;
+            if (e.kind == RenderEvent::Kind::Page) CHECK(msSince(t0) < 300);
+            if (e.kind == RenderEvent::Kind::Words) words = e;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    REQUIRE(page);
+    CHECK(page->wordsLeftInChapter == 100 * 1000);  // only this page counted yet, scaled to the rest
+    REQUIRE(words);
+    CHECK(words->page == 0);
+    const int64_t window = 100 + 29 * 300;
+    CHECK(words->wordsLeftInChapter == window + window * (1000 - 30) / 30);
+}
+
 TEST_CASE("render worker: fast repeated turns post only the last page") {
     Rig rig;
     rig.worker->open("book.epub", DocType::Epub, Layout{}, DocPosition{"pos:0"});

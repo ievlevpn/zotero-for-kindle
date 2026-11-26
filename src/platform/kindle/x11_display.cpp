@@ -6,10 +6,13 @@
 // gray path as before.
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/extensions/XShm.h>
 #include <fbink.h>
 #include <cerrno>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 #include <unistd.h>
 
 #include <bit>
@@ -23,6 +26,7 @@
 #include "core/log.h"
 #include "core/wake.h"
 #include "platform/color.h"
+#include "platform/device_profile.h"
 #include "platform/display.h"
 #include "platform/keysym.h"
 #include "platform/kindle/evdev_pen.h"
@@ -59,6 +63,82 @@ void onRaiseSignal(int) {
     writeWake();
 }
 
+// MIT-SHM: the X server reads an update's pixels from shared memory instead of the socket (a
+// Scribe's page is 4.6 MB, which Xlib otherwise sends in pieces for the server to copy out).
+// The pixels are copied in from the app's own image for each update; off with ZK_NO_SHM=1, and
+// whenever the server can't attach (the plain XPutImage then, as always).
+int gShmError = 0;
+int onShmError(::Display*, XErrorEvent*) {
+    gShmError = 1;
+    return 0;
+}
+
+class ShmImage {
+public:
+    ~ShmImage() { release(); }
+    // An image of this visual, depth and size in shared memory; false: not possible here.
+    bool make(::Display* dpy, Visual* visual, int depth, int w, int h, int byteOrder) {
+        release();
+        if (std::getenv("ZK_NO_SHM") || !XShmQueryExtension(dpy)) return false;
+        img_ = XShmCreateImage(dpy, visual, depth, ZPixmap, nullptr, &info_, w, h);
+        if (!img_) return false;
+        img_->byte_order = byteOrder;
+        info_.shmid = shmget(IPC_PRIVATE, static_cast<size_t>(img_->bytes_per_line) * img_->height, IPC_CREAT | 0600);
+        if (info_.shmid < 0) return fail("shmget");
+        info_.shmaddr = img_->data = static_cast<char*>(shmat(info_.shmid, nullptr, 0));
+        if (info_.shmaddr == reinterpret_cast<char*>(-1)) {
+            info_.shmaddr = img_->data = nullptr;
+            shmctl(info_.shmid, IPC_RMID, nullptr);
+            return fail("shmat");
+        }
+        info_.readOnly = False;
+        gShmError = 0;
+        XErrorHandler old = XSetErrorHandler(onShmError);
+        const bool attached = XShmAttach(dpy, &info_) && (XSync(dpy, False), !gShmError);
+        XSetErrorHandler(old);
+        shmctl(info_.shmid, IPC_RMID, nullptr);  // freed once both sides have let go
+        if (!attached) return fail("XShmAttach");
+        dpy_ = dpy;
+        bpp_ = img_->bits_per_pixel / 8;
+        return true;
+    }
+    explicit operator bool() const { return dpy_ != nullptr; }
+    // The shared pixels and their row length in bytes (the app may draw into them directly).
+    uint8_t* data() const { return reinterpret_cast<uint8_t*>(img_->data); }
+    int stride() const { return img_->bytes_per_line; }
+    // Region `r` of `src` (rows `srcStride` bytes apart, the same pixel format) to the window;
+    // `src` may be data() itself (nothing is copied then).
+    void put(Window win, GC gc, const uint8_t* src, int srcStride, Rect r) {
+        if (src != data())
+            for (int y = r.y; y < r.y + r.h; ++y)
+                std::memcpy(img_->data + static_cast<size_t>(y) * img_->bytes_per_line + r.x * bpp_,
+                            src + static_cast<size_t>(y) * srcStride + r.x * bpp_, static_cast<size_t>(r.w) * bpp_);
+        XShmPutImage(dpy_, win, gc, img_, r.x, r.y, r.x, r.y, r.w, r.h, False);
+    }
+    void release() {
+        if (dpy_) XShmDetach(dpy_, &info_);
+        if (info_.shmaddr) shmdt(info_.shmaddr);
+        if (img_) {
+            img_->data = nullptr;
+            XDestroyImage(img_);
+        }
+        img_ = nullptr;
+        info_ = {};
+        dpy_ = nullptr;
+    }
+
+private:
+    bool fail(const char* what) {
+        log(LogLevel::Info, "X: no shared memory (%s failed): images through the socket", what);
+        release();
+        return false;
+    }
+    ::Display* dpy_ = nullptr;  // set once attached
+    XImage* img_ = nullptr;
+    XShmSegmentInfo info_{};
+    int bpp_ = 1;
+};
+
 class X11Display final : public Display {
 public:
     X11Display() {
@@ -79,11 +159,13 @@ public:
             deviceName_ = state.device_name;
             ppi_ = state.screen_dpi;
             panelFound_ = state.has_color_panel;
+            reagl_ = pageReagl(state.is_mtk, std::getenv("ZK_REAGL"));
             log(LogLevel::Info,
                 "FBInk: %s (%s, id %#x), view %ux%u, %u bpp, pixel format %u, rotation %u, color panel %s, MTK %s",
                 state.device_name, state.device_codename, static_cast<unsigned>(state.device_id), state.view_width,
                 state.view_height, state.bpp, static_cast<unsigned>(state.pixel_format), static_cast<unsigned>(state.current_rota),
                 state.has_color_panel ? "yes" : "no", state.is_mtk ? "yes" : "no");
+            log(LogLevel::Info, "page content: %s", reagl_ ? "REAGL" : "GC16");
         }
         rawCfg_ = cfg_;  // writing pixels (the framebuffer path): no refresh of its own, RGB without alpha
         rawCfg_.no_refresh = true;
@@ -166,6 +248,7 @@ public:
     ~X11Display() override {
         setUiWaker(nullptr);
         wet_.reset();  // leaves the handler off before our window goes
+        shm_.release();  // while the display is still open
         if (image_) {
             image_->data = nullptr;
             XDestroyImage(image_);
@@ -240,13 +323,18 @@ public:
     void present(const Canvas& canvas, Rect r, Waveform w) override {
         r = r.intersected({0, 0, w_, h_});
         if (r.empty() || !dpy_) return;
+        const int64_t t0 = nowMs();
         if (path_ == ColorPath::Gray && !x32_) {  // color off on an 8-bit X: as it always was
-            canvas.toGray(backing_.data(), w_, r);
+            canvas.toGray(pix8_, w_, r);
             putAndRefresh(r, w);
-            return;
+        } else {
+            waitIfColoredBefore();
+            putAndRefresh(r, w, convert(canvas, r));
         }
-        waitIfColoredBefore();
-        putAndRefresh(r, w, convert(canvas, r));
+        if (static_cast<int64_t>(r.w) * r.h * 2 >= static_cast<int64_t>(w_) * h_)  // a page, not a button
+            log(LogLevel::Debug, "presented %dx%d (%s) in %lld ms", r.w, r.h,
+                w == Waveform::Full ? "full" : w == Waveform::Quality ? (reagl_ ? "REAGL" : "GC16") : "other",
+                static_cast<long long>(nowMs() - t0));
     }
 
     bool repaintsOnForeground() const override { return true; }  // Expose: from the backing store
@@ -447,15 +535,30 @@ private:
 
     // The gray path (color off): the image to X, then the refresh with the waveform's mode.
     void putAndRefresh(Rect r, Waveform w) {
-        XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
+        putImage(r);
         XSync(dpy_, False);
         if (fb_ < 0) return;
+        if (w == Waveform::Quality && reagl_ && refreshReagl(r)) return;
         cfg_.wfm_mode = w == Waveform::Ink    ? WFM_A2
                    : w == Waveform::Fast ? WFM_DU
                    : w == Waveform::Ui   ? WFM_GL16
                                          : WFM_GC16;
         cfg_.is_flashing = w == Waveform::Full;
         fbink_refresh(fb_, r.y + originY_, r.x + originX_, r.w, r.h, &cfg_);
+    }
+
+    // Page content as the Kindle's reader shows it: REAGL, which the driver takes only as a FULL
+    // update (FBInk's is_flashing); the waveform itself doesn't flash. If the driver refuses it,
+    // GC16 from then on.
+    bool refreshReagl(Rect r) {
+        cfg_.wfm_mode = WFM_REAGL;
+        cfg_.is_flashing = true;
+        const int rc = fbink_refresh(fb_, r.y + originY_, r.x + originX_, r.w, r.h, &cfg_);
+        cfg_.is_flashing = false;
+        if (rc >= 0) return true;
+        log(LogLevel::Warn, "REAGL refresh refused (%d): page content with GC16 from now on", rc);
+        reagl_ = false;
+        return false;
     }
 
     // A color path (or gray on a 32-bit X): the image to X, the RGB to the framebuffer on that
@@ -469,12 +572,24 @@ private:
         if (path_ == ColorPath::Fb && (!fbWritesRegion(colored, gate_.allowed()) || !writeFb(r))) colored = false;
         ColorWfm cw = path_ == ColorPath::Gray ? ColorWfm::Keep : colorWaveform(w, colored);
         if (cw != ColorWfm::Keep && wfmAuto_) cw = ColorWfm::Auto;
+        // A gray region's page content: REAGL as on a gray Kindle (colored ones keep GCC16).
+        if (w == Waveform::Quality && reagl_ && (cw == ColorWfm::Keep || cw == ColorWfm::Gc16) && refreshReagl(r)) return;
         refresh(r, w, cw, colored);
     }
 
     void put(Rect r) {
-        XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
+        putImage(r);
         XSync(dpy_, False);  // X has drawn it (into the framebuffer) before we write or refresh
+    }
+
+    // The image's region `r` to the window: through shared memory when there is some.
+    void putImage(Rect r) {
+        if (!shm_) {
+            XPutImage(dpy_, win_, gc_, image_, r.x, r.y, r.x, r.y, r.w, r.h);
+            return;
+        }
+        if (x32_) shm_.put(win_, gc_, reinterpret_cast<const uint8_t*>(pix32_), w_ * 4, r);
+        else shm_.put(win_, gc_, pix8_, w_, r);
     }
 
     bool refresh(Rect r, Waveform w, ColorWfm cw, bool colored) {
@@ -531,24 +646,24 @@ private:
 
     // The region of the canvas into this path's buffers; whether it is colored.
     bool convert(const Canvas& canvas, Rect r) {
-        auto* image32 = reinterpret_cast<uint8_t*>(backing32_.data());
+        auto* image32 = reinterpret_cast<uint8_t*>(pix32_);
         switch (path_) {
             case ColorPath::X: return toXrgb(canvas, image32, w_ * 4, r, rmask_, gmask_, bmask_);
             case ColorPath::Fb:
                 if (x32_) toXgray(canvas, image32, w_ * 4, r, rmask_, gmask_, bmask_);
-                else canvas.toGray(backing_.data(), w_, r);
+                else canvas.toGray(pix8_, w_, r);
                 return toXrgb(canvas, reinterpret_cast<uint8_t*>(rgb_.data()), w_ * 4, r, 0xff0000, 0x00ff00, 0x0000ff);
             case ColorPath::Gray: break;
         }
         if (x32_) toXgray(canvas, image32, w_ * 4, r, rmask_, gmask_, bmask_);
-        else canvas.toGray(backing_.data(), w_, r);
+        else canvas.toGray(pix8_, w_, r);
         return false;
     }
 
     // Whether what is already in this path's buffers is colored (an Expose repaints from them).
     // The X image's channels are whole bytes (readVisual), and chroma doesn't care which is which.
     bool coloredNow(Rect r) const {
-        if (path_ == ColorPath::X) return isColored(backing32_.data(), w_ * 4, r);
+        if (path_ == ColorPath::X) return isColored(pix32_, w_ * 4, r);
         if (path_ == ColorPath::Fb) return isColored(rgb_.data(), w_ * 4, r);
         return false;
     }
@@ -629,6 +744,27 @@ private:
             image_ = XCreateImage(dpy_, DefaultVisual(dpy_, scr), 8, ZPixmap, 0, reinterpret_cast<char*>(backing_.data()), w_, h_,
                                   8, w_);
         }
+        pix8_ = backing_.data();
+        pix32_ = backing32_.data();
+        if (image_ && shm_.make(dpy_, DefaultVisual(dpy_, scr), image_->depth, w_, h_, image_->byte_order)) {
+            // Rows as long as ours (the usual widths): the app's pixels live in the shared memory
+            // itself, so an update isn't copied once more; else they're copied in for each update.
+            const bool direct = shm_.stride() == w_ * (x32_ ? 4 : 1);
+            if (direct) {
+                if (x32_) {
+                    std::memcpy(shm_.data(), backing32_.data(), backing32_.size() * 4);
+                    pix32_ = reinterpret_cast<uint32_t*>(shm_.data());
+                    std::vector<uint32_t>().swap(backing32_);
+                } else {
+                    std::memcpy(shm_.data(), backing_.data(), backing_.size());
+                    pix8_ = shm_.data();
+                    std::vector<uint8_t>().swap(backing_);
+                }
+                image_->data = reinterpret_cast<char*>(shm_.data());
+            }
+            if (!shmLogged_) log(LogLevel::Info, "X: images through shared memory%s", direct ? "" : " (copied in)");
+            shmLogged_ = true;
+        }
         packed_ = {};  // sized for the old window
         if (path_ == ColorPath::Fb) rgb_.assign((size_t)w_ * h_, 0xffffff);
         else releaseFbBuffers();
@@ -679,8 +815,14 @@ private:
     Window win_ = 0;
     GC gc_ = nullptr;
     XImage* image_ = nullptr;
+    ShmImage shm_;  // the image's pixels for the server, when it can share memory
+    bool shmLogged_ = false;
     std::vector<uint8_t> backing_;     // the 8-bit image's pixels (an 8-bit X)
     std::vector<uint32_t> backing32_;  // the 32-bit image's (a 24-bit TrueColor X)
+    // The image's pixels as drawn into: the vectors above, or the shared memory (ShmImage) when
+    // its rows are as long (the vectors are then emptied).
+    uint8_t* pix8_ = nullptr;
+    uint32_t* pix32_ = nullptr;
     std::vector<uint32_t> rgb_;        // the framebuffer path: the window's colors, 0x00RRGGBB
     std::vector<uint8_t> packed_;      // a region of rgb_ as FBInk takes it
     bool x32_ = false;
@@ -692,6 +834,7 @@ private:
     bool fbRawOk_ = true;          // FBInk can write pixels (built with image support)
     bool wfmAuto_ = false;         // ZK_COLOR_WFM=auto
     bool waitBeforeNext_ = false;  // a colored refresh is on its way
+    bool reagl_ = false;           // page content with REAGL (pageReagl)
     // The framebuffer path writes only while nothing can be over the window (platform/color.h).
     FbColorGate gate_;
     bool fbGateLogged_ = false;  // what was last logged about it

@@ -156,6 +156,7 @@ public:
     bool dragsAtOnce() const override { return areaArmed_; }
     bool dragsAtOnceFrom(Point at) const override;  // also the menus' page slider: dragged, not swiped
     bool fastPartsApart() const override { return areaDrawing_; }
+    bool flashesItself() const override { return true; }  // every flashEvery_ turns, as set
     static Rect areaBannerRect();  // "Drag across the area to mark" while armed, at the top of the page
     static Rect areaCancelRect();
     static constexpr int kMinAreaPx = 59;  // ~5 mm at 300 ppi: smaller on either side is a slip
@@ -279,6 +280,7 @@ private:
     double progress_ = 0;
     bool turning_ = false;
     int turnTarget_ = -1;  // the page a turn (not a jump) is on its way to
+    int64_t turnAskedMs_ = 0;  // when it was asked for (the log's turn times)
     std::function<void(uint64_t, const std::vector<SearchHit>&)> searchListener_;
     bool layoutPending_ = false;  // re-paginating: page numbers are about to change
     uint64_t layoutId_ = 0;       // the last setLayout's id: its pages end layoutPending_

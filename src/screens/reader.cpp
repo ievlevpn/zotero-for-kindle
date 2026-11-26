@@ -74,22 +74,25 @@ void saveLayout(Library& lib, const std::string& itemKey, const Layout& l) {
                                              .dump());
 }
 
+// The page's pixels into the canvas, inside its paint region only.
 void blit(Canvas& c, const PageImage& img, int y0) {
+    const Rect r = Rect{0, y0, img.width, img.height}.intersected(c.paintRegion());
+    if (r.empty()) return;
     cairo_surface_flush(c.surface());
     unsigned char* data = cairo_image_surface_get_data(c.surface());
     const int stride = cairo_image_surface_get_stride(c.surface());
-    for (int y = 0; y < img.height && y + y0 < c.height(); ++y) {
-        auto* row = reinterpret_cast<uint32_t*>(data + (y + y0) * stride);
+    for (int cy = r.y; cy < r.y + r.h; ++cy) {
+        auto* row = reinterpret_cast<uint32_t*>(data + cy * stride) + r.x;
+        const size_t y = static_cast<size_t>(cy - y0);
         if (!img.rgb.empty()) {  // a color page (a color screen)
-            const uint8_t* src = img.rgb.data() + static_cast<size_t>(y) * img.width * 3;
-            for (int x = 0; x < img.width && x < c.width(); ++x, src += 3)
-                row[x] = 0xff000000u | (src[0] << 16) | (src[1] << 8) | src[2];
+            const uint8_t* src = img.rgb.data() + (y * img.width + r.x) * 3;
+            for (int x = 0; x < r.w; ++x, src += 3) row[x] = 0xff000000u | (src[0] << 16) | (src[1] << 8) | src[2];
             continue;
         }
-        const uint8_t* src = img.gray.data() + static_cast<size_t>(y) * img.width;
-        for (int x = 0; x < img.width && x < c.width(); ++x) row[x] = 0xff000000u | (src[x] << 16) | (src[x] << 8) | src[x];
+        const uint8_t* src = img.gray.data() + y * img.width + r.x;
+        for (int x = 0; x < r.w; ++x) row[x] = 0xff000000u | (src[x] * 0x010101u);
     }
-    cairo_surface_mark_dirty(c.surface());
+    cairo_surface_mark_dirty_rectangle(c.surface(), r.x, r.y, r.w, r.h);
 }
 
 // An area's frame: its colour's shade made darker, so even yellow shows as a line on e-ink while
@@ -155,7 +158,7 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes, bool colo
     unsigned char* data = cairo_image_surface_get_data(c.surface());
     const int stride = cairo_image_surface_get_stride(c.surface());
     for (const auto& b : boxes) {
-        const Rect r = b.rect.intersected(ReaderScreen::pageArea());
+        const Rect r = b.rect.intersected(ReaderScreen::pageArea()).intersected(c.paintRegion());
         if (!r.empty() && b.kind == HighlightBox::Kind::Image && color) {
             multiply(data, stride, r, areaTint(b.color));
             continue;
@@ -174,7 +177,8 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes, bool colo
         if (r.empty() || b.kind != HighlightBox::Kind::Highlight) continue;  // drawn below, with cairo
         if (b.underline) {
             const uint32_t bar = color ? 0xff000000u | zoteroRgb(b.color) : 0xff3c3c3cu;
-            for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < c.height(); ++y) {
+            const Rect region = c.paintRegion();
+            for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < region.y + region.h; ++y) {
                 auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
                 for (int x = r.x; x < r.x + r.w; ++x) row[x] = bar;
             }
@@ -323,7 +327,7 @@ void drawSelection(Canvas& c, const std::vector<Rect>& rects) {
     unsigned char* data = cairo_image_surface_get_data(c.surface());
     const int stride = cairo_image_surface_get_stride(c.surface());
     for (const Rect& box : rects) {
-        const Rect r = box.intersected(ReaderScreen::pageArea());
+        const Rect r = box.intersected(ReaderScreen::pageArea()).intersected(c.paintRegion());
         for (int y = r.y; y < r.y + r.h; ++y) {
             auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
             for (int x = r.x; x < r.x + r.w; ++x) row[x] = 0xff000000u | (~row[x] & 0x00ffffffu);
@@ -544,6 +548,14 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
             case RenderEvent::Kind::Area:
                 onArea(e, nav);
                 break;
+            case RenderEvent::Kind::Words:  // the time left, counted after the page was shown
+                if (e.page != page_ || turning_ || e.wordsLeftInChapter == wordsLeft_) break;
+                {
+                    const std::string before = footerLeft();
+                    wordsLeft_ = e.wordsLeftInChapter;
+                    if (visible && !menus_ && footerLeft() != before) nav.damage(footerArea(), Waveform::Ui);
+                }
+                break;
             case RenderEvent::Kind::Page: {
                 const bool first = image_ == nullptr;
                 const bool chapterChanged = !first && e.chapter != chapter_;
@@ -583,6 +595,9 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 progress_ = e.progress;
                 wordsLeft_ = e.wordsLeftInChapter;
                 position_ = e.position;
+                if (turned && turnTarget_ >= 0 && e.page == turnTarget_)
+                    log(LogLevel::Debug, "turn to page %d: posted after %lld ms", e.page,
+                        static_cast<long long>(nav.nowMs() - turnAskedMs_));
                 if (turnTarget_ < 0 || e.page == turnTarget_) {  // else posted before a later turn overtook it
                     turning_ = false;
                     turnTarget_ = -1;
@@ -624,7 +639,9 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                 }
                 if (!visible) break;
                 Waveform w = Waveform::Quality;
-                if (turned && (++turns_ % flashEvery_ == 0 || chapterChanged)) w = Waveform::Full;
+                // A new chapter flashes in a book; a PDF's sections come too often for that.
+                const bool chapterFlash = chapterChanged && type_ != DocType::Pdf;
+                if (turned && (++turns_ % flashEvery_ == 0 || chapterFlash)) w = Waveform::Full;
                 if (!turned && chapterChanged) w = Waveform::Full;
                 if (menus_) {
                     menus_->onPage(nav);
@@ -668,6 +685,7 @@ void ReaderScreen::turn(int delta, Nav& nav) {
     }
     turning_ = true;
     turnTarget_ = target;
+    turnAskedMs_ = nav.nowMs();
     worker_->show(target);
 }
 
@@ -1228,7 +1246,12 @@ std::string ReaderScreen::footerRight() const {
 
 void ReaderScreen::draw(Canvas& canvas) {
     cairo_t* cr = canvas.cr();
-    fillRect(cr, {0, 0, W(), H()}, 255);
+    if (image_ && !error_) {  // white only beside and below the page: the page covers the rest
+        fillRect(cr, {image_->width, 0, std::max(0, W() - image_->width), H()}, 255);
+        fillRect(cr, {0, image_->height, W(), std::max(0, H() - image_->height)}, 255);
+    } else {
+        fillRect(cr, {0, 0, W(), H()}, 255);
+    }
     if (error_) {
         drawBanner(cr, {0, 500, W(), 150}, *error_);
         drawButton(cr, {kMargin, 700, 340, 90}, "Back", true);

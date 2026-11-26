@@ -12,4 +12,10 @@ DeviceProfile profileFor(const std::string& fbinkName, int fbinkPpi) {
     return p;
 }
 
+bool pageReagl(bool mtk, const char* env) {
+    if (env && std::string(env) == "0") return false;
+    if (env && std::string(env) == "1") return true;
+    return mtk;
+}
+
 }  // namespace zk

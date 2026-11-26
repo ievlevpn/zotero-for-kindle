@@ -39,6 +39,14 @@ TEST_CASE("device profile: an unknown Kindle takes FBInk's ppi, 300 when it repo
     CHECK(profileFor("x", 0).name == "x");
 }
 
+TEST_CASE("device profile: page content with REAGL on the MediaTek Kindles, ZK_REAGL overrides") {
+    CHECK(pageReagl(true, nullptr));
+    CHECK_FALSE(pageReagl(false, nullptr));
+    CHECK_FALSE(pageReagl(true, "0"));
+    CHECK(pageReagl(false, "1"));
+    CHECK(pageReagl(true, "yes"));  // anything else: the device decides
+}
+
 #include "app/app.h"
 #include "fake_display.h"
 #include "fake_sync.h"

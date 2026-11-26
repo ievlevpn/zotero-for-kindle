@@ -28,14 +28,16 @@ int g_live = 0;
 
 }  // namespace
 
-size_t pageCacheBudget(size_t pageBytes) { return std::max(kPageCacheBytes, 2 * pageBytes); }
+size_t pageCacheBudget(size_t pageBytes, bool gray) {
+    return std::max(gray ? kGrayPageCacheBytes : kPageCacheBytes, 2 * pageBytes);
+}
 
-std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes) {
+std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes, bool gray) {
     std::vector<int> out{current};
     size_t used = pageBytes;
-    for (int p : {current + 1, current - 1}) {
+    for (int p : {current + 1, current - 1, current + 2}) {
         if (p < 0 || p >= pageCount) continue;
-        if (used + pageBytes > pageCacheBudget(pageBytes)) break;
+        if (used + pageBytes > pageCacheBudget(pageBytes, gray)) break;
         used += pageBytes;
         out.push_back(p);
     }
@@ -80,6 +82,9 @@ struct RenderWorker::Impl {
     struct Entry {
         std::shared_ptr<const PageImage> image;
         std::vector<HighlightBox> highlights;
+        // Found with the image (pre-rendered too), so posting a page asks the engine little.
+        std::vector<LinkBox> links;
+        Rect pageBox;
     };
 
     Factory make;
@@ -140,8 +145,9 @@ struct RenderWorker::Impl {
     // overtaken, never posted) can't pile pages up.
     void makeRoom() {
         if (cache.empty()) return;
-        const size_t each = pageBytes(*cache.begin()->second.image);
-        const size_t budget = pageCacheBudget(each);
+        const PageImage& any = *cache.begin()->second.image;
+        const size_t each = pageBytes(any);
+        const size_t budget = pageCacheBudget(each, any.rgb.empty());
         size_t used = 0;
         for (const auto& [p, e] : cache) used += pageBytes(*e.image);
         while (!cache.empty() && used + each > budget) {
@@ -180,6 +186,8 @@ struct RenderWorker::Impl {
         if (!img.rgb.empty()) boostSaturation(img.rgb.data(), img.rgb.size() / 3, boostPct);
         e.image = std::make_shared<const PageImage>(std::move(img));
         e.highlights = engine->highlights(page, anns);
+        e.links = engine->links(page);
+        e.pageBox = engine->pageBox(page);
         Entry& kept = cache[page] = std::move(e);
         notePeak();
         return kept;
@@ -189,7 +197,7 @@ struct RenderWorker::Impl {
         std::vector<int> out;
         const auto it = cache.find(current);
         if (it == cache.end()) return out;
-        for (int p : pagesToKeep(current, pageCount, pageBytes(*it->second.image)))
+        for (int p : pagesToKeep(current, pageCount, pageBytes(*it->second.image), it->second.image->rgb.empty()))
             if (!cache.count(p)) out.push_back(p);
         return out;
     }
@@ -199,20 +207,44 @@ struct RenderWorker::Impl {
         ++wordPagesCounted;
         return wordsOnPage[page] = engine->wordsBetween(page, page + 1);
     }
-    // Words from `page` to the next chapter: exact for the next pages, estimated beyond.
-    int64_t wordsLeft(int page) {
+    // The pages `page`'s time left counts exactly: up to the next chapter, at most kWordsLookahead.
+    std::pair<int, int> wordsWindow(int page) {
         int next = pageCount;
         for (const auto& t : toc)
             if (t.page > page) {
                 next = t.page;
                 break;
             }
-        const int exactEnd = std::min(next, page + kWordsLookahead);
-        int64_t sum = 0;
-        for (int p = page; p < exactEnd; ++p) sum += words(p);
-        if (next > exactEnd && exactEnd > page) sum += sum * (next - exactEnd) / (exactEnd - page);
-        return sum;
+        return {std::min(next, page + kWordsLookahead), next};
     }
+    // Words from `page` to the next chapter: the counted pages of the window, scaled to the whole
+    // chapter. `count`: count the window's pages not counted yet (else only `page` itself is).
+    int64_t wordsLeft(int page, bool count) {
+        const auto [exactEnd, next] = wordsWindow(page);
+        if (exactEnd <= page) return 0;
+        words(page);
+        int64_t sum = 0;
+        int counted = 0;
+        for (int p = page; p < exactEnd; ++p) {
+            if (!count && !wordsOnPage.count(p)) continue;
+            sum += words(p);
+            ++counted;
+        }
+        return counted == exactEnd - page ? sum + sum * (next - exactEnd) / (exactEnd - page) : sum * (next - page) / counted;
+    }
+    // Counts the window's next uncounted page (false: none left, or the page changed meanwhile).
+    bool countAhead() {
+        if (current < 0 || !engine) return false;
+        const int exactEnd = wordsWindow(current).first;
+        for (int p = current; p < exactEnd; ++p)
+            if (!wordsOnPage.count(p)) {
+                words(p);
+                return true;
+            }
+        return false;
+    }
+    int postedWordsPage = -1;  // the page a Page or Words event last gave the time left of, and that
+    int64_t postedWords = 0;   // time left
     RenderEvent pageEvent(int page) {
         Entry& e = entry(page);
         RenderEvent ev;
@@ -224,17 +256,20 @@ struct RenderWorker::Impl {
         ev.highlights = e.highlights;
         ev.chapter = engine->chapterAt(page);
         ev.progress = pageCount > 1 ? static_cast<double>(page) / (pageCount - 1) : 1.0;
-        ev.wordsLeftInChapter = wordsLeft(page);
+        ev.wordsLeftInChapter = wordsLeft(page, false);  // the rest while idle: not before the page
+        postedWordsPage = page;
+        postedWords = ev.wordsLeftInChapter;
         ev.position = engine->positionOfPage(page);
         ev.zoteroPosition = engine->zoteroPosition(page);
         ev.bookmarkPlaces = bookmarkPlaces;
-        ev.links = engine->links(page);
-        ev.pageBox = engine->pageBox(page);
+        ev.links = e.links;
+        ev.pageBox = e.pageBox;
         return ev;
     }
     void relaid(int page) {
         cache.clear();
         wordsOnPage.clear();
+        postedWordsPage = -1;
         toc = engine->toc();
         std::sort(toc.begin(), toc.end(), [](const TocEntry& a, const TocEntry& b) { return a.page < b.page; });
         pageCount = engine->pageCount();
@@ -257,6 +292,8 @@ struct RenderWorker::Impl {
         ev.error = UserError{ErrorKind::Other, "This book can't be shown (it may be damaged or too large).", what};
         emit(std::move(ev));
     }
+    // The current page's time left is still to be counted (and posted if it changes).
+    bool wordsDue() const { return postedWordsPage >= 0 && postedWordsPage == current; }
     void run();
     void step(bool& postCurrent);
 };
@@ -266,7 +303,7 @@ void RenderWorker::Impl::run() {
     for (;;) {
         {
             std::unique_lock<std::mutex> lock(mutex);
-            const bool prerenderLeft = engine && current >= 0 && !toPrerender().empty();
+            const bool prerenderLeft = engine && current >= 0 && (!toPrerender().empty() || wordsDue());
             if (!postCurrent && !prerenderLeft)
                 cv.wait(lock, [&] {
                     return stop || open || layout || target.kind != Target::Kind::None || search || annotations ||
@@ -461,7 +498,8 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.layoutId = layoutId;
         postCurrent = false;
         // Kept: what fits around the current page (pagesToKeep); the rest goes, posted or not.
-        const std::vector<int> keep = pagesToKeep(current, pageCount, pageBytes(*cache.at(current).image));
+        const PageImage& shown = *cache.at(current).image;
+        const std::vector<int> keep = pagesToKeep(current, pageCount, pageBytes(shown), shown.rgb.empty());
         for (auto it = cache.begin(); it != cache.end();)
             it = std::find(keep.begin(), keep.end(), it->first) == keep.end() ? cache.erase(it) : std::next(it);
         {
@@ -473,9 +511,23 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     }
     // Idle: pre-render the next page, then the previous one (as fits), unless something new arrives.
     for (int p : toPrerender()) {
-        if (hasNewWork()) break;
+        if (hasNewWork()) return;
         entry(p);
     }
+    // Then the time left: the window's pages one at a time, the corrected value posted once all are.
+    while (!hasNewWork() && countAhead()) {
+    }
+    if (hasNewWork() || postedWordsPage != current) return;
+    const int64_t exact = wordsLeft(current, true);
+    if (exact != postedWords) {
+        RenderEvent ev;
+        ev.kind = RenderEvent::Kind::Words;
+        ev.page = current;
+        ev.wordsLeftInChapter = exact;
+        emit(std::move(ev));
+    }
+    postedWords = exact;
+    postedWordsPage = -2;  // done for this page
 }
 
 RenderWorker::RenderWorker(Factory make) : impl_(std::make_shared<Impl>()) {

@@ -1,5 +1,8 @@
 #include <doctest/doctest.h>
 
+#include <bit>
+#include <tuple>
+
 #include <filesystem>
 #include <vector>
 
@@ -103,6 +106,38 @@ TEST_CASE("color: toXrgb writes the visual's masks and says whether the region i
     CHECK(dst[0] == 0xdeadbeef);
     CHECK(dst[1 * 8 + 1] == 0xffffff);
     CHECK(dst[3 * 8 + 3] == 0xdeadbeef);
+}
+
+TEST_CASE("color: whole-byte masks take every value exactly, and the colored count stops at 0.5%") {
+    // Every byte value in every channel: a 256 x 3 canvas, row 0 red ramps, row 1 green, row 2 blue.
+    White c(256, 3);
+    cairo_surface_flush(c.surface());
+    auto* data = cairo_image_surface_get_data(c.surface());
+    const int stride = cairo_image_surface_get_stride(c.surface());
+    for (int y = 0; y < 3; ++y)
+        for (int x = 0; x < 256; ++x)
+            reinterpret_cast<uint32_t*>(data + y * stride)[x] = static_cast<uint32_t>(x) << (16 - 8 * y) | 0x404040u;
+    cairo_surface_mark_dirty(c.surface());
+    std::vector<uint32_t> dst(256 * 3);
+    for (const auto& [rm, gm, bm] : {std::tuple{0xff0000u, 0x00ff00u, 0x0000ffu}, std::tuple{0x0000ffu, 0x00ff00u, 0xff0000u},
+                                     std::tuple{0xff000000u, 0x00ff0000u, 0x0000ff00u}}) {
+        toXrgb(c, reinterpret_cast<uint8_t*>(dst.data()), 256 * 4, {0, 0, 256, 3}, rm, gm, bm);
+        auto place = [](uint32_t v, uint32_t mask) { return v << std::countr_zero(mask); };
+        for (int y = 0; y < 3; ++y)
+            for (int x = 0; x < 256; ++x) {
+                const uint32_t p = reinterpret_cast<uint32_t*>(data + y * stride)[x];
+                const uint32_t want = place((p >> 16) & 0xff, rm) | place((p >> 8) & 0xff, gm) | place(p & 0xff, bm);
+                REQUIRE(dst[y * 256 + x] == want);
+            }
+    }
+    // 0.5% of 200 x 100 is 100 pixels: 100 colored aren't enough, 101 are, wherever they are.
+    for (int n : {100, 101}) {
+        White w(200, 100);
+        fill(w, {0, 99, 100, 1}, 1, 0, 0);       // the last row: 100 red
+        if (n == 101) fill(w, {150, 0, 1, 1}, 0, 0, 1);  // and one blue at the top
+        CHECK(toXrgb(w, reinterpret_cast<uint8_t*>(std::vector<uint32_t>(200 * 100).data()), 200 * 4, {0, 0, 200, 100}, 0xff0000,
+                     0x00ff00, 0x0000ff) == (n == 101));
+    }
 }
 
 TEST_CASE("color: toXgray writes toGray's luma into every channel") {

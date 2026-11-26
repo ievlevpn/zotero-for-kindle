@@ -292,8 +292,8 @@ if backend == 'kindle'
   platform_lib = static_library('zk-platform', 'src/platform/kindle/x11_display.cpp', 'src/platform/kindle/x_touch.cpp',
     'src/platform/kindle/kindle_keyboard.cpp', 'src/platform/kindle/evdev_pen.cpp', 'src/platform/kindle/wet_ink.cpp',
     include_directories : ui_incs + [include_directories('build-deps/kindle/prefix/include', is_system : true)],
-    dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
-  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('x11'), fbink_lib])
+    dependencies : [ui_dep, services_dep, dependency('x11'), dependency('xext'), fbink_lib])
+  platform_dep = declare_dependency(link_with : platform_lib, dependencies : [ui_dep, services_dep, dependency('x11'), dependency('xext'), fbink_lib])
 else
   platform_lib = static_library('zk-platform', 'src/platform/desktop/sdl_display.cpp',
     'src/platform/desktop/sdl_keyboard.cpp',

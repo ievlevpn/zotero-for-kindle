@@ -268,3 +268,66 @@ TEST_CASE("annotation bar matches the reviewed golden") {
     rig.reader->draw(c);
     checkGolden(c, "tests/golden/annotation-bar.png");
 }
+
+TEST_CASE("reader: a redraw of part of the screen leaves it as a whole redraw would (highlights, selection)") {
+    // App::flush draws only what it will show: pixels the reader writes itself (the page, a
+    // highlight's tint, the selection's inversion) must stay inside that region, or a highlight
+    // half inside it is darkened twice and a selection inverted back.
+    Db db{Db::open(":memory:")};
+    Library lib{db};
+    FakeNav nav{lib};
+    fillFixtureLibrary(lib, 10);
+    AnnotationRecord an;
+    an.key = "PARTHL01";
+    an.parentKey = "EP000003";
+    an.type = "highlight";
+    an.color = "#ffd400";
+    an.pageLabel = "99";  // the fake engine: a box at (100, 200), 600 x 50, on a light page
+    an.text = "half in the region";
+    lib.upsertAnnotation(an);
+    ReaderScreen reader(*lib.rowFor("IT000003"), "book.epub", DocType::Epub, [] {
+        return std::make_unique<RenderWorker>([](DocType) { return std::unique_ptr<DocumentEngine>(new FakeEngine()); });
+    }, 6);
+    nav.visible = &reader;
+    reader.onShow(nav);
+    auto waitFor = [&](const std::function<bool()>& done) {
+        for (int i = 0; i < 400; ++i) {
+            reader.onTick(nav);
+            if (done()) return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    };
+    REQUIRE(waitFor([&] { return reader.ready(); }));
+    reader.turnTo(99);  // the fake's pages are gray (page % 200): a light one
+    REQUIRE(waitFor([&] { return reader.page() == 99; }));
+    reader.onGesture(Gesture{GestureType::LongPress, {130, 410}, {130, 410}}, nav);
+    reader.onGesture(Gesture{GestureType::LongPressUp, {130, 410}, {130, 410}}, nav);
+    REQUIRE(waitFor([&] { return reader.selection() && !reader.selection()->rects.empty(); }));
+
+    Canvas whole(1236, 1547), part(1236, 1547);
+    reader.draw(whole);
+    reader.draw(part);
+    const Rect sel = reader.selection()->rects.front();
+    INFO("selection " << sel.x << "," << sel.y << " " << sel.w << "x" << sel.h);
+    for (const Rect region : {Rect{0, 220, 1236, 60}, Rect{sel.x + sel.w / 2, sel.y - 10, 300, sel.h + 20}}) {
+        cairo_t* cr = part.cr();
+        cairo_save(cr);
+        cairo_rectangle(cr, region.x, region.y, region.w, region.h);
+        cairo_clip(cr);
+        part.setPaintRegion(region);
+        reader.draw(part);
+        part.setPaintRegion({});
+        cairo_restore(cr);
+    }
+    cairo_surface_flush(whole.surface());
+    cairo_surface_flush(part.surface());
+    const int stride = cairo_image_surface_get_stride(whole.surface());
+    const unsigned char* a = cairo_image_surface_get_data(whole.surface());
+    const unsigned char* b = cairo_image_surface_get_data(part.surface());
+    int differing = 0;
+    for (int y = 0; y < 1547; ++y)
+        for (int x = 0; x < 1236; ++x)
+            differing += reinterpret_cast<const uint32_t*>(a + y * stride)[x] != reinterpret_cast<const uint32_t*>(b + y * stride)[x];
+    CHECK(differing == 0);
+}

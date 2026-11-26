@@ -115,6 +115,9 @@ public:
     virtual bool dragsAtOnceFrom(Point /*at*/) const { return dragsAtOnce(); }
     // Its Fast damages are shown one by one, not merged into the box around them (a moving frame).
     virtual bool fastPartsApart() const { return false; }
+    // It decides itself when its updates flash (the reader: every N page turns); otherwise every
+    // App::kFlashEvery-th full-screen update does.
+    virtual bool flashesItself() const { return false; }
     virtual bool showsTabBar() const { return true; }
     // Closed (with what is above it) when its tab is left, instead of kept hidden (plugin screens).
     virtual bool closesWhenHidden() const { return false; }

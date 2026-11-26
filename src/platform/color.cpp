@@ -20,6 +20,8 @@ int chroma(uint32_t p) {
 
 // More than 0.5% of `total`.
 bool enoughColored(long colored, long total) { return total > 0 && colored * 200 > total; }
+// The fewest colored pixels that are enough: counting can stop there.
+long coloredNeeded(long total) { return total / 200 + 1; }
 
 // Where a channel goes in a mask: its lowest bit and how many bits it has.
 struct Channel {
@@ -32,6 +34,9 @@ struct Channel {
     }
     uint32_t put(uint32_t v8) const { return ((v8 * max + 127) / 255) << shift; }
 };
+
+// Whole-byte channels (the usual 24-bit visuals): a value is only shifted into place.
+bool byteChannels(const Channel& r, const Channel& g, const Channel& b) { return r.max == 255 && g.max == 255 && b.max == 255; }
 
 const uint32_t* canvasRow(const Canvas& c, int y) {
     const uint8_t* data = cairo_image_surface_get_data(c.surface());
@@ -68,7 +73,8 @@ ColorPath chooseColorPath(const ColorCaps& caps, bool xTrueColor24, bool fbWrita
 bool isColored(const uint32_t* rgb24, int stride, Rect r) {
     if (r.empty()) return false;
     long colored = 0;
-    for (int y = r.y; y < r.y + r.h; ++y) {
+    const long need = coloredNeeded(static_cast<long>(r.w) * r.h);
+    for (int y = r.y; y < r.y + r.h && colored < need; ++y) {
         const auto* row = reinterpret_cast<const uint32_t*>(reinterpret_cast<const uint8_t*>(rgb24) + static_cast<size_t>(y) * stride);
         for (int x = r.x; x < r.x + r.w; ++x) colored += chroma(row[x]) > kChromaAbove;
     }
@@ -103,14 +109,24 @@ bool toXrgb(const Canvas& c, uint8_t* dst, int dstStride, Rect r, uint32_t rmask
     if (r.empty()) return false;
     cairo_surface_flush(c.surface());
     const Channel cr(rmask), cg(gmask), cb(bmask);
+    const bool bytes = byteChannels(cr, cg, cb);
     long colored = 0;
+    const long need = coloredNeeded(static_cast<long>(r.w) * r.h);  // once there, rows aren't counted
     for (int y = r.y; y < r.y + r.h; ++y) {
-        const uint32_t* src = canvasRow(c, y);
-        auto* out = reinterpret_cast<uint32_t*>(dst + static_cast<size_t>(y) * dstStride);
-        for (int x = r.x; x < r.x + r.w; ++x) {
-            const uint32_t p = src[x];
-            colored += chroma(p) > kChromaAbove;
-            out[x] = cr.put((p >> 16) & 0xff) | cg.put((p >> 8) & 0xff) | cb.put(p & 0xff);
+        const uint32_t* src = canvasRow(c, y) + r.x;
+        auto* out = reinterpret_cast<uint32_t*>(dst + static_cast<size_t>(y) * dstStride) + r.x;
+        if (colored < need)
+            for (int x = 0; x < r.w; ++x) colored += chroma(src[x]) > kChromaAbove;
+        if (bytes) {
+            for (int x = 0; x < r.w; ++x) {
+                const uint32_t p = src[x];
+                out[x] = ((p >> 16) & 0xff) << cr.shift | ((p >> 8) & 0xff) << cg.shift | (p & 0xff) << cb.shift;
+            }
+        } else {
+            for (int x = 0; x < r.w; ++x) {
+                const uint32_t p = src[x];
+                out[x] = cr.put((p >> 16) & 0xff) | cg.put((p >> 8) & 0xff) | cb.put(p & 0xff);
+            }
         }
     }
     return enoughColored(colored, static_cast<long>(r.w) * r.h);
@@ -121,13 +137,16 @@ void toXgray(const Canvas& c, uint8_t* dst, int dstStride, Rect r, uint32_t rmas
     if (r.empty()) return;
     cairo_surface_flush(c.surface());
     const Channel cr(rmask), cg(gmask), cb(bmask);
+    const bool bytes = byteChannels(cr, cg, cb);
+    // Whole-byte channels: the gray in every one of them.
+    const uint32_t spread = (1u << cr.shift) | (1u << cg.shift) | (1u << cb.shift);
     for (int y = r.y; y < r.y + r.h; ++y) {
         const uint32_t* src = canvasRow(c, y);
         auto* out = reinterpret_cast<uint32_t*>(dst + static_cast<size_t>(y) * dstStride);
         for (int x = r.x; x < r.x + r.w; ++x) {
             const uint32_t p = src[x];
             const uint32_t g = (((p >> 16) & 0xff) * 77 + ((p >> 8) & 0xff) * 150 + (p & 0xff) * 29) >> 8;  // as toGray
-            out[x] = cr.put(g) | cg.put(g) | cb.put(g);
+            out[x] = bytes ? g * spread : cr.put(g) | cg.put(g) | cb.put(g);
         }
     }
 }

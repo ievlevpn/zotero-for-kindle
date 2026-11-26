@@ -376,8 +376,8 @@ PageImage PdfEngine::render(int page) {
     out.assign(static_cast<size_t>(img.width) * img.height * n, 255);
     double scale, dx, dy;
     if (!fit(page, scale, dx, dy)) return img;
-    // Drawn into a pixmap the page area's size: a view (column view) draws only what it shows,
-    // not its whole page at the view's zoom.
+    // Drawn straight into the page's pixels (a pixmap over them, the page area's size): a view
+    // (column view) draws only what it shows, not its whole page at the view's zoom.
     fz_pixmap* pix = nullptr;
     fz_page* pg = nullptr;
     fz_device* dev = nullptr;
@@ -389,9 +389,8 @@ PageImage PdfEngine::render(int page) {
         const fz_matrix ctm = fz_concat(fz_scale(static_cast<float>(scale), static_cast<float>(scale)),
                                         fz_translate(static_cast<float>(dx), static_cast<float>(dy)));
         pg = fz_load_page(ctx_, doc_, src(page));
-        pix = fz_new_pixmap_with_bbox(ctx_, color_ ? fz_device_rgb(ctx_) : fz_device_gray(ctx_),
-                                      fz_make_irect(0, 0, img.width, img.height), nullptr, 0);
-        fz_clear_pixmap_with_value(ctx_, pix, 255);
+        pix = fz_new_pixmap_with_bbox_and_data(ctx_, color_ ? fz_device_rgb(ctx_) : fz_device_gray(ctx_),
+                                               fz_make_irect(0, 0, img.width, img.height), nullptr, 0, out.data());
         dev = fz_new_draw_device(ctx_, fz_identity, pix);
         fz_run_page(ctx_, pg, dev, ctm, nullptr);
         fz_close_device(ctx_, dev);
@@ -401,26 +400,8 @@ PageImage PdfEngine::render(int page) {
         fz_drop_page(ctx_, pg);
     }
     fz_catch(ctx_) { ok = false; }
-    if (!ok) {
-        fz_drop_pixmap(ctx_, pix);
-        return img;
-    }
-    // The pixmap's origin may be offset; copy it into place.
-    const int px = fz_pixmap_x(ctx_, pix), py = fz_pixmap_y(ctx_, pix);
-    const int pw = fz_pixmap_width(ctx_, pix), ph = fz_pixmap_height(ctx_, pix);
-    const int stride = fz_pixmap_stride(ctx_, pix);
-    const unsigned char* samples = fz_pixmap_samples(ctx_, pix);
-    for (int y = 0; y < ph; ++y) {
-        const int ty = py + y;
-        if (ty < 0 || ty >= img.height) continue;
-        for (int x = 0; x < pw; ++x) {
-            const int tx = px + x;
-            if (tx < 0 || tx >= img.width) continue;
-            const size_t to = (static_cast<size_t>(ty) * img.width + tx) * n;
-            for (int c = 0; c < n; ++c) out[to + c] = samples[y * stride + x * n + c];
-        }
-    }
-    fz_drop_pixmap(ctx_, pix);
+    fz_drop_pixmap(ctx_, pix);  // the samples are the image's: not freed with it
+    if (!ok) std::fill(out.begin(), out.end(), 255);  // half-drawn: a blank page, as before
     return img;
 }
 

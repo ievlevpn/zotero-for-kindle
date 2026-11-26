@@ -31,6 +31,8 @@ public:
     int placeDelayMs = 0;  // areaPosition, notePosition: a slow placing (the book closing meanwhile)
     Rect box;  // pageBox(): where the page is drawn (empty: all of it)
     std::atomic<int64_t> wordPagesCounted{0};  // pages whose words were counted
+    int firstPageWords = 300;  // words on page 0 (every other page has 300)
+    int wordsDelayMs = 0;      // a slow count, per page
     std::atomic<int> renders{0};
 
     bool open(const std::string&, UserError* err) override {
@@ -180,7 +182,10 @@ public:
     }
     int64_t wordsBetween(int from, int to) override {
         wordPagesCounted += to - from;
-        return static_cast<int64_t>(to - from) * 300;
+        if (wordsDelayMs) std::this_thread::sleep_for(std::chrono::milliseconds(wordsDelayMs * (to - from)));
+        int64_t n = 0;
+        for (int p = from; p < to; ++p) n += p == 0 ? firstPageWords : 300;
+        return n;
     }
 
     std::optional<InkPlacement> inkPosition(int page, const std::vector<std::vector<Point>>& paths, int widthPx) override {

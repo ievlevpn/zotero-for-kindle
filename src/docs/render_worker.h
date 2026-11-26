@@ -18,7 +18,8 @@
 namespace zk {
 
 struct RenderEvent {
-    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink, Link, Area };
+    // Words: the page's time left counted more exactly, after the page (page, wordsLeftInChapter).
+    enum class Kind { Opened, Page, SearchResults, Error, Selection, HitAnnotation, Placed, Ink, Link, Area, Words };
     Kind kind = Kind::Page;
     int page = 0, pageCount = 0;
     int viewsPerPage = 1;  // PDF column view: pages are views, this many per PDF page
@@ -26,7 +27,9 @@ struct RenderEvent {
     std::vector<HighlightBox> highlights;
     std::string chapter;
     double progress = 0;             // 0..1
-    int64_t wordsLeftInChapter = 0;  // from this page to the next chapter (estimated far ahead)
+    // From this page to the next chapter: the pages already counted, scaled to the chapter (a Words
+    // event follows when counting the rest of the next pages, while idle, changes it).
+    int64_t wordsLeftInChapter = 0;
     std::vector<TocEntry> toc;       // Opened
     std::vector<SearchHit> hits;     // SearchResults
     uint64_t requestId = 0;          // SearchResults, Selection, HitAnnotation: the id the request returned
@@ -46,16 +49,20 @@ struct RenderEvent {
                                      // Placed: page (-1 if it can't be placed), chapter, progress
 };
 
-// Rendered pages kept around the current one (the current, then the next, then the previous) are
-// at most this many bytes: three gray pages of the largest screen (the Scribe's 1860 × 2480), as
-// always, but only two color ones on a Colorsoft (spec §Design 5: fewer pages, the same memory).
+// Rendered pages kept around the current one (the current, then the next, the previous and the one
+// after the next) are at most this many bytes. Color pages: three gray pages of the largest screen
+// (the Scribe's 1860 × 2480), so only two color ones on a Colorsoft (spec §Design 5: fewer pages,
+// the same memory). Gray pages: four, so two quick turns ahead are both already drawn.
 constexpr size_t kPageCacheBytes = size_t{3} * 1860 * 2480;
-// The budget for pages of `pageBytes` each: kPageCacheBytes, but always room for the current page
-// and the next (a Scribe ColorSoft's color page is about the whole of kPageCacheBytes).
-size_t pageCacheBudget(size_t pageBytes);
+constexpr size_t kGrayPageCacheBytes = size_t{4} * 1860 * 2480;
+// The budget for pages of `pageBytes` each: kPageCacheBytes (kGrayPageCacheBytes for gray ones), but
+// always room for the current page and the next (a Scribe ColorSoft's color page is about the whole
+// of kPageCacheBytes).
+size_t pageCacheBudget(size_t pageBytes, bool gray = false);
 // The pages kept rendered around `current`, in the order they are drawn: it, the next, the previous,
-// while they fit pageCacheBudget at `pageBytes` each (all of a document's pages are the same size).
-std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes);
+// the one after the next, while they fit pageCacheBudget at `pageBytes` each (all of a document's
+// pages are the same size).
+std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes, bool gray = false);
 
 // The saturation boost color pages get (spec §Design 4; page content only, never the UI): each
 // pixel moved away from its HSP brightness by `pct` percent; grays stay exactly as they are.

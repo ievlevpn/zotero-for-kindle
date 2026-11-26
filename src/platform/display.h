@@ -16,7 +16,8 @@ namespace zk {
 //   Quality: page content without a flash (GC16 partial)
 //   Full:    GC16 with a black flash, clears ghosting (every N page turns, on wake)
 // Fast: black/white only, quickest (DU) — feedback that moves (a selection, a slider, typing).
-// Ui: grays kept, no flash (GL16) — menus, panels, bars, buttons. Quality: page content (GC16).
+// Ui: grays kept, no flash (GL16) — menus, panels, bars, buttons. Quality: page content (GC16;
+// REAGL, the Kindle reader's page-turn waveform, on the MediaTek Kindles: device_profile.h).
 // Full: GC16 with a flash, to clear ghosting.
 // Ink: pen strokes, black on the page, as fast as the panel goes (A2 on the Kindle).
 enum class Waveform { Fast, Ui, Quality, Full, Ink };
