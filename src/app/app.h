@@ -203,7 +203,7 @@ private:
     bool closed_ = false;
     // The pen to the visible screen; a stroke it doesn't take is fed to the gestures as a touch.
     void handlePen(const PenEvent&, std::vector<Gesture>& gestures);
-    static constexpr int kPenFinger = 99;  // the touch id of a pen stroke used as a finger
+    static constexpr int kPenFinger = zk::kPenFinger;  // the touch id of a pen stroke used as a finger
     bool penAsTouch_ = false;
     std::set<int> fingersDown_;  // touches down now (from the display, palms included)
     void palmsFromFingersDown();

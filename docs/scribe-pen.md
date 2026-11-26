@@ -21,8 +21,17 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
   the same for one stroke: a long press and drag selects text, or on blank space draws an area (a
   Zotero `image` annotation), as with a finger. While the menus' "Mark an area" waits, the pen
   draws the area without the button.
+- Display panel, PDF, once the pen was used: "Button: Select | Highlight" (kept on the Kindle,
+  `penButton`). Highlight: a stroke with the side button held selects from where it starts (no long
+  press) and is saved as a highlight in the current colour when the pen lifts, without the bar (in
+  a read-only group, a snapshot or a preview the bar comes, as for a finger). No text where it
+  starts on a PDF: an area, as with a finger.
 - While the pen is near the screen (and 0.7 s after it leaves), touches are taken for the palm and
-  ignored (`App::kPalmMs`). "Near" lapses after 2 s without a pen event (`kPenStaleMs`), and the
+  ignored (`App::kPalmMs`). A hand settling to write lands before the pen is near enough to be
+  seen, so on PDF pages taking handwriting, on a Kindle where a pen was ever used (`penUsed`), a
+  finger's page-turn tap waits 0.3 s and is dropped if the pen comes meanwhile
+  (`kPalmTurnWaitMs`); within 1.5 s of the pen a finger's tap or swipe doesn't turn at all
+  (`kAfterPenMs`). "Near" lapses after 2 s without a pen event (`kPenStaleMs`), and the
   background resets it, so a lost Leave can't block touch.
 - The line under the pen is drawn by the firmware's own "wet ink" (below), as in the Scribe's
   notebook. Without it (other devices, `ZK_NO_WET_INK=1`) the app draws the line itself, one A2

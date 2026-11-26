@@ -191,6 +191,10 @@ public:
     // the pen's side button taps for that stroke either way.
     bool penWrites() const { return penWrites_; }
     void setPenWrites(bool on, Nav&);
+    // The pen's side button held: Select (the pen is a finger: a long press selects, the bar
+    // follows) or Highlight (a stroke over text highlights it in the current colour on lift).
+    bool penButtonHighlights() const { return penButtonHighlights_; }
+    void setPenButtonHighlights(bool on, Nav&);
     bool penSeen() const { return penSeen_; }  // a pen was used here (the Display panel offers the choice)
     void commitInk();
     // commitInk, then waits (at most `timeoutMs`) until every stroke, area and note is an annotation: before
@@ -386,6 +390,21 @@ private:
     bool eraserNear_ = false;  // the system's wet ink pauses: its own eraser would draw
     bool buttonHeld_ = false;  // the side button: the pen taps, no ink
     bool penWrites_ = true, penSeen_ = false;
+    bool penButtonHighlights_ = false;
+    bool penSelecting_ = false;      // a side-button stroke selecting (Highlight)
+    bool selAutoHighlight_ = false;  // the selection is saved as a highlight when it's done
+    void selectionDone(Nav&);        // the bar, or that highlight
+    // Palm rejection on PDF pages taking handwriting (a hand settling to write lands before the
+    // pen is near enough to be seen): a finger's tap turns the page only if the pen doesn't come
+    // within kPalmTurnWaitMs, and neither tap nor swipe turns within kAfterPenMs of the pen.
+    bool penOnKindle_ = false;  // a pen has been used on this Kindle (device setting)
+    int64_t lastPenMs_ = -1;
+    struct PalmTurn {
+        int delta = 0;
+        int64_t dueMs = 0;
+    };
+    std::optional<PalmTurn> palmTurn_;
+    bool palmGuarded(const Gesture&) const;
     int penWidth_ = 1;
     bool wantsSystemInk() const override;
     std::string shownAnnotations_;  // sendAnnotations: what the worker was last given

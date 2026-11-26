@@ -66,6 +66,7 @@ public:
     static bool colorRowShown();
     static Rect colorRect(int i);
     static Rect penRect(int i);
+    static Rect penButtonRect(int i);  // Pen button: Select, Highlight (PDF: the font row)
     static Rect penWidthRect(int i);     // PDF once a pen was used: 0 Thin, 1 Medium, 2 Thick          // PDF once a pen was used: 0 Write, 1 Tap
 
     bool displayOpen() const { return displayOpen_; }

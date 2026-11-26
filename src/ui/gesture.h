@@ -6,6 +6,9 @@
 
 namespace zk {
 
+// The touch id of a pen stroke used as a finger (App feeds it to the recognizer as a touch).
+constexpr int kPenFinger = 99;
+
 // LongPressUp: the finger lifted after a long press without moving (a drag ends with DragEnd).
 enum class GestureType { Tap, LongPress, DragStart, DragMove, DragEnd, Swipe, LongPressUp };
 enum class Direction { None, Left, Right, Up, Down };

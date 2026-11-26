@@ -371,6 +371,10 @@ Rect boundsOf(const std::vector<Rect>& rects) {
 
 constexpr const char* kColourKey = "annotationColour";
 constexpr const char* kPenModeKey = "penMode";  // "tap": the pen taps instead of writing
+constexpr const char* kPenButtonKey = "penButton";  // "highlight": the side button highlights
+constexpr const char* kPenOnKindleKey = "penUsed";  // "1": a pen has been used on this Kindle
+constexpr int64_t kPalmTurnWaitMs = 300;  // a page-turn tap waits this long for the pen (a palm's)
+constexpr int64_t kAfterPenMs = 1500;     // no finger page turns this soon after the pen
 constexpr const char* kPenWidthKey = "penWidth";  // "0" thin, "1" medium (default), "2" thick
 
 // What the page shows: not conflict copies (they sit over Zotero's version and are resolved in Notes).
@@ -420,6 +424,8 @@ void ReaderScreen::onShow(Nav& nav) {
     layout_ = loadLayout(nav.library(), row_.key, type_, twoColumnsSetting_);
     if (const std::string c = nav.device().get(kColourKey).value_or(""); !c.empty()) colour_ = c;
     penWrites_ = nav.device().get(kPenModeKey).value_or("") != "tap";
+    penButtonHighlights_ = nav.device().get(kPenButtonKey).value_or("") == "highlight";
+    penOnKindle_ = nav.device().get(kPenOnKindleKey).value_or("") == "1";
     if (const std::string w = nav.device().get(kPenWidthKey).value_or(""); w == "0" || w == "2") penWidth_ = w[0] - '0';
     nav.setSystemInkWidth(inkWidthPx());
     DocPosition start;
@@ -451,6 +457,13 @@ void ReaderScreen::onShow(Nav& nav) {
 }
 
 void ReaderScreen::onTick(Nav& nav) {
+    if (palmTurn_ && nav.nowMs() >= palmTurn_->dueMs) {  // the pen didn't come: a finger's tap
+        const int delta = palmTurn_->delta;
+        palmTurn_.reset();
+        turn(delta, nav);
+    } else if (palmTurn_) {
+        nav.wakeAt(palmTurn_->dueMs);
+    }
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     if (!inkPending_.empty() && !inkDown_ && nav.nowMs() - inkLastMs_ >= kInkCommitMs) commitInk();
     if (!inkPending_.empty() && !inkDown_) nav.wakeAt(inkLastMs_ + kInkCommitMs);  // handwriting saved after a pause
@@ -482,6 +495,7 @@ void ReaderScreen::dropSelection() {
     selecting_ = selDragging_ = false;
     selection_.reset();
     selTouched_ = {};
+    selAutoHighlight_ = false;
     bar_.reset();
     selTags_.clear();
     note_.reset();
@@ -976,7 +990,10 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         if (ready() && pageArea().contains(g.pos)) startSelection(g.pos, nav);
         return;
     }
+    const bool guarded = palmGuarded(g);
+    const bool justWrote = guarded && lastPenMs_ >= 0 && nav.nowMs() - lastPenMs_ < kAfterPenMs;
     if (g.type == GestureType::Swipe) {
+        if (justWrote) return;  // the hand moving between strokes
         if (g.dir == Direction::Left) turn(+1, nav);
         if (g.dir == Direction::Right) turn(-1, nav);
         return;
@@ -984,9 +1001,23 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (g.type != GestureType::Tap) return;
     // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens the menus.
     if (ready() && editAt(g.pos, nav)) return;
-    if (g.pos.x > W() * 7 / 10) turn(+1, nav);
-    else if (g.pos.x < W() * 3 / 10) turn(-1, nav);
+    const int delta = g.pos.x > W() * 7 / 10 ? +1 : g.pos.x < W() * 3 / 10 ? -1 : 0;
+    if (delta != 0 && guarded) {
+        if (justWrote) return;
+        // Turned once the pen hasn't come (onTick); the pen coming means it was the palm (onPen).
+        if (palmTurn_) palmTurn_->delta += delta;
+        else palmTurn_ = PalmTurn{delta, 0};
+        palmTurn_->dueMs = nav.nowMs() + kPalmTurnWaitMs;
+        nav.wakeAt(palmTurn_->dueMs);
+        return;
+    }
+    if (delta != 0) turn(delta, nav);
     else if (ready()) openMenus(nav);  // not before the first page
+}
+
+// A finger's touch on a PDF page taking handwriting, on a Kindle with a pen: maybe the palm.
+bool ReaderScreen::palmGuarded(const Gesture& g) const {
+    return type_ == DocType::Pdf && penWrites_ && penOnKindle_ && !readOnly_ && g.finger >= 0 && g.finger != kPenFinger;
 }
 
 void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
@@ -1107,7 +1138,7 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
     }
     if (!e.selection) {
         if (!selection_) selecting_ = false;    // the long-press wasn't on text
-        else if (latest && !selDragging_ && selReleased_ && !bar_) showBar(nav);  // dragged off the text: keep what was selected
+        else if (latest && !selDragging_ && selReleased_ && !bar_) selectionDone(nav);  // dragged off the text: keep what was selected
         return;
     }
     if (e.selection->text.empty()) {
@@ -1126,7 +1157,13 @@ void ReaderScreen::onSelection(const RenderEvent& e, Nav& nav) {
         selTouched_ = selTouched_.united(r);
         if (!has(before, r)) nav.damage(r, Waveform::Fast);
     }
-    if (latest && !selDragging_ && selReleased_ && !bar_) showBar(nav);
+    if (latest && !selDragging_ && selReleased_ && !bar_) selectionDone(nav);
+}
+
+void ReaderScreen::selectionDone(Nav& nav) {
+    if (!selAutoHighlight_) return showBar(nav);
+    selAutoHighlight_ = false;
+    saveSelection("highlight", "", nav);
 }
 
 void ReaderScreen::showBar(Nav& nav) {
@@ -1931,6 +1968,11 @@ void ReaderScreen::setPenWidth(int i, Nav& nav) {
     nav.setSystemInkWidth(inkWidthPx());
 }
 
+void ReaderScreen::setPenButtonHighlights(bool on, Nav& nav) {
+    penButtonHighlights_ = on;
+    nav.device().set(kPenButtonKey, on ? "highlight" : "");
+}
+
 void ReaderScreen::setPenWrites(bool on, Nav& nav) {
     penWrites_ = on;
     nav.device().set(kPenModeKey, on ? "" : "tap");
@@ -1939,6 +1981,15 @@ void ReaderScreen::setPenWrites(bool on, Nav& nav) {
 
 bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     penSeen_ = true;
+    lastPenMs_ = nav.nowMs();
+    if (palmTurn_) {  // a page-turn tap just before the pen came: the hand settling to write
+        palmTurn_.reset();
+        log(LogLevel::Info, "reader: a tap just before the pen taken for the palm (no page turn)");
+    }
+    if (!penOnKindle_) {
+        penOnKindle_ = true;
+        nav.device().set(kPenOnKindleKey, "1");
+    }
     const bool eraserNear = p.eraser && p.type != PenEvent::Type::Leave;
     const bool buttonHeld = p.button && p.type != PenEvent::Type::Leave;
     if (eraserNear != eraserNear_ || buttonHeld != buttonHeld_) {
@@ -1970,6 +2021,23 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         }
         endArea(p.pos, nav);
         return false;
+    }
+    if (penSelecting_) {  // a side-button stroke (Highlight): the selection follows the pen
+        if (p.type == PenEvent::Type::Move) {
+            if (areaDrawing_) moveArea(p.pos, nav);  // no text where it began: an area, as with a finger
+            else requestSelection(p.pos);
+        }
+        if (lift) {
+            penSelecting_ = false;
+            if (areaDrawing_) {
+                endArea(p.pos, nav);
+            } else if (selecting_) {
+                selDragging_ = false;
+                selReleased_ = true;
+                requestSelection(p.pos);  // its answer saves the highlight (selectionDone)
+            }
+        }
+        return true;
     }
     if (lift && wipeFrom_) {
         nav.damage(footerArea().contains(*wipeFrom_) ? footerArea() : Rect{0, 0, W(), H()}, Waveform::Ui);
@@ -2012,6 +2080,16 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         return false;
     }
     if (p.type == PenEvent::Type::Near) return false;
+    // Side button held, set to Highlight: the stroke selects from where it starts (no long press)
+    // and the selection is saved as a highlight in the current colour when the pen lifts.
+    if (p.type == PenEvent::Type::Down && p.button && penButtonHighlights_ && ready() && penAllowed() &&
+        pageArea().contains(p.pos) && !(question_ && positionBannerRect().contains(p.pos))) {
+        startSelection(p.pos, nav);
+        selDragging_ = true;  // nothing is saved before the pen lifts
+        selAutoHighlight_ = !readOnly_ && !web_ && !preview_;  // else the bar, which says why
+        penSelecting_ = true;
+        return true;
+    }
     if (p.type == PenEvent::Type::Down && type_ == DocType::Pdf && pageArea().contains(p.pos) &&
         !(question_ && positionBannerRect().contains(p.pos))) {
         // Mark an area on: the pen draws the area (its Cancel is tapped as with a finger). With the

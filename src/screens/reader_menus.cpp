@@ -108,6 +108,10 @@ Rect ReaderMenus::penWidthRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 3;
     return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 134, w - 12, 90};
 }
+Rect ReaderMenus::penButtonRect(int i) {  // PDF: in the row EPUB uses for the font
+    const int w = (W() - 2 * kMargin - 240) / 2;
+    return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 24, w - 12, 90};
+}
 Rect ReaderMenus::penRect(int i) {
     const int w = (W() - 2 * kMargin - 240) / 2;
     return {kMargin + 240 + i * w, H() - kPanelH - displayH() + 354, w - 12, 90};
@@ -313,6 +317,12 @@ bool ReaderMenus::onDisplayTap(Point p, Nav& nav) {
                 nav.damage(displayPanelRect(), Waveform::Ui);
                 return true;
             }
+        for (int i = 0; i < 2; ++i)
+            if (penButtonRect(i).contains(p)) {
+                reader_.setPenButtonHighlights(i == 1, nav);
+                nav.damage(displayPanelRect(), Waveform::Ui);
+                return true;
+            }
     }
     if (reader_.landscape() && showsTextOptions() && orientationRect(2).contains(p)) {
         reader_.setTwoColumns(!reader_.twoColumns(), nav);
@@ -392,6 +402,9 @@ void ReaderMenus::drawDisplay(cairo_t* cr) {
         static const char* widths[] = {"Thin", "Medium", "Thick"};
         centredText(cr, "Thickness", label, {kMargin, penWidthRect(0).y, 220, 90}, Align::Left);
         for (int i = 0; i < 3; ++i) drawButton(cr, penWidthRect(i), widths[i], reader_.penWidth() == i);
+        centredText(cr, "Button", label, {kMargin, penButtonRect(0).y, 220, 90}, Align::Left);
+        for (int i = 0; i < 2; ++i)
+            drawButton(cr, penButtonRect(i), i ? "Highlight" : "Select", reader_.penButtonHighlights() == (i == 1));
     }
     centredText(cr, "Orientation", label, {kMargin, orientationRect(0).y, 220, 90}, Align::Left);
     for (int i = 0; i < 2; ++i) drawButton(cr, orientationRect(i), i ? "Landscape" : "Portrait", landscape_ == (i == 1));

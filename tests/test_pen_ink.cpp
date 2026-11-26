@@ -783,3 +783,98 @@ TEST_CASE("pen ink: in a group the eraser leaves another member's ink alone, and
     CHECK_FALSE(rig.lib.annotation(mine));
     CHECK(rig.inks().size() == 1);
 }
+
+// ---- Palm rejection for page turns, and the side button set to Highlight ----
+
+namespace {
+
+Gesture fingerTap(Point p) { return Gesture{GestureType::Tap, p, p, Direction::None, 0, 0}; }  // finger 0: a real touch
+
+}  // namespace
+
+TEST_CASE("palm: a finger's page-turn tap waits for the pen; the pen coming makes it the palm") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), rig.nav);  // a pen on this Kindle
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 600}), rig.nav);
+    rig.nav.now += 5000;  // long after writing
+
+    // The hand settles to write: a brief touch at the edge, then the pen comes.
+    rig.reader->onGesture(fingerTap({1150, 700}), rig.nav);
+    CHECK_FALSE(rig.reader->midTurn());
+    REQUIRE_FALSE(rig.nav.wakeAts.empty());
+    CHECK(rig.nav.wakeAts.back() == rig.nav.now + 300);
+    rig.nav.now += 150;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 600}), rig.nav);
+    rig.nav.now += 5000;
+    rig.settle([] { return false; });
+    CHECK(rig.reader->page() == 0);
+
+    // A finger's tap with no pen after it turns, 0.3 s later.
+    rig.reader->onGesture(fingerTap({1150, 700}), rig.nav);
+    rig.reader->onTick(rig.nav);
+    CHECK_FALSE(rig.reader->midTurn());
+    rig.nav.now += 300;
+    REQUIRE(rig.settle([&] { return rig.reader->page() == 1; }));
+
+    // A pen stroke used as a finger (or a synthetic tap) isn't held back.
+    rig.reader->onGesture(Gesture{GestureType::Tap, {1150, 700}, {1150, 700}, Direction::None, 0, kPenFinger}, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->page() == 2; }));
+}
+
+TEST_CASE("palm: right after the pen, a finger's tap or swipe doesn't turn the page") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {340, 410}, {380, 430}});
+    rig.nav.now += 500;
+    rig.reader->onGesture(fingerTap({1150, 700}), rig.nav);
+    Gesture swipe{GestureType::Swipe, {200, 700}, {900, 700}, Direction::Left, 0, 0};
+    rig.reader->onGesture(swipe, rig.nav);
+    rig.nav.now += 400;
+    rig.settle([] { return false; });
+    CHECK(rig.reader->page() == 0);
+    rig.nav.now += 2000;  // writing is over: the finger turns pages again
+    rig.reader->onGesture(swipe, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->page() == 1; }));
+}
+
+TEST_CASE("palm: on a Kindle whose pen was never used, a tap turns at once") {
+    InkRig rig;  // no pen event yet on this Kindle
+    rig.reader->onGesture(fingerTap({1150, 700}), rig.nav);
+    CHECK(rig.reader->midTurn());
+}
+
+TEST_CASE("pen button set to Highlight: a stroke over text with the button held highlights it on lift, without the bar") {
+    InkRig rig;
+    rig.reader->setPenButtonHighlights(true, rig.nav);
+    CHECK(rig.nav.device().get("penButton").value_or("") == "highlight");
+    auto held = [](PenEvent::Type t, Point p) {
+        PenEvent e = pen(t, p);
+        e.button = true;
+        return e;
+    };
+    CHECK(rig.reader->onPen(held(PenEvent::Type::Near, {130, 210}), rig.nav) == false);
+    CHECK(rig.reader->onPen(held(PenEvent::Type::Down, {130, 210}), rig.nav));  // taken: not a finger
+    rig.reader->onPen(held(PenEvent::Type::Move, {330, 215}), rig.nav);
+    rig.reader->onPen(held(PenEvent::Type::Move, {530, 270}), rig.nav);
+    rig.reader->onPen(held(PenEvent::Type::Up, {530, 270}), rig.nav);
+    std::vector<AnnotationRecord> highlights;
+    REQUIRE(rig.settle([&] {
+        highlights.clear();
+        for (auto& a : rig.lib.annotationsFor(rig.row.attachmentKey))
+            if (a.type == "highlight" && a.createdHere) highlights.push_back(a);
+        return !highlights.empty();
+    }));
+    CHECK(highlights[0].text.rfind("p0w0 ", 0) == 0);
+    CHECK(highlights[0].text.find("p0w14") != std::string::npos);  // to where the pen lifted
+    CHECK(rig.reader->annotationBar() == nullptr);
+    CHECK_FALSE(rig.reader->selection());
+    CHECK(highlights.size() == 1);
+}
+
+TEST_CASE("pen button set to Select (the default): the button makes the pen a finger, nothing is saved") {
+    InkRig rig;
+    CHECK_FALSE(rig.reader->penButtonHighlights());
+    PenEvent down = pen(PenEvent::Type::Down, {130, 210});
+    down.button = true;
+    CHECK_FALSE(rig.reader->onPen(down, rig.nav));  // App feeds it to the gestures as a finger
+}
