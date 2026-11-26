@@ -52,9 +52,10 @@ struct RenderEvent {
 // Rendered pages kept around the current one (the current, then the next, the previous and the one
 // after the next) are at most this many bytes. Color pages: three gray pages of the largest screen
 // (the Scribe's 1860 × 2480), so only two color ones on a Colorsoft (spec §Design 5: fewer pages,
-// the same memory). Gray pages: four, so two quick turns ahead are both already drawn.
+// the same memory). Gray pages: four of the largest screen there is (the Scribe ColorSoft's
+// 1986 × 2648), so two quick turns ahead are both already drawn there too.
 constexpr size_t kPageCacheBytes = size_t{3} * 1860 * 2480;
-constexpr size_t kGrayPageCacheBytes = size_t{4} * 1860 * 2480;
+constexpr size_t kGrayPageCacheBytes = size_t{4} * 1986 * 2648;
 // The budget for pages of `pageBytes` each: kPageCacheBytes (kGrayPageCacheBytes for gray ones), but
 // always room for the current page and the next (a Scribe ColorSoft's color page is about the whole
 // of kPageCacheBytes).

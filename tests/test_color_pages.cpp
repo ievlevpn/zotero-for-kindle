@@ -136,6 +136,7 @@ TEST_CASE("color pages: a color page counts three bytes a pixel, and fewer of th
     CHECK(pagesToKeep(99, 100, pageBytes(gray), true) == std::vector<int>{99, 98});
     CHECK(pagesToKeep(98, 100, pageBytes(gray), true) == std::vector<int>{98, 99, 97});
     CHECK(pageCacheBudget(1860u * 2480, true) == kGrayPageCacheBytes);
+    CHECK(pagesToKeep(5, 100, 1986u * 2446, true) == std::vector<int>{5, 6, 4, 7});  // Scribe ColorSoft, gray
     // Color (a Colorsoft's page): this page and the next, within the same memory.
     CHECK(pagesToKeep(5, 100, pageBytes(rgb)) == std::vector<int>{5, 6});
     CHECK(3 * pageBytes(rgb) > kPageCacheBytes);
