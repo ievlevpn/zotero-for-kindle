@@ -29,7 +29,9 @@ int g_live = 0;
 }  // namespace
 
 size_t pageCacheBudget(size_t pageBytes, bool gray) {
-    return std::max(gray ? kGrayPageCacheBytes : kPageCacheBytes, 2 * pageBytes);
+    // Gray: four pages at most (a small screen's pages don't pile up to the big screen's budget).
+    const size_t base = gray ? std::min(kGrayPageCacheBytes, 4 * pageBytes) : kPageCacheBytes;
+    return std::max(base, 2 * pageBytes);
 }
 
 std::vector<int> pagesToKeep(int current, int pageCount, size_t pageBytes, bool gray) {
@@ -126,6 +128,14 @@ struct RenderWorker::Impl {
     // Worker-only state.
     std::unique_ptr<DocumentEngine> engine;
     int boostPct = 0;  // color pages' saturation boost
+    bool colorPages = false;  // the engine draws RGB pages (set with it, not read off an image: a
+                              // failed render's image is empty, neither gray nor of any size)
+    // The size of the pages kept (all of a document's are the same): the largest image in the cache.
+    size_t keptPageBytes() const {
+        size_t each = 0;
+        for (const auto& [p, e] : cache) each = std::max(each, pageBytes(*e.image));
+        return each;
+    }
     std::vector<AnnotationRecord> anns;
     std::vector<DocPosition> bookmarks;
     std::vector<std::pair<std::string, int>> bookmarkPlaces;  // of `bookmarks`, in the current layout
@@ -145,9 +155,8 @@ struct RenderWorker::Impl {
     // overtaken, never posted) can't pile pages up.
     void makeRoom() {
         if (cache.empty()) return;
-        const PageImage& any = *cache.begin()->second.image;
-        const size_t each = pageBytes(any);
-        const size_t budget = pageCacheBudget(each, any.rgb.empty());
+        const size_t each = keptPageBytes();
+        const size_t budget = pageCacheBudget(each, !colorPages);
         size_t used = 0;
         for (const auto& [p, e] : cache) used += pageBytes(*e.image);
         while (!cache.empty() && used + each > budget) {
@@ -197,7 +206,7 @@ struct RenderWorker::Impl {
         std::vector<int> out;
         const auto it = cache.find(current);
         if (it == cache.end()) return out;
-        for (int p : pagesToKeep(current, pageCount, pageBytes(*it->second.image), it->second.image->rgb.empty()))
+        for (int p : pagesToKeep(current, pageCount, keptPageBytes(), !colorPages))
             if (!cache.count(p)) out.push_back(p);
         return out;
     }
@@ -385,6 +394,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         }
         engine->setLayout(o->layout);
         engine->setColor(o->color);
+        colorPages = o->color;
         boostPct = o->boostPct;
         UserError err;
         if (!engine->open(o->path, &err)) {
@@ -405,6 +415,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
     if (trim) engine->trimCaches();
     if (color) {  // every page again, in color or gray
         engine->setColor(color->first);
+        colorPages = color->first;
         boostPct = color->second;
         cache.clear();
         postCurrent = true;
@@ -498,8 +509,7 @@ void RenderWorker::Impl::step(bool& postCurrent) {
         ev.layoutId = layoutId;
         postCurrent = false;
         // Kept: what fits around the current page (pagesToKeep); the rest goes, posted or not.
-        const PageImage& shown = *cache.at(current).image;
-        const std::vector<int> keep = pagesToKeep(current, pageCount, pageBytes(shown), shown.rgb.empty());
+        const std::vector<int> keep = pagesToKeep(current, pageCount, keptPageBytes(), !colorPages);
         for (auto it = cache.begin(); it != cache.end();)
             it = std::find(keep.begin(), keep.end(), it->first) == keep.end() ? cache.erase(it) : std::next(it);
         {

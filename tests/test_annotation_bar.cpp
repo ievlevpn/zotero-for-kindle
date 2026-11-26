@@ -282,6 +282,8 @@ TEST_CASE("annotation bar matches the reviewed golden") {
 }
 
 TEST_CASE("reader: a redraw of part of the screen leaves it as a whole redraw would (highlights, selection)") {
+  for (const char* kind : {"highlight", "underline"}) {
+    INFO(kind);
     // App::flush draws only what it will show: pixels the reader writes itself (the page, a
     // highlight's tint, the selection's inversion) must stay inside that region, or a highlight
     // half inside it is darkened twice and a selection inverted back.
@@ -292,7 +294,7 @@ TEST_CASE("reader: a redraw of part of the screen leaves it as a whole redraw wo
     AnnotationRecord an;
     an.key = "PARTHL01";
     an.parentKey = "EP000003";
-    an.type = "highlight";
+    an.type = kind;
     an.color = "#ffd400";
     an.pageLabel = "99";  // the fake engine: a box at (100, 200), 600 x 50, on a light page
     an.text = "half in the region";
@@ -322,7 +324,9 @@ TEST_CASE("reader: a redraw of part of the screen leaves it as a whole redraw wo
     reader.draw(part);
     const Rect sel = reader.selection()->rects.front();
     INFO("selection " << sel.x << "," << sel.y << " " << sel.w << "x" << sel.h);
-    for (const Rect region : {Rect{0, 220, 1236, 60}, Rect{sel.x + sel.w / 2, sel.y - 10, 300, sel.h + 20}}) {
+    // Regions starting and ending part-way down the annotation's box (100, 200, 600 x 50), and one
+    // across part of the selection.
+    for (const Rect region : {Rect{0, 220, 1236, 60}, Rect{0, 180, 1236, 45}, Rect{sel.x + sel.w / 2, sel.y - 10, 300, sel.h + 20}}) {
         cairo_t* cr = part.cr();
         cairo_save(cr);
         cairo_rectangle(cr, region.x, region.y, region.w, region.h);
@@ -342,6 +346,7 @@ TEST_CASE("reader: a redraw of part of the screen leaves it as a whole redraw wo
         for (int x = 0; x < 1236; ++x)
             differing += reinterpret_cast<const uint32_t*>(a + y * stride)[x] != reinterpret_cast<const uint32_t*>(b + y * stride)[x];
     CHECK(differing == 0);
+  }
 }
 
 TEST_CASE("selection: while the finger keeps moving, each answer is drawn; the bar waits for the last") {

@@ -79,7 +79,8 @@ public:
     // An image of this visual, depth and size in shared memory; false: not possible here.
     bool make(::Display* dpy, Visual* visual, int depth, int w, int h, int byteOrder) {
         release();
-        if (std::getenv("ZK_NO_SHM") || !XShmQueryExtension(dpy)) return false;
+        if (const char* off = std::getenv("ZK_NO_SHM"); (off && *off && std::strcmp(off, "0") != 0) || !XShmQueryExtension(dpy))
+            return false;
         img_ = XShmCreateImage(dpy, visual, depth, ZPixmap, nullptr, &info_, w, h);
         if (!img_) return false;
         img_->byte_order = byteOrder;
@@ -92,6 +93,7 @@ public:
             return fail("shmat");
         }
         info_.readOnly = False;
+        XSync(dpy, False);  // errors already on their way are not the attach's
         gShmError = 0;
         XErrorHandler old = XSetErrorHandler(onShmError);
         const bool attached = XShmAttach(dpy, &info_) && (XSync(dpy, False), !gShmError);

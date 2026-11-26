@@ -204,8 +204,12 @@ void drawHighlights(Canvas& c, const std::vector<HighlightBox>& boxes, bool colo
         if (r.empty() || b.kind != HighlightBox::Kind::Highlight) continue;  // drawn below, with cairo
         if (b.underline) {
             const uint32_t bar = color ? 0xff000000u | zoteroRgb(b.color) : 0xff3c3c3cu;
+            // At the bottom of the box itself (r may be cut by the paint region), inside r's rows
+            // and the region's.
+            const Rect box = b.rect.intersected(ReaderScreen::pageArea());
             const Rect region = c.paintRegion();
-            for (int y = std::max(r.y, r.y + r.h - 5); y < r.y + r.h + 1 && y < region.y + region.h; ++y) {
+            const int bottom = box.y + box.h;
+            for (int y = std::max({r.y, bottom - 5, region.y}); y < bottom + 1 && y < region.y + region.h && y < c.height(); ++y) {
                 auto* row = reinterpret_cast<uint32_t*>(data + y * stride);
                 for (int x = r.x; x < r.x + r.w; ++x) row[x] = bar;
             }
@@ -462,12 +466,10 @@ void ReaderScreen::onShow(Nav& nav) {
 }
 
 void ReaderScreen::onTick(Nav& nav) {
-    if (palmTurn_ && nav.nowMs() >= palmTurn_->dueMs) {  // the pen didn't come: a finger's tap
-        const int delta = palmTurn_->delta;
-        palmTurn_.reset();
-        turn(delta, nav);
-    } else if (palmTurn_) {
-        nav.wakeAt(palmTurn_->dueMs);
+    if (palmTap_ && nav.nowMs() >= palmTap_->dueMs) {  // the pen didn't come: a finger's tap
+        runPalmTap(nav);
+    } else if (palmTap_) {
+        nav.wakeAt(palmTap_->dueMs);
     }
     if (nav.systemInk()) nav.setSystemInk(wantsSystemInk());
     if (const bool undo = penControls() && canUndoInk(); undo != undoShown_) {  // Undo comes or goes
@@ -660,7 +662,10 @@ void ReaderScreen::pumpEvents(Nav& nav, bool visible) {
                     turning_ = false;
                     turnTarget_ = -1;
                 }
-                if (relaid) layoutPending_ = false;
+                if (relaid) {
+                    layoutPending_ = false;
+                    inkUndo_.clear();  // its page numbers are views of the old layout
+                }
                 if (preview_) {
                     if (preview_->savePosition) preview_->savePosition(position_.value);
                 } else {
@@ -848,6 +853,8 @@ void ReaderScreen::applyLayout(const Layout& wanted, Nav& nav) {
 
 void ReaderScreen::openMenus(Nav& nav) {
     linkId_ = 0;
+    paletteOpen_ = false;
+    palmTap_.reset();
     commitInk();  // leaving the book goes through the menus
     menus_ = std::make_unique<ReaderMenus>(*this, lipc_);
     menus_->open(nav);
@@ -1018,28 +1025,57 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         return;
     }
     if (g.type != GestureType::Tap) return;
-    if (penControls() && ready()) {
-        if (colourChipRect().contains(g.pos)) {
-            paletteOpen_ = true;
-            nav.damage(paletteRect(), Waveform::Ui);
-            return;
-        }
-        if (undoShown_ && undoRect().contains(g.pos)) return undoInk(nav);
+    const bool onChip = penControls() && ready() && colourChipRect().contains(g.pos);
+    const bool onUndo = penControls() && ready() && undoShown_ && undoRect().contains(g.pos);
+    if (onChip || onUndo) {
+        // A palm settles where these are too (bottom right): a finger's tap waits for the pen like a
+        // turn's, even right after writing (that's when Undo is wanted).
+        if (guarded) return holdForPalm(nav, 0, onUndo, onChip);
+        if (onUndo) return undoInk(nav);
+        paletteOpen_ = true;
+        nav.damage(paletteRect(), Waveform::Ui);
+        return;
     }
     // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens the menus.
     if (ready() && editAt(g.pos, nav)) return;
     const int delta = g.pos.x > W() * 7 / 10 ? +1 : g.pos.x < W() * 3 / 10 ? -1 : 0;
     if (delta != 0 && guarded) {
         if (justWrote) return;
-        // Turned once the pen hasn't come (onTick); the pen coming means it was the palm (onPen).
-        if (palmTurn_) palmTurn_->delta += delta;
-        else palmTurn_ = PalmTurn{delta, 0};
-        palmTurn_->dueMs = nav.nowMs() + kPalmTurnWaitMs;
-        nav.wakeAt(palmTurn_->dueMs);
-        return;
+        return holdForPalm(nav, delta, false, false);  // turned once the pen hasn't come (onTick)
     }
     if (delta != 0) turn(delta, nav);
     else if (ready()) openMenus(nav);  // not before the first page
+}
+
+void ReaderScreen::holdForPalm(Nav& nav, int delta, bool undo, bool chip) {
+    if (!palmTap_) palmTap_ = PalmTap{};
+    palmTap_->delta += delta;
+    palmTap_->undos += undo;
+    palmTap_->chip |= chip;
+    palmTap_->dueMs = nav.nowMs() + kPalmTurnWaitMs;
+    nav.wakeAt(palmTap_->dueMs);
+}
+
+// The held taps, now that the pen didn't come; dropped if something opened meanwhile (menus, an
+// editor, a pop-up), which the taps would act behind.
+void ReaderScreen::runPalmTap(Nav& nav) {
+    const PalmTap t = *palmTap_;
+    palmTap_.reset();
+    if (menus_ || editor_ || selection_ || selecting_ || linkPopup_ || notePopup_ || note_ || endPrompt_ || paletteOpen_ ||
+        areaArmed_ || noteArmed_ || !ready())
+        return;
+    for (int i = 0; i < t.undos; ++i) undoInk(nav);
+    if (t.chip) {
+        paletteOpen_ = true;
+        nav.damage(paletteRect(), Waveform::Ui);
+        return;
+    }
+    // Quick taps add up, but not past the last page (one more there: the end of the book) or the first.
+    const int from = turning_ && turnTarget_ >= 0 ? turnTarget_ : page_;
+    int delta = t.delta;
+    if (delta > 0) delta = std::min(delta, std::max(1, pageCount_ - 1 - from));
+    if (delta < 0) delta = std::max(delta, -std::max(1, from));
+    if (delta != 0) turn(delta, nav);
 }
 
 // --- Pen controls: the colour chip, its palette, Undo -------------------------------------------
@@ -1080,8 +1116,8 @@ bool ReaderScreen::canUndoInk() const {
     if (inkPage_ == page_ && !inkPending_.empty()) return true;
     for (const auto& [id, s] : inkSent_)
         if (s.page == page_ && !s.paths.empty()) return true;
-    for (const auto& [key, page] : inkUndo_)
-        if (page == page_) return true;
+    for (const auto& u : inkUndo_)
+        if (u.page == page_) return true;
     return false;
 }
 
@@ -1094,26 +1130,34 @@ void ReaderScreen::undoInk(Nav& nav) {
         for (const Point& q : paths.back()) gone = gone.united({q.x, q.y, 1, 1});
         paths.pop_back();
     };
+    // The newest group on this page: being written, being placed, or saved (by when it was written).
+    SentInk* sent = nullptr;
+    for (auto& [id, s] : inkSent_)
+        if (s.page == page_ && !s.paths.empty() && (!sent || s.seq > sent->seq)) sent = &s;
+    uint64_t savedSeq = 0;
+    for (const auto& u : inkUndo_)
+        if (u.page == page_) savedSeq = std::max(savedSeq, u.seq);
     if (inkPage_ == page_ && !inkPending_.empty()) {
         take(inkPending_);
-    } else if (auto sent = std::find_if(inkSent_.rbegin(), inkSent_.rend(),
-                                        [&](const auto& e) { return e.second.page == page_ && !e.second.paths.empty(); });
-               sent != inkSent_.rend()) {
-        take(sent->second.paths);
-        sent->second.erased = true;  // placed again without it (or not saved at all, if none is left)
+    } else if (sent && sent->seq >= savedSeq) {
+        take(sent->paths);
+        sent->erased = true;  // placed again without it (or not saved at all, if none is left)
     } else {
         while (!inkUndo_.empty()) {
-            auto it = std::find_if(inkUndo_.rbegin(), inkUndo_.rend(), [&](const auto& e) { return e.second == page_; });
-            if (it == inkUndo_.rend()) break;
-            const std::string key = it->first;
-            inkUndo_.erase(std::next(it).base());
+            auto it = std::max_element(inkUndo_.begin(), inkUndo_.end(), [&](const UndoInk& a, const UndoInk& b) {
+                return (a.page == page_ ? a.seq + 1 : 0) < (b.page == page_ ? b.seq + 1 : 0);
+            });
+            if (it == inkUndo_.end() || it->page != page_) break;
+            const UndoInk entry = *it;
+            const std::string key = entry.key;
+            inkUndo_.erase(it);
             auto rec = nav.library().annotation(key);
             if (!rec || rec->deletedHere || !nav.library().annotationEditable(*rec)) continue;  // gone meanwhile
             nlohmann::json pos = nlohmann::json::parse(rec->position, nullptr, false);
             if (pos.is_discarded() || !pos.contains("paths") || pos["paths"].empty()) continue;
             const size_t strokes = pos["paths"].size();
             if (strokes == 1 && (!rec->comment.empty() || !rec->tags.empty())) {
-                inkUndo_.emplace_back(key, page_);  // stays undoable once they're gone
+                inkUndo_.push_back(entry);  // stays undoable once they're gone
                 nav.toast("This handwriting has a comment or tags: delete it in Notes.");
                 return;
             }
@@ -1121,7 +1165,7 @@ void ReaderScreen::undoInk(Nav& nav) {
                 pos["paths"].erase(strokes - 1);
                 rec->position = pos.dump();
                 if (!nav.library().editAnnotation(*rec)) return;
-                inkUndo_.emplace_back(key, page_);  // its earlier strokes can go next
+                inkUndo_.push_back(entry);  // its earlier strokes can go next
                 plugins::annotationEvent(nav.plugins(), nav.library(), "highlightChanged", key);
             } else {
                 const bool told = nav.plugins().listening();
@@ -1242,6 +1286,7 @@ void ReaderScreen::startSelection(Point at, Nav&) {
     linkId_ = 0;
     selecting_ = true;
     selDragging_ = selReleased_ = false;
+    selAutoHighlight_ = false;  // a side-button stroke sets it again after this
     selAnchor_ = selLast_ = at;
     requestSelection(at);
     selShown_ = selPending_ - 1;  // answers to an earlier selection's requests are older still
@@ -2136,7 +2181,7 @@ std::vector<std::string> ReaderScreen::selectionChips(Nav& nav, const std::strin
 bool ReaderScreen::penAllowed() const {
     return worker_ && image_ && !error_ && !menus_ && !selecting_ && !selection_ && !editor_ && !note_ &&
            !areaArmed_ && !areaDrawing_ && !noteArmed_ && !notePopup_ &&
-           !layoutPending_ && !turning_ && !linkPopup_ && !(result_ && result_->shown());
+           !layoutPending_ && !turning_ && !linkPopup_ && !paletteOpen_ && !(result_ && result_->shown());
 }
 
 bool ReaderScreen::wantsSystemInk() const {
@@ -2163,13 +2208,14 @@ void ReaderScreen::setPenWrites(bool on, Nav& nav) {
 bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     penSeen_ = true;
     lastPenMs_ = nav.nowMs();
-    if (palmTurn_) {  // a page-turn tap just before the pen came: the hand settling to write
-        palmTurn_.reset();
+    if (palmTap_) {  // a page-turn tap just before the pen came: the hand settling to write
+        palmTap_.reset();
         log(LogLevel::Info, "reader: a tap just before the pen taken for the palm (no page turn)");
     }
     if (!penOnKindle_) {
         penOnKindle_ = true;
         nav.device().set(kPenOnKindleKey, "1");
+        if (!menus_) nav.damage(footerArea(), Waveform::Ui);  // the pen controls come
     }
     const bool eraserNear = p.eraser && p.type != PenEvent::Type::Leave;
     const bool buttonHeld = p.button && p.type != PenEvent::Type::Leave;
@@ -2332,7 +2378,7 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
 void ReaderScreen::commitInk() {
     if (inkPending_.empty() || !worker_ || inkPage_ < 0) return;
     const uint64_t id = worker_->ink(inkPage_, inkPending_, inkWidthPx());
-    inkSent_[id] = SentInk{inkPage_, std::move(inkPending_), false, inkColour_};
+    inkSent_[id] = SentInk{inkPage_, std::move(inkPending_), false, inkColour_, ++inkSeq_};
     inkPending_.clear();
 }
 
@@ -2372,7 +2418,7 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     if (sent.paths.empty()) return;  // all of it erased while it was being placed
     if (sent.erased) {               // placed with strokes since erased: place what is left
         const uint64_t id = worker_->ink(sent.page, sent.paths, inkWidthPx());
-        inkSent_[id] = SentInk{sent.page, std::move(sent.paths), false, sent.colour};
+        inkSent_[id] = SentInk{sent.page, std::move(sent.paths), false, sent.colour, sent.seq};
         return;
     }
     if (!e.ink) {
@@ -2390,7 +2436,7 @@ void ReaderScreen::onInk(const RenderEvent& e, Nav& nav) {
     const std::string key = nav.library().createAnnotation(a);
     plugins::annotationEvent(nav.plugins(), nav.library(), "highlightCreated", key);
     nav.sync().pushSoon();
-    inkUndo_.emplace_back(key, sent.page);
+    inkUndo_.push_back(UndoInk{key, sent.page, sent.seq});
     inkSaved_.push_back(SavedInk{key, sent.page, std::move(sent.paths), sent.colour});
     refreshHighlights(nav);
 }

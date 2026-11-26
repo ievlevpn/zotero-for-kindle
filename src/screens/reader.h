@@ -220,10 +220,14 @@ public:
     static constexpr size_t kMaxInkStrokes = 24, kMaxInkPoints = 2000;
     static constexpr int64_t kMaxInkSpanMs = 10000;
     void onHide(Nav&) override {
+        palmTap_.reset();
+        penSelecting_ = false;
         commitInk();
         dropArea(notePicking_);  // also Add note, and a note's pop-up unless its own + Tag picker covers it
     }
     void onBackground(Nav&) override {
+        palmTap_.reset();     // a tap just before the power button doesn't turn on the way back
+        penSelecting_ = false;  // its lift may never come
         commitInk();
         dropArea();
         if (worker_) worker_->trimCaches();  // MuPDF's store is refilled when we're back
@@ -407,7 +411,13 @@ private:
     std::string inkColour_ = "#000000";
     bool paletteOpen_ = false;
     bool undoShown_ = false;  // the footer shows Undo (repainted when that changes)
-    std::vector<std::pair<std::string, int>> inkUndo_;  // ink annotations saved here, oldest first: key, page
+    struct UndoInk {
+        std::string key;  // an ink annotation saved here
+        int page = -1;
+        uint64_t seq = 0;  // its strokes' SentInk::seq
+    };
+    std::vector<UndoInk> inkUndo_;
+    uint64_t inkSeq_ = 0;
     void choosePaletteColour(int row, int i, Nav&);
     bool penSelecting_ = false;      // a side-button stroke selecting (Highlight)
     bool selAutoHighlight_ = false;  // the selection is saved as a highlight when it's done
@@ -417,11 +427,16 @@ private:
     // within kPalmTurnWaitMs, and neither tap nor swipe turns within kAfterPenMs of the pen.
     bool penOnKindle_ = false;  // a pen has been used on this Kindle (device setting)
     int64_t lastPenMs_ = -1;
-    struct PalmTurn {
+    // A finger's tap held back for the palm check: the page turns it adds up to, Undos, the chip.
+    struct PalmTap {
         int delta = 0;
+        int undos = 0;
+        bool chip = false;
         int64_t dueMs = 0;
     };
-    std::optional<PalmTurn> palmTurn_;
+    std::optional<PalmTap> palmTap_;
+    void holdForPalm(Nav&, int delta, bool undo, bool chip);
+    void runPalmTap(Nav&);
     bool palmGuarded(const Gesture&) const;
     std::optional<uint32_t> inkRgb(const std::string& colour) const;  // nullopt: black
     int penWidth_ = 1;
@@ -437,6 +452,7 @@ private:
         std::vector<std::vector<Point>> paths;
         bool erased = false;  // a path was erased while it was being placed: place the rest again
         std::string colour = "#000000";
+        uint64_t seq = 0;  // when it was written (inkSeq_): Undo takes the newest
     };
     std::map<uint64_t, SentInk> inkSent_;  // sent to the worker, being placed
     struct SavedInk {

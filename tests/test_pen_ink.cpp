@@ -962,3 +962,77 @@ TEST_CASE("pen controls: Undo belongs to the page it was written on, and a tap o
     REQUIRE(rig.settle([&] { return rig.reader->page() == 0; }));
     CHECK(rig.reader->canUndoInk());
 }
+
+// ---- Audit fixes (0.15.3) ----
+
+TEST_CASE("audit: a side-button stroke that became an area leaves a finger's next selection with its bar") {
+    InkRig rig;
+    rig.reader->setPenButtonHighlights(true, rig.nav);
+    auto held = [](PenEvent::Type t, Point p) {
+        PenEvent e = pen(t, p);
+        e.button = true;
+        return e;
+    };
+    rig.reader->onPen(held(PenEvent::Type::Near, {130, 120}), rig.nav);
+    rig.reader->onPen(held(PenEvent::Type::Down, {130, 120}), rig.nav);  // above the text: an area
+    rig.settle([] { return false; });
+    rig.reader->onPen(held(PenEvent::Type::Move, {400, 160}), rig.nav);
+    rig.reader->onPen(held(PenEvent::Type::Up, {400, 160}), rig.nav);
+    rig.settle([] { return false; });
+    rig.reader->onGesture(Gesture{GestureType::LongPress, {130, 210}, {130, 210}}, rig.nav);
+    rig.reader->onGesture(Gesture{GestureType::LongPressUp, {130, 210}, {130, 210}}, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->annotationBar() != nullptr; }));
+    for (const auto& a : rig.lib.annotationsFor(rig.row.attachmentKey)) CHECK_FALSE((a.createdHere && a.type == "highlight"));
+}
+
+TEST_CASE("audit: the pen doesn't write over the open palette") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), rig.nav);
+    rig.reader->onGesture(tapAt(ReaderScreen::colourChipRect().center()), rig.nav);
+    REQUIRE(rig.reader->paletteOpen());
+    CHECK_FALSE(rig.reader->onPen(pen(PenEvent::Type::Down, ReaderScreen::paletteDot(1, 3).center()), rig.nav));
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+}
+
+TEST_CASE("audit: a finger's tap on Undo waits for the pen too; the pen coming keeps the stroke") {
+    InkRig rig;
+    rig.stroke({{300, 400}, {380, 430}});
+    rig.reader->onTick(rig.nav);
+    REQUIRE(rig.reader->canUndoInk());
+    rig.reader->onGesture(fingerTap(ReaderScreen::undoRect().center()), rig.nav);
+    CHECK(rig.reader->pendingInkStrokes() == 1);  // held
+    rig.nav.now += 100;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), rig.nav);  // it was the palm
+    rig.nav.now += 1000;
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->pendingInkStrokes() == 1);
+    rig.nav.now += 3000;  // a deliberate tap: Undo after the wait
+    rig.reader->onGesture(fingerTap(ReaderScreen::undoRect().center()), rig.nav);
+    rig.nav.now += 300;
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->pendingInkStrokes() == 0);
+}
+
+TEST_CASE("audit: a held page-turn tap doesn't fire behind the menus, nor past the last page") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 600}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onGesture(fingerTap({1150, 700}), rig.nav);  // held
+    rig.reader->onGesture(fingerTap({618, 700}), rig.nav);   // the middle: the menus
+    REQUIRE(rig.reader->menusOpen());
+    rig.nav.now += 400;
+    rig.settle([] { return false; });
+    CHECK(rig.reader->page() == 0);
+
+    InkRig end;
+    end.reader->turnTo(98);
+    REQUIRE(end.settle([&] { return end.reader->page() == 98; }));
+    end.reader->onPen(pen(PenEvent::Type::Near, {600, 600}), end.nav);
+    end.reader->onPen(pen(PenEvent::Type::Leave, {600, 600}), end.nav);
+    end.nav.now += 5000;
+    end.reader->onGesture(fingerTap({1150, 700}), end.nav);
+    end.reader->onGesture(fingerTap({1150, 700}), end.nav);  // two quick taps on the second-to-last page
+    end.nav.now += 300;
+    REQUIRE(end.settle([&] { return end.reader->page() == 99; }));  // the last page, not past it
+}

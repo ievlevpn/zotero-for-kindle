@@ -56,8 +56,8 @@ struct RenderEvent {
 // 1986 × 2648), so two quick turns ahead are both already drawn there too.
 constexpr size_t kPageCacheBytes = size_t{3} * 1860 * 2480;
 constexpr size_t kGrayPageCacheBytes = size_t{4} * 1986 * 2648;
-// The budget for pages of `pageBytes` each: kPageCacheBytes (kGrayPageCacheBytes for gray ones), but
-// always room for the current page and the next (a Scribe ColorSoft's color page is about the whole
+// The budget for pages of `pageBytes` each: kPageCacheBytes (for gray ones four pages, at most
+// kGrayPageCacheBytes), but always room for the current page and the next (a Scribe ColorSoft's color page is about the whole
 // of kPageCacheBytes).
 size_t pageCacheBudget(size_t pageBytes, bool gray = false);
 // The pages kept rendered around `current`, in the order they are drawn: it, the next, the previous,

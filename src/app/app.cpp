@@ -747,6 +747,7 @@ void App::flush() {
     if (question) question->draw(cr);
     canvas_.setPaintRegion({});
     cairo_restore(cr);
+    cairo_reset_clip(cr);  // even if a screen's draw threw between its own save and restore
     if (!full.empty()) {
         display_.present(canvas_, shown, Waveform::Full);
         if (shown.united(inkDirty_) == shown) inkDirty_ = {};  // already on screen, in full quality
