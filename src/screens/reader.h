@@ -269,6 +269,9 @@ private:
     void saveSelection(const std::string& type, const std::string& comment, Nav&);
     void closeSelection(Nav&);
     bool editAt(Point, Nav&);  // a highlight under (or right next to) the tap: open its editor
+    std::string highlightKeyAt(Point) const;       // the highlight editAt would open ("" none)
+    const HighlightBox* noteNear(Point) const;     // the note openNoteAt would open
+    bool annotationNear(Point) const;              // either: a tap here opens an annotation
     void closeEditor(Nav&);
     void refreshHighlights(Nav&);
     void sendAnnotations(Nav&, bool onlyIfChanged);
@@ -360,6 +363,7 @@ private:
         int page = 0;
     };
     std::vector<BackEntry> back_;
+    const LinkBox* linkNear(Point) const;
     bool tapLink(Point, Nav&);
     void followLink(const LinkInfo&);
     std::vector<LinkBox> links_;
@@ -444,6 +448,7 @@ private:
     uint64_t inkSeq_ = 0;
     void choosePaletteColour(int row, int i, Nav&);
     bool penSelecting_ = false;      // a side-button stroke selecting (Highlight)
+    bool fingerSelecting_ = false;   // a finger's long press selecting where the palm may be
     bool selAutoHighlight_ = false;  // the selection is saved as a highlight when it's done
     void selectionDone(Nav&);        // the bar, or that highlight
     // Palm rejection on PDF pages taking handwriting (a hand settling to write lands before the
@@ -451,15 +456,21 @@ private:
     // within kPalmTurnWaitMs, and neither tap nor swipe turns within kAfterPenMs of the pen.
     bool penOnKindle_ = false;  // a pen has been used on this Kindle (device setting)
     int64_t lastPenMs_ = -1;
-    // A finger's tap held back for the palm check: the page turns it adds up to, Undos, the chip.
+    // A finger's tap held back for the palm check: the page turns it adds up to, Undos, the chip,
+    // Back, a bookmark, a link, an annotation opened, or the menus.
     struct PalmTap {
         int delta = 0;
         int undos = 0;
         bool chip = false;
+        bool back = false;
+        bool bookmark = false;
+        bool menus = false;
+        std::optional<Point> link;
+        std::optional<Point> edit;
         int64_t dueMs = 0;
     };
     std::optional<PalmTap> palmTap_;
-    void holdForPalm(Nav&, int delta, bool undo, bool chip);
+    void holdForPalm(Nav&, const PalmTap&);
     void runPalmTap(Nav&);
     bool palmGuarded(const Gesture&) const;
     std::optional<uint32_t> inkRgb(const std::string& colour) const;  // nullopt: black

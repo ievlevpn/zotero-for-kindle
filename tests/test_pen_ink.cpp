@@ -405,18 +405,22 @@ TEST_CASE("notes: an ink annotation's card shows its strokes") {
     CHECK(ink > 200);
 }
 
-TEST_CASE("pen ink: a quick pen touch with nothing written is a tap; a dot after writing is ink") {
+TEST_CASE("pen ink: in writing mode, a quick pen touch anywhere on the page is ink, never a tap") {
     InkRig rig;
-    // Middle of the page: a tap opens the menus, no ink.
+    // Middle of the page: stays a dot of ink, does not open menus.
     rig.stroke({{618, 700}});
-    CHECK(rig.reader->menusOpen());
-    CHECK(rig.reader->pendingInkStrokes() == 0);
-    rig.reader->closeMenus(rig.nav);
+    CHECK_FALSE(rig.reader->menusOpen());
+    CHECK(rig.reader->pendingInkStrokes() == 1);
+
+    // Right margin: stays ink, does not turn the page.
+    rig.stroke({{1150, 700}});
+    CHECK(rig.reader->page() == 0);
+    CHECK(rig.reader->pendingInkStrokes() == 2);
 
     // Writing, then a dot: both ink.
     rig.stroke({{300, 400}, {380, 430}});
     rig.stroke({{390, 380}});
-    CHECK(rig.reader->pendingInkStrokes() == 2);
+    CHECK(rig.reader->pendingInkStrokes() == 4);
     CHECK_FALSE(rig.reader->menusOpen());
 }
 
@@ -833,8 +837,11 @@ TEST_CASE("palm: right after the pen, a finger's tap or swipe doesn't turn the p
     rig.nav.now += 400;
     rig.settle([] { return false; });
     CHECK(rig.reader->page() == 0);
-    rig.nav.now += 2000;  // writing is over: the finger turns pages again
+    rig.nav.now += 2000;  // writing is over: the finger turns pages again, once the pen hasn't come
     rig.reader->onGesture(swipe, rig.nav);
+    rig.reader->onTick(rig.nav);
+    CHECK_FALSE(rig.reader->midTurn());  // held: a palm sliding to rest swipes too
+    rig.nav.now += 300;
     REQUIRE(rig.settle([&] { return rig.reader->page() == 1; }));
 }
 
@@ -1019,8 +1026,11 @@ TEST_CASE("audit: a held page-turn tap doesn't fire behind the menus, nor past t
     rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 600}), rig.nav);
     rig.nav.now += 5000;
     rig.reader->onGesture(fingerTap({1150, 700}), rig.nav);  // held
-    rig.reader->onGesture(fingerTap({618, 700}), rig.nav);   // the middle: the menus
-    REQUIRE(rig.reader->menusOpen());
+    rig.reader->onGesture(fingerTap({618, 700}), rig.nav);   // the middle: the menus, held too
+    CHECK_FALSE(rig.reader->menusOpen());
+    rig.nav.now += 300;
+    rig.reader->onTick(rig.nav);
+    REQUIRE(rig.reader->menusOpen());  // the menus win: no turn behind them
     rig.nav.now += 400;
     rig.settle([] { return false; });
     CHECK(rig.reader->page() == 0);
@@ -1035,4 +1045,220 @@ TEST_CASE("audit: a held page-turn tap doesn't fire behind the menus, nor past t
     end.reader->onGesture(fingerTap({1150, 700}), end.nav);  // two quick taps on the second-to-last page
     end.nav.now += 300;
     REQUIRE(end.settle([&] { return end.reader->page() == 99; }));  // the last page, not past it
+}
+
+// ---- The pen only writes; the palm opens nothing ----
+
+namespace {
+
+// InkRig with one highlight from Zotero on the first page, drawn at {100, 200, 600, 50} (FakeEngine).
+void addHighlight(InkRig& rig) {
+    AnnotationRecord a;
+    a.key = "PALMHL01";
+    a.parentKey = rig.row.attachmentKey;
+    a.type = "highlight";
+    a.color = "#ffd400";
+    a.pageLabel = "0";
+    a.position = R"({"fake":0})";
+    rig.lib.upsertAnnotation(a);
+    SyncEvent done;
+    done.kind = SyncEvent::Kind::SyncFinished;
+    rig.reader->onSyncEvent(done, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->highlights().size() == 1; }));
+}
+
+}  // namespace
+
+TEST_CASE("pen only: a pen tap anywhere in writing mode is ink, never an editor, menus, or a turn") {
+    InkRig rig;
+    addHighlight(rig);
+    const Point beside{400, 265};  // 15 px under the highlight: within a fingertip of it
+    rig.reader->onPen(pen(PenEvent::Type::Near, beside), rig.nav);
+    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, beside), rig.nav));
+    rig.reader->onPen(pen(PenEvent::Type::Up, beside), rig.nav);
+    CHECK_FALSE(rig.reader->annotationEditor());
+    CHECK(rig.reader->pendingInkStrokes() == 1);  // the dot stays
+    rig.reader->onPen(pen(PenEvent::Type::Down, {400, 225}), rig.nav);  // on it, after the dot
+    rig.reader->onPen(pen(PenEvent::Type::Up, {400, 225}), rig.nav);
+    CHECK_FALSE(rig.reader->annotationEditor());
+
+    // Away from annotations, a quick pen touch in the middle or margin also stays ink (no menus, no turn).
+    InkRig away;
+    away.reader->onPen(pen(PenEvent::Type::Near, {618, 900}), away.nav);
+    CHECK(away.reader->onPen(pen(PenEvent::Type::Down, {618, 900}), away.nav));
+    away.reader->onPen(pen(PenEvent::Type::Up, {618, 900}), away.nav);
+    CHECK_FALSE(away.reader->menusOpen());
+    CHECK(away.reader->pendingInkStrokes() == 1);
+
+    InkRig margin;
+    margin.reader->onPen(pen(PenEvent::Type::Near, {1150, 700}), margin.nav);
+    CHECK(margin.reader->onPen(pen(PenEvent::Type::Down, {1150, 700}), margin.nav));
+    margin.reader->onPen(pen(PenEvent::Type::Up, {1150, 700}), margin.nav);
+    CHECK(margin.reader->page() == 0);
+    CHECK(margin.reader->pendingInkStrokes() == 1);
+}
+
+TEST_CASE("palm: a finger's tap on a highlight waits for the pen; the pen coming makes it the palm") {
+    InkRig rig;
+    addHighlight(rig);
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);  // a pen on this Kindle
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onGesture(fingerTap({400, 225}), rig.nav);
+    CHECK_FALSE(rig.reader->annotationEditor());
+    rig.nav.now += 150;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {420, 300}), rig.nav);  // the hand was settling to write
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {420, 300}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onTick(rig.nav);
+    CHECK_FALSE(rig.reader->annotationEditor());
+
+    // No pen after it: the editor opens, 0.3 s later.
+    rig.reader->onGesture(fingerTap({400, 225}), rig.nav);
+    rig.nav.now += 300;
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.reader->annotationEditor());
+}
+
+TEST_CASE("palm: a finger's tap in the middle waits for the pen before the menus; the pen coming drops it") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onGesture(fingerTap({618, 700}), rig.nav);
+    CHECK_FALSE(rig.reader->menusOpen());
+    rig.nav.now += 100;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.nav.now += 1000;
+    rig.reader->onTick(rig.nav);
+    CHECK_FALSE(rig.reader->menusOpen());
+    // The pen writes: nothing took it.
+    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, {600, 900}), rig.nav));
+}
+
+TEST_CASE("palm: a hand resting long enough to select, then the pen comes: the selection goes, the pen writes") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onGesture(Gesture{GestureType::LongPress, {130, 210}, {130, 210}, Direction::None, 0, 0}, rig.nav);
+    rig.settle([] { return false; });
+    rig.nav.now += 200;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);  // App cancels the palm's gesture: no lift comes
+    CHECK_FALSE(rig.reader->selection());
+    CHECK_FALSE(rig.reader->drawnArea());
+    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, {600, 900}), rig.nav));
+    rig.reader->onPen(pen(PenEvent::Type::Move, {700, 920}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Up, {700, 920}), rig.nav);
+    CHECK(rig.reader->pendingInkStrokes() == 1);
+
+    // Right after writing, a hand resting long doesn't select at all.
+    rig.nav.now += 200;
+    rig.reader->onGesture(Gesture{GestureType::LongPress, {130, 210}, {130, 210}, Direction::None, 0, 0}, rig.nav);
+    rig.settle([] { return false; });
+    CHECK_FALSE(rig.reader->selection());
+}
+
+TEST_CASE("palm: a finger's long press, lifted, keeps its selection when the pen comes later") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onGesture(Gesture{GestureType::LongPress, {130, 210}, {130, 210}, Direction::None, 0, 0}, rig.nav);
+    rig.reader->onGesture(Gesture{GestureType::LongPressUp, {130, 210}, {130, 210}, Direction::None, 0, 0}, rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->annotationBar() != nullptr; }));
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    CHECK(rig.reader->selection());
+}
+
+TEST_CASE("palm: a finger's tap on the bookmark corner waits for the pen and is ignored right after writing") {
+    InkRig rig;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    const Point corner = ReaderScreen::bookmarkRect().center();
+
+    // Right after writing (within kAfterPenMs): ignored completely.
+    rig.nav.now += 200;
+    rig.reader->onGesture(fingerTap(corner), rig.nav);
+    rig.nav.now += 500;
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.lib.bookmarks(rig.row.attachmentKey).empty());
+
+    // Later, a tap that's followed by the pen within 0.3 s is dropped as a palm.
+    rig.nav.now += 5000;
+    rig.reader->onGesture(fingerTap(corner), rig.nav);
+    CHECK(rig.lib.bookmarks(rig.row.attachmentKey).empty());
+    rig.nav.now += 100;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.lib.bookmarks(rig.row.attachmentKey).empty());
+
+    // With no pen after it, the bookmark toggles 0.3 s later.
+    rig.reader->onGesture(fingerTap(corner), rig.nav);
+    rig.nav.now += 300;
+    rig.reader->onTick(rig.nav);
+    CHECK(rig.lib.bookmarks(rig.row.attachmentKey).size() == 1);
+}
+
+TEST_CASE("palm & pen: PDF links wait for the pen on finger tap and stay ink on pen tap") {
+    InkRig rig;
+    // Turn to page 3 (FakeEngine puts a reference link at {600, 1000, 100, 40}).
+    for (int i = 0; i < 3; ++i) {
+        rig.reader->onGesture(tapAt({1150, 700}), rig.nav);
+        REQUIRE(rig.settle([&] { return rig.reader->page() == i + 1; }));
+    }
+    const Point linkPt{650, 1020};
+
+    // Quick pen dot right on the link stays ink; no link popup.
+    rig.reader->onPen(pen(PenEvent::Type::Near, linkPt), rig.nav);
+    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, linkPt), rig.nav));
+    rig.reader->onPen(pen(PenEvent::Type::Up, linkPt), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, linkPt), rig.nav);
+    rig.settle([] { return false; });
+    CHECK_FALSE(rig.reader->linkPopup());
+    CHECK(rig.reader->pendingInkStrokes() == 1);
+
+    // Palm tap right after writing (within kAfterPenMs): ignored.
+    rig.nav.now += 200;
+    rig.reader->onGesture(fingerTap(linkPt), rig.nav);
+    rig.nav.now += 500;
+    rig.reader->onTick(rig.nav);
+    rig.settle([] { return false; });
+    CHECK_FALSE(rig.reader->linkPopup());
+
+    // Later, finger tap on the link waits 0.3 s; pen arriving drops it.
+    rig.nav.now += 5000;
+    rig.reader->onGesture(fingerTap(linkPt), rig.nav);
+    rig.settle([] { return false; });
+    CHECK_FALSE(rig.reader->linkPopup());
+    rig.nav.now += 100;
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onTick(rig.nav);
+    rig.settle([] { return false; });
+    CHECK_FALSE(rig.reader->linkPopup());
+
+    // Deliberate finger tap with no pen opens the link popup 0.3 s later.
+    rig.reader->onGesture(fingerTap(linkPt), rig.nav);
+    rig.nav.now += 300;
+    rig.reader->onTick(rig.nav);
+    REQUIRE(rig.settle([&] { return rig.reader->linkPopup().has_value(); }));
+}
+
+TEST_CASE("palm: a finger's long press lifted before selection arrives is dropped when the pen comes") {
+    InkRig rig(DocType::Pdf, 80);  // slow worker so selection hasn't answered when pen arrives
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.reader->onPen(pen(PenEvent::Type::Leave, {600, 900}), rig.nav);
+    rig.nav.now += 5000;
+    rig.reader->onGesture(Gesture{GestureType::LongPress, {130, 210}, {130, 210}, Direction::None, 0, 0}, rig.nav);
+    rig.reader->onGesture(Gesture{GestureType::LongPressUp, {130, 210}, {130, 210}, Direction::None, 0, 0}, rig.nav);
+    // Pen comes before worker answers the selection request.
+    rig.reader->onPen(pen(PenEvent::Type::Near, {600, 900}), rig.nav);
+    rig.settle([] { return false; });
+    CHECK_FALSE(rig.reader->selection());
+    CHECK_FALSE(rig.reader->annotationBar());
+    CHECK(rig.reader->onPen(pen(PenEvent::Type::Down, {600, 900}), rig.nav));
 }

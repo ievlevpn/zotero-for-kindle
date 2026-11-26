@@ -984,15 +984,30 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         if (ready() && pageArea().contains(g.pos)) placeNote(g.pos, nav);
         return;
     }
+    const bool guarded = palmGuarded(g);
+    const bool justWrote = guarded && lastPenMs_ >= 0 && nav.nowMs() - lastPenMs_ < kAfterPenMs;
     if (g.type == GestureType::Tap && !editor_ && !note_ && !selecting_ && !selection_ && ready()) {
-        if (backLabel() && backRect().contains(g.pos)) return back(nav);
-        if (!preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos))) {
-            // Mid-turn or re-laying out, the page under the corner is going: the one that arrives is marked.
-            if (turning_ || layoutPending_) bookmarkArriving_ = true;
-            else if (!position_.value.empty()) toggleBookmark(nav);
-            return;
+        const bool onBack = backLabel() && backRect().contains(g.pos);
+        const bool onBookmark = !preview_ && bookmarkRect().contains(g.pos) && !(question_ && positionBannerRect().contains(g.pos));
+        const bool onLink = !onBack && !onBookmark && !(question_ && positionBannerRect().contains(g.pos)) && linkNear(g.pos);
+        if (onBack || onBookmark || onLink) {
+            if (guarded) {
+                if (justWrote) return;
+                PalmTap pt;
+                pt.back = onBack;
+                pt.bookmark = onBookmark;
+                if (onLink) pt.link = g.pos;
+                return holdForPalm(nav, pt);
+            }
+            if (onBack) return back(nav);
+            if (onBookmark) {
+                // Mid-turn or re-laying out, the page under the corner is going: the one that arrives is marked.
+                if (turning_ || layoutPending_) bookmarkArriving_ = true;
+                else if (!position_.value.empty()) toggleBookmark(nav);
+                return;
+            }
+            if (tapLink(g.pos, nav)) return;
         }
-        if (!(question_ && positionBannerRect().contains(g.pos)) && tapLink(g.pos, nav)) return;
     }
     if (question_ && g.type == GestureType::Tap) {  // reading on (a page turn) is Stay: see turn()
         if (positionGoRect().contains(g.pos)) return answerPosition(true, nav);
@@ -1059,15 +1074,24 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
         }
     }
     if (g.type == GestureType::LongPress) {
-        if (ready() && pageArea().contains(g.pos)) startSelection(g.pos, nav);
+        // The hand resting between strokes. One resting before the pen came selects, and the pen
+        // coming drops it (onPen).
+        if (justWrote) return;
+        if (ready() && pageArea().contains(g.pos)) {
+            startSelection(g.pos, nav);
+            fingerSelecting_ = guarded;
+        }
         return;
     }
-    const bool guarded = palmGuarded(g);
-    const bool justWrote = guarded && lastPenMs_ >= 0 && nav.nowMs() - lastPenMs_ < kAfterPenMs;
     if (g.type == GestureType::Swipe) {
         if (justWrote) return;  // the hand moving between strokes
-        if (g.dir == Direction::Left) turn(+1, nav);
-        if (g.dir == Direction::Right) turn(-1, nav);
+        const int delta = g.dir == Direction::Left ? +1 : g.dir == Direction::Right ? -1 : 0;
+        if (delta != 0 && guarded) {
+            PalmTap pt;
+            pt.delta = delta;
+            return holdForPalm(nav, pt);  // a palm sliding to rest
+        }
+        if (delta != 0) turn(delta, nav);
         return;
     }
     if (g.type != GestureType::Tap) return;
@@ -1076,28 +1100,49 @@ void ReaderScreen::onGesture(const Gesture& g, Nav& nav) {
     if (onChip || onUndo) {
         // A palm settles where these are too (bottom right): a finger's tap waits for the pen like a
         // turn's, even right after writing (that's when Undo is wanted).
-        if (guarded) return holdForPalm(nav, 0, onUndo, onChip);
+        if (guarded) {
+            PalmTap pt;
+            pt.undos = onUndo ? 1 : 0;
+            pt.chip = onChip;
+            return holdForPalm(nav, pt);
+        }
         if (onUndo) return undoInk(nav);
         paletteOpen_ = true;
         nav.damage(paletteRect(), Waveform::Ui);
         return;
     }
-    // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens the menus.
-    if (ready() && editAt(g.pos, nav)) return;
+    // A highlight anywhere opens its editor (Pavel); otherwise the outer 30% turns, the middle opens
+    // the menus. Where the palm may be, each waits for the pen (onTick), as a page turn does: a
+    // hand settling to write must not open a highlight or the menus, which take the pen too.
     const int delta = g.pos.x > W() * 7 / 10 ? +1 : g.pos.x < W() * 3 / 10 ? -1 : 0;
-    if (delta != 0 && guarded) {
+    if (guarded) {
         if (justWrote) return;
-        return holdForPalm(nav, delta, false, false);  // turned once the pen hasn't come (onTick)
+        if (ready() && annotationNear(g.pos)) {
+            PalmTap pt;
+            pt.edit = g.pos;
+            return holdForPalm(nav, pt);
+        }
+        if (delta == 0 && !ready()) return;
+        PalmTap pt;
+        pt.delta = delta;
+        pt.menus = delta == 0;
+        return holdForPalm(nav, pt);
     }
+    if (ready() && editAt(g.pos, nav)) return;
     if (delta != 0) turn(delta, nav);
     else if (ready()) openMenus(nav);  // not before the first page
 }
 
-void ReaderScreen::holdForPalm(Nav& nav, int delta, bool undo, bool chip) {
+void ReaderScreen::holdForPalm(Nav& nav, const PalmTap& add) {
     if (!palmTap_) palmTap_ = PalmTap{};
-    palmTap_->delta += delta;
-    palmTap_->undos += undo;
-    palmTap_->chip |= chip;
+    palmTap_->delta += add.delta;
+    palmTap_->undos += add.undos;
+    palmTap_->chip |= add.chip;
+    palmTap_->back |= add.back;
+    palmTap_->bookmark |= add.bookmark;
+    palmTap_->menus |= add.menus;
+    if (add.link) palmTap_->link = add.link;
+    if (add.edit) palmTap_->edit = add.edit;
     palmTap_->dueMs = nav.nowMs() + kPalmTurnWaitMs;
     nav.wakeAt(palmTap_->dueMs);
 }
@@ -1116,6 +1161,15 @@ void ReaderScreen::runPalmTap(Nav& nav) {
         nav.damage(paletteRect(), Waveform::Ui);
         return;
     }
+    if (t.back && backLabel()) return back(nav);
+    if (t.bookmark && !preview_) {
+        if (turning_ || layoutPending_) bookmarkArriving_ = true;
+        else if (!position_.value.empty()) toggleBookmark(nav);
+        return;
+    }
+    if (t.link && tapLink(*t.link, nav)) return;
+    if (t.edit && editAt(*t.edit, nav)) return;
+    if (t.menus) return openMenus(nav);
     // Quick taps add up, but not past the last page (one more there: the end of the book) or the first.
     const int from = turning_ && turnTarget_ >= 0 ? turnTarget_ : page_;
     int delta = t.delta;
@@ -1261,11 +1315,11 @@ void ReaderScreen::onKey(const KeyEvent& k, Nav& nav) {
     if (menus_) menus_->onKey(k, nav);
 }
 
-bool ReaderScreen::editAt(Point p, Nav& nav) {
-    // On a box first; else the nearest box within a fingertip (thin PDF lines are hard to hit).
-    // An area is hit near its frame (inside or out), not in its middle, which stays the page's
-    // (menus, turns, links, highlights under it); a small area anywhere inside. Nearest wins.
-    if (openNoteAt(p, nav)) return true;
+// On a box first; else the nearest box within a fingertip (thin PDF lines are hard to hit).
+// An area is hit near its frame (inside or out), not in its middle, which stays the page's
+// (menus, turns, links, highlights under it); a small area anywhere inside. Nearest wins.
+// Notes are noteNear's. Empty: none.
+std::string ReaderScreen::highlightKeyAt(Point p) const {
     constexpr int kSlack = 30;
     std::string key;
     int best = 1 << 30;
@@ -1287,6 +1341,15 @@ bool ReaderScreen::editAt(Point p, Nav& nav) {
             key = it->annotationKey;
         }
     }
+    return key;
+}
+
+// An annotation a tap here would open (a note's pop-up, a highlight's editor).
+bool ReaderScreen::annotationNear(Point p) const { return noteNear(p) || !highlightKeyAt(p).empty(); }
+
+bool ReaderScreen::editAt(Point p, Nav& nav) {
+    if (openNoteAt(p, nav)) return true;
+    const std::string key = highlightKeyAt(p);
     if (key.empty()) return false;
     if (previewCanSave()) {
         auto it = std::find_if(previewAnnotations_.begin(), previewAnnotations_.end(),
@@ -1910,11 +1973,11 @@ int ReaderScreen::shownPageCount() const { return (pageCount_ + views_ - 1) / vi
 
 // --- Links ---------------------------------------------------------------------------------
 
-bool ReaderScreen::tapLink(Point p, Nav&) {
-    if (turning_ || layoutPending_ || links_.empty() || !worker_) return false;
+const LinkBox* ReaderScreen::linkNear(Point p) const {
+    if (turning_ || layoutPending_ || links_.empty() || !worker_) return nullptr;
     const Rect page = pageArea();
     const int strip = page.w * 8 / 100;  // the outer strips always turn the page
-    if (p.x < page.x + strip || p.x >= page.x + page.w - strip) return false;
+    if (p.x < page.x + strip || p.x >= page.x + page.w - strip) return nullptr;
     constexpr int kSlack = 14;   // fingers are wider than a note mark
     constexpr int kTarget = 96;  // ~8 mm: a dagger a few pixels wide is still hit by a fingertip
     const LinkBox* best = nullptr;
@@ -1930,6 +1993,11 @@ bool ReaderScreen::tapLink(Point p, Nav&) {
             bestDistance = d;
         }
     }
+    return best;
+}
+
+bool ReaderScreen::tapLink(Point p, Nav&) {
+    const LinkBox* best = linkNear(p);
     if (!best) return false;
     linkId_ = worker_->linkAt(page_, best->index);
     return true;
@@ -2173,8 +2241,8 @@ void ReaderScreen::saveNote(const std::string& text, Nav& nav) {
     nav.device().set(kColourKey, colour_);
 }
 
-bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
-    // The nearest note whose icon is within ~9 mm of the tap.
+// The nearest note whose icon is within ~9 mm of the tap.
+const HighlightBox* ReaderScreen::noteNear(Point p) const {
     const HighlightBox* best = nullptr;
     int bestD = kNoteReachPx + 1;
     for (const auto& b : highlights_) {
@@ -2187,6 +2255,11 @@ bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
             best = &b;
         }
     }
+    return best;
+}
+
+bool ReaderScreen::openNoteAt(Point p, Nav& nav) {
+    const HighlightBox* best = noteNear(p);
     if (!best) return false;
     auto a = nav.library().annotation(best->annotationKey);
     if (!a) return false;
@@ -2297,6 +2370,17 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
         palmTap_.reset();
         log(LogLevel::Info, "reader: a tap just before the pen taken for the palm (no page turn)");
     }
+    // A selection the finger is still holding (or still waiting for the worker to show) when the
+    // pen comes: the palm rested on the page before the pen was near. Dropped, so the pen writes.
+    // Where there was no text it became an area being drawn (onSelection).
+    if (fingerSelecting_ && !penSelecting_ &&
+        ((selecting_ && (!selReleased_ || !selection_)) || (areaDrawing_ && !areaPen_ && !areaArmed_))) {
+        log(LogLevel::Info, "reader: a selection held when the pen came taken for the palm");
+        if (areaDrawing_) cancelArea(nav);
+        closeSelection(nav);
+        if (nav.systemInk() != wantsSystemInk()) nav.setSystemInk(wantsSystemInk());
+    }
+    fingerSelecting_ = false;
     if (!penOnKindle_) {
         penOnKindle_ = true;
         nav.device().set(kPenOnKindleKey, "1");
@@ -2358,20 +2442,8 @@ bool ReaderScreen::onPen(const PenEvent& p, Nav& nav) {
     if (lift) {
         if (inkDown_) {
             inkDown_ = false;
-            // A quick touch that hardly moved, with nothing written before it, is a tap (menus,
-            // page turns), not a dot: a dot right after writing (an i, a full stop) stays ink.
-            Rect extent;
-            for (const Point& q : inkStroke_) extent = extent.united({q.x, q.y, 1, 1});
-            const bool tap = inkPending_.empty() && !inkStroke_.empty() && extent.w <= kTapSlopPx &&
-                             extent.h <= kTapSlopPx && nav.nowMs() - inkDownMs_ <= kTapMs;
-            if (tap) {
-                const Point at = inkStroke_.front();
-                inkStroke_.clear();
-                const int pad = inkWidthPx() + 2;  // the system may have inked the dot
-                nav.damage({extent.x - pad, extent.y - pad, extent.w + 2 * pad, extent.h + 2 * pad}, Waveform::Ui);
-                onGesture(Gesture{GestureType::Tap, at, at}, nav);
-                return false;
-            }
+            // In writing mode the pen only writes (dots included): it never turns into a tap
+            // that opens annotations, links, bookmarks, menus, or turns pages.
             if (!inkStroke_.empty()) {
                 if (inkPending_.empty()) inkFirstMs_ = inkDownMs_;
                 inkPending_.push_back(simplified(inkStroke_));

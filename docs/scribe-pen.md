@@ -9,8 +9,9 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
   closing the book waits (at most 3 s) until every stroke is an annotation (`flushInk`, `onClose`).
   Strokes are simplified (Douglas-Peucker, 1 px). Ink is 4, 7 or 11 px wide on the screen (Display →
   Thickness, `ReaderScreen::kInkWidthsPx`), stored in PDF points.
-- A quick pen touch that hardly moves, with nothing written before it, is a tap (menus, page turns);
-  a dot right after writing stays ink (`kTapSlopPx`, `kTapMs`).
+- In writing mode on a PDF page, the pen **only writes** (dots included): a quick touch anywhere on
+  the page stays ink and never opens highlights, notes, links, bookmarks, menus, or turns pages.
+  Use a finger, switch to **Pen: Tap**, or hold the side button (when set to Select) to tap.
 - The pen writes in the white bands beside a letterboxed page too (room for notes in the margin).
   Those strokes lie outside the PDF page: they are saved whole and shown on the Kindle, but Zotero
   desktop draws ink only inside the page and cuts the rest off.
@@ -37,10 +38,14 @@ the visible screen doesn't take (`Screen::onPen` returns false for its Down) is 
 - While the pen is near the screen (and 0.7 s after it leaves), touches are taken for the palm and
   ignored (`App::kPalmMs`). A hand settling to write lands before the pen is near enough to be
   seen, so on PDF pages taking handwriting, on a Kindle where a pen was ever used (`penUsed`), a
-  finger's page-turn tap waits 0.3 s and is dropped if the pen comes meanwhile
-  (`kPalmTurnWaitMs`); within 1.5 s of the pen a finger's tap or swipe doesn't turn at all
-  (`kAfterPenMs`). "Near" lapses after 2 s without a pen event (`kPenStaleMs`), and the
-  background resets it, so a lost Leave can't block touch.
+  finger's tap (a page turn, the menus, a highlight or note, a link, a bookmark, Back, Undo, the
+  colour chip) or swipe waits 0.3 s and is dropped if the pen comes meanwhile (`kPalmTurnWaitMs`);
+  within 1.5 s of the pen a finger's tap, swipe or long press does nothing (Undo and the chip still
+  wait and run) (`kAfterPenMs`). A finger's long press still held (or still waiting to appear) when
+  the pen comes (the hand rested before it) is the palm: its selection or area is dropped, so the
+  pen writes.
+- "Near" lapses after 10 s without a pen event (`kPenStaleMs`), and the background resets it, so a
+  lost Leave can't block touch.
 - The line under the pen is drawn by the firmware's own "wet ink" (below), as in the Scribe's
   notebook. Without it (other devices, `ZK_NO_WET_INK=1`) the app draws the line itself, one A2
   update per 25 ms frame (`App::kInkFrameMs`): usable, but visibly behind the pen.
